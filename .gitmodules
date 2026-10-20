@@ -1,0 +1,6 @@
+[submodule "extern/VISR"]
+	path = extern/VISR
+	url = https://github.com/CamilaBasualdoCibils/VISR.git
+[submodule "extern/OpenPeripherals"]
+	path = extern/OpenPeripherals
+	url = https://github.com/CamilaBasualdoCibils/OpenPeripherals.git
