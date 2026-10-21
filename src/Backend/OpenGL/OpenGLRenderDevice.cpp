@@ -22,6 +22,7 @@ GLenum ToGLTopology(PrimitiveTopology topology) {
     switch (topology) {
     case PrimitiveTopology::Triangles: return GL_TRIANGLES;
     case PrimitiveTopology::TriangleStrip: return GL_TRIANGLE_STRIP;
+    case PrimitiveTopology::LineStrip: return GL_LINE_STRIP;
     case PrimitiveTopology::Lines: return GL_LINES;
     case PrimitiveTopology::Points: return GL_POINTS;
     }
@@ -65,10 +66,11 @@ GLenum ToGLImageType(ImageType type) {
 
 GLint VertexComponents(VertexFormat format) {
     switch (format) {
-    case VertexFormat::Float: case VertexFormat::UInt: return 1;
-    case VertexFormat::Float2: case VertexFormat::UInt2: return 2;
-    case VertexFormat::Float3: case VertexFormat::UInt3: return 3;
-    case VertexFormat::Float4: case VertexFormat::UInt4: return 4;
+    case VertexFormat::Float: case VertexFormat::Int: case VertexFormat::UInt: return 1;
+    case VertexFormat::Float2: case VertexFormat::Int2: case VertexFormat::UInt2: return 2;
+    case VertexFormat::Float3: case VertexFormat::Int3: case VertexFormat::UInt3: return 3;
+    case VertexFormat::Float4: case VertexFormat::Int4: case VertexFormat::UInt4: return 4;
+    case VertexFormat::UNorm8x4: case VertexFormat::SNorm8x4: return 4;
     }
     throw std::invalid_argument("Unsupported vertex format");
 }
@@ -77,8 +79,33 @@ bool IsFloatFormat(VertexFormat format) {
     return format >= VertexFormat::Float && format <= VertexFormat::Float4;
 }
 
+bool IsSignedIntegerFormat(VertexFormat format) {
+    return format >= VertexFormat::Int && format <= VertexFormat::Int4;
+}
+
+bool IsUnsignedIntegerFormat(VertexFormat format) {
+    return format >= VertexFormat::UInt && format <= VertexFormat::UInt4;
+}
+
+GLuint CreateVertexArray(const VertexLayout& layout) {
+    GLuint vao{};
+    glCreateVertexArrays(1, &vao);
+    for (const auto& binding : layout.bindings)
+        glVertexArrayBindingDivisor(vao, binding.binding, binding.inputRate == VertexInputRate::PerInstance ? 1 : 0);
+    for (const auto& attr : layout.attributes) {
+        glEnableVertexArrayAttrib(vao, attr.location);
+        if (IsFloatFormat(attr.format)) glVertexArrayAttribFormat(vao, attr.location, VertexComponents(attr.format), GL_FLOAT, GL_FALSE, attr.offset);
+        else if (IsSignedIntegerFormat(attr.format)) glVertexArrayAttribIFormat(vao, attr.location, VertexComponents(attr.format), GL_INT, attr.offset);
+        else if (IsUnsignedIntegerFormat(attr.format)) glVertexArrayAttribIFormat(vao, attr.location, VertexComponents(attr.format), GL_UNSIGNED_INT, attr.offset);
+        else if (attr.format == VertexFormat::UNorm8x4) glVertexArrayAttribFormat(vao, attr.location, 4, GL_UNSIGNED_BYTE, GL_TRUE, attr.offset);
+        else if (attr.format == VertexFormat::SNorm8x4) glVertexArrayAttribFormat(vao, attr.location, 4, GL_BYTE, GL_TRUE, attr.offset);
+        glVertexArrayAttribBinding(vao, attr.location, attr.binding);
+    }
+    return vao;
+}
+
 template<class HandleType>
-HandleType MakeHandle(std::uint32_t index) { return HandleType{index, 1}; }
+HandleType MakeHandle(std::uint32_t index, std::uint64_t owner) { return HandleType{index, 1, owner}; }
 
 template<class HandleType>
 struct HandleHash { std::size_t operator()(HandleType handle) const noexcept { return handle.index; } };
@@ -86,26 +113,48 @@ struct HandleHash { std::size_t operator()(HandleType handle) const noexcept { r
 } // namespace
 
 struct OpenGLRenderDevice::Impl {
-    explicit Impl(std::shared_ptr<Detail::OpenGLDeviceGroup> deviceGroup) : group(std::move(deviceGroup)) {}
+    explicit Impl(std::shared_ptr<Detail::OpenGLDeviceGroup> deviceGroup, std::uint64_t deviceId)
+        : group(std::move(deviceGroup)), owner(deviceId) {}
 
-    void ActivateContext() const {
-        if (!group || group->display == EGL_NO_DISPLAY || surface == EGL_NO_SURFACE || context == EGL_NO_CONTEXT)
-            throw std::logic_error("Create a swapchain before using the OpenGL device");
+    struct Swapchain {
+        EGLSurface surface{EGL_NO_SURFACE};
+        EGLContext context{EGL_NO_CONTEXT};
+    };
+    struct SwapchainSlot { std::uint32_t generation{1}; std::unique_ptr<Swapchain> value; };
+    struct BufferResource { GLuint id{}; BufferMetadata metadata; };
+
+    const Swapchain* FindSwapchain(SwapchainHandle handle) const noexcept {
+        if (!handle || handle.owner != owner || handle.index >= swapchains.size()) return nullptr;
+        const auto& slot = swapchains[handle.index];
+        return slot.generation == handle.generation ? slot.value.get() : nullptr;
+    }
+
+    void ActivateContext(const Swapchain* requested = nullptr) const {
+        if (!group || group->display == EGL_NO_DISPLAY)
+            throw std::logic_error("Initialize an EGL display by creating a swapchain before using the OpenGL device");
+        const auto context = requested ? requested->context : group->shareContext;
+        const auto surface = requested ? requested->surface : group->pbuffer;
+        if (context == EGL_NO_CONTEXT || surface == EGL_NO_SURFACE)
+            throw std::logic_error("The OpenGL device has no active EGL context");
         if (eglGetCurrentContext() == context) return;
         if (eglMakeCurrent(group->display, surface, surface, context) != EGL_TRUE)
             throw std::runtime_error("Failed to make the EGL OpenGL context current");
     }
 
     std::shared_ptr<Detail::OpenGLDeviceGroup> group;
-    EGLSurface surface{EGL_NO_SURFACE};
-    EGLContext context{EGL_NO_CONTEXT};
+    std::uint64_t owner{};
+    std::vector<SwapchainSlot> swapchains;
     GLuint activeFramebuffer{};
     std::uint32_t nextImage{1}, nextView{1}, nextBuffer{1}, nextShader{1}, nextPipeline{1};
     std::unordered_map<ImageHandle, GLuint, HandleHash<ImageHandle>> images;
     std::unordered_map<ImageViewHandle, GLuint, HandleHash<ImageViewHandle>> views;
-    std::unordered_map<BufferHandle, GLuint, HandleHash<BufferHandle>> buffers;
+    std::unordered_map<BufferHandle, BufferResource, HandleHash<BufferHandle>> buffers;
     std::unordered_map<ShaderModuleHandle, GLuint, HandleHash<ShaderModuleHandle>> shaders;
-    struct Pipeline { GLuint program{}, vao{}; };
+    struct Pipeline {
+        GLuint program{};
+        VertexLayout layout;
+        std::unordered_map<SwapchainHandle, GLuint, HandleHash<SwapchainHandle>> vaos;
+    };
     std::unordered_map<GraphicsPipelineHandle, Pipeline, HandleHash<GraphicsPipelineHandle>> pipelines;
 };
 
@@ -142,42 +191,86 @@ public:
 
 OpenGLRenderDevice::OpenGLRenderDevice(std::shared_ptr<Detail::OpenGLDeviceGroup> group,
                                        const DeviceConfig&)
-    : m_impl(std::make_unique<Impl>(std::move(group))) {}
+    : m_impl(std::make_unique<Impl>(std::move(group), DeviceId())) {}
 OpenGLRenderDevice::~OpenGLRenderDevice() {
-    if (!m_impl || m_impl->context == EGL_NO_CONTEXT) return;
+    if (!m_impl || !m_impl->group || m_impl->group->display == EGL_NO_DISPLAY) return;
     m_impl->ActivateContext();
-    for (const auto& [_, p] : m_impl->pipelines) { glDeleteProgram(p.program); glDeleteVertexArrays(1, &p.vao); }
+    for (const auto& [_, p] : m_impl->pipelines) glDeleteProgram(p.program);
+    for (std::uint32_t i = 0; i < m_impl->swapchains.size(); ++i) {
+        auto& slot = m_impl->swapchains[i];
+        if (!slot.value) continue;
+        m_impl->ActivateContext(slot.value.get());
+        const SwapchainHandle handle{i, slot.generation, DeviceId()};
+        for (auto& [_, pipeline] : m_impl->pipelines) {
+            if (const auto vao = pipeline.vaos.find(handle); vao != pipeline.vaos.end()) {
+                glDeleteVertexArrays(1, &vao->second);
+                pipeline.vaos.erase(vao);
+            }
+        }
+    }
+    m_impl->ActivateContext();
     for (const auto& [_, s] : m_impl->shaders) glDeleteShader(s);
-    for (const auto& [_, b] : m_impl->buffers) glDeleteBuffers(1, &b);
+    for (const auto& [_, b] : m_impl->buffers) glDeleteBuffers(1, &b.id);
     for (const auto& [_, v] : m_impl->views) glDeleteTextures(1, &v);
     for (const auto& [_, i] : m_impl->images) glDeleteTextures(1, &i);
-    eglMakeCurrent(m_impl->group->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-    eglDestroyContext(m_impl->group->display, m_impl->context);
-    eglDestroySurface(m_impl->group->display, m_impl->surface);
+    for (auto& slot : m_impl->swapchains) if (slot.value) {
+        if (eglGetCurrentContext() == slot.value->context)
+            eglMakeCurrent(m_impl->group->display, m_impl->group->pbuffer, m_impl->group->pbuffer, m_impl->group->shareContext);
+        eglDestroyContext(m_impl->group->display, slot.value->context);
+        eglDestroySurface(m_impl->group->display, slot.value->surface);
+        slot.value.reset();
+    }
 }
 
-void OpenGLRenderDevice::CreateSwapchain(Window& window, const SwapchainConfig& config) {
+SwapchainHandle OpenGLRenderDevice::CreateSwapchain(Window& window, const SwapchainConfig& config) {
     if (!window.NativeDisplayHandle() || !window.NativeEGLWindowHandle())
         throw std::invalid_argument("OpenGL swapchain requires an EGL-enabled window from WindowManager");
-    if (m_impl->context != EGL_NO_CONTEXT)
-        throw std::logic_error("OpenGL device already has a swapchain");
     m_impl->group->Initialize(window.NativeDisplayHandle());
-    m_impl->surface = m_impl->group->CreateWindowSurface(window.NativeEGLWindowHandle());
+    if (m_impl->group->nativeDisplay != window.NativeDisplayHandle())
+        throw std::invalid_argument("All swapchains on an OpenGL device must use the same EGL display");
+    auto state = std::make_unique<Impl::Swapchain>();
+    state->surface = m_impl->group->CreateWindowSurface(window.NativeEGLWindowHandle());
     try {
-        m_impl->context = m_impl->group->CreateSharedContext();
-        m_impl->ActivateContext();
+        state->context = m_impl->group->CreateSharedContext();
+        m_impl->ActivateContext(state.get());
         if (eglSwapInterval(m_impl->group->display, config.vsync ? 1 : 0) != EGL_TRUE)
             throw std::runtime_error("Failed to configure EGL swap interval");
     } catch (...) {
-        if (m_impl->context != EGL_NO_CONTEXT) {
-            eglDestroyContext(m_impl->group->display, m_impl->context);
-            m_impl->context = EGL_NO_CONTEXT;
+        if (state->context != EGL_NO_CONTEXT) {
+            eglMakeCurrent(m_impl->group->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+            eglDestroyContext(m_impl->group->display, state->context);
         }
-        eglDestroySurface(m_impl->group->display, m_impl->surface);
-        m_impl->surface = EGL_NO_SURFACE;
+        eglDestroySurface(m_impl->group->display, state->surface);
         throw;
     }
+    std::uint32_t index = 0;
+    while (index < m_impl->swapchains.size() && m_impl->swapchains[index].value) ++index;
+    if (index == m_impl->swapchains.size()) m_impl->swapchains.emplace_back();
+    auto& slot = m_impl->swapchains[index];
+    slot.value = std::move(state);
+    return {index, slot.generation, DeviceId()};
 }
+
+bool OpenGLRenderDevice::DestroySwapchain(SwapchainHandle handle) {
+    if (!handle || handle.owner != DeviceId() || handle.index >= m_impl->swapchains.size()) return false;
+    auto& slot = m_impl->swapchains[handle.index];
+    if (!slot.value || slot.generation != handle.generation) return false;
+    m_impl->ActivateContext(slot.value.get());
+    for (auto& [_, pipeline] : m_impl->pipelines) {
+        if (const auto vao = pipeline.vaos.find(handle); vao != pipeline.vaos.end()) {
+            glDeleteVertexArrays(1, &vao->second);
+            pipeline.vaos.erase(vao);
+        }
+    }
+    if (eglGetCurrentContext() == slot.value->context)
+        eglMakeCurrent(m_impl->group->display, m_impl->group->pbuffer, m_impl->group->pbuffer, m_impl->group->shareContext);
+    eglDestroyContext(m_impl->group->display, slot.value->context);
+    eglDestroySurface(m_impl->group->display, slot.value->surface);
+    slot.value.reset();
+    if (++slot.generation == 0) ++slot.generation;
+    return true;
+}
+bool OpenGLRenderDevice::IsValid(SwapchainHandle handle) const noexcept { return m_impl->FindSwapchain(handle) != nullptr; }
 
 ImageHandle OpenGLRenderDevice::CreateImage(const ImageDesc& desc) {
     m_impl->ActivateContext();
@@ -192,7 +285,7 @@ ImageHandle OpenGLRenderDevice::CreateImage(const ImageDesc& desc) {
     else glTextureStorage2D(texture, static_cast<GLsizei>(desc.mipLevels), format, static_cast<GLsizei>(desc.width), static_cast<GLsizei>(desc.height));
     if (!desc.initialData.empty() && desc.type == ImageType::Image2D)
         glTextureSubImage2D(texture, 0, 0, 0, static_cast<GLsizei>(desc.width), static_cast<GLsizei>(desc.height), GL_RGBA, GL_UNSIGNED_BYTE, desc.initialData.data());
-    const auto handle = MakeHandle<ImageHandle>(m_impl->nextImage++);
+    const auto handle = MakeHandle<ImageHandle>(m_impl->nextImage++, DeviceId());
     m_impl->images.emplace(handle, texture);
     return handle;
 }
@@ -203,7 +296,7 @@ ImageViewHandle OpenGLRenderDevice::CreateImageView(const ImageViewDesc& desc) {
     glGenTextures(1, &view);
     glTextureView(view, ToGLImageType(desc.type), source, ToGLImageFormat(desc.format),
                   desc.baseMipLevel, desc.mipLevelCount, desc.baseArrayLayer, desc.arrayLayerCount);
-    const auto handle = MakeHandle<ImageViewHandle>(m_impl->nextView++);
+    const auto handle = MakeHandle<ImageViewHandle>(m_impl->nextView++, DeviceId());
     m_impl->views.emplace(handle, view);
     return handle;
 }
@@ -213,8 +306,16 @@ BufferHandle OpenGLRenderDevice::CreateBuffer(const BufferDesc& desc) {
     if (desc.initialData.size_bytes() > desc.size) throw std::invalid_argument("Buffer initial data exceeds buffer size");
     GLuint id{}; glCreateBuffers(1, &id);
     glNamedBufferStorage(id, static_cast<GLsizeiptr>(desc.size), desc.initialData.empty() ? nullptr : desc.initialData.data(), 0);
-    const auto handle = MakeHandle<BufferHandle>(m_impl->nextBuffer++); m_impl->buffers.emplace(handle, id); return handle;
+    const auto handle = MakeHandle<BufferHandle>(m_impl->nextBuffer++, DeviceId());
+    m_impl->buffers.emplace(handle, Impl::BufferResource{id, BufferMetadata{desc.size, desc.usage, desc.memory}});
+    return handle;
 }
+std::optional<BufferMetadata> OpenGLRenderDevice::GetBufferDesc(BufferHandle handle) const noexcept {
+    const auto it = m_impl->buffers.find(handle);
+    if (it == m_impl->buffers.end()) return std::nullopt;
+    return it->second.metadata;
+}
+bool OpenGLRenderDevice::IsValid(BufferHandle handle) const noexcept { return m_impl->buffers.contains(handle); }
 
 ShaderModuleHandle OpenGLRenderDevice::CreateShaderModule(const ShaderModuleDesc& desc) {
     m_impl->ActivateContext();
@@ -228,7 +329,7 @@ ShaderModuleHandle OpenGLRenderDevice::CreateShaderModule(const ShaderModuleDesc
         std::string log(static_cast<std::size_t>(std::max(size, 1)), '\0'); glGetShaderInfoLog(shader, size, nullptr, log.data());
         glDeleteShader(shader); throw std::runtime_error("OpenGL shader compilation failed: " + log);
     }
-    const auto handle = MakeHandle<ShaderModuleHandle>(m_impl->nextShader++); m_impl->shaders.emplace(handle, shader); return handle;
+    const auto handle = MakeHandle<ShaderModuleHandle>(m_impl->nextShader++, DeviceId()); m_impl->shaders.emplace(handle, shader); return handle;
 }
 
 GraphicsPipelineHandle OpenGLRenderDevice::CreatePipeline(const GraphicsPipelineDesc& desc) {
@@ -237,27 +338,40 @@ GraphicsPipelineHandle OpenGLRenderDevice::CreatePipeline(const GraphicsPipeline
     const auto program = glCreateProgram(); glAttachShader(program, vert); glAttachShader(program, frag); glLinkProgram(program);
     GLint ok{}; glGetProgramiv(program, GL_LINK_STATUS, &ok);
     if (!ok) { GLint size{}; glGetProgramiv(program, GL_INFO_LOG_LENGTH, &size); std::string log(static_cast<std::size_t>(std::max(size,1)), '\0'); glGetProgramInfoLog(program,size,nullptr,log.data()); glDeleteProgram(program); throw std::runtime_error("OpenGL pipeline link failed: " + log); }
-    GLuint vao{}; glCreateVertexArrays(1, &vao);
-    for (const auto& binding : desc.vertexLayout.bindings) glVertexArrayBindingDivisor(vao, binding.binding, binding.perInstance ? 1 : 0);
-    for (const auto& attr : desc.vertexLayout.attributes) {
-        glEnableVertexArrayAttrib(vao, attr.location);
-        if (IsFloatFormat(attr.format)) glVertexArrayAttribFormat(vao, attr.location, VertexComponents(attr.format), GL_FLOAT, GL_FALSE, attr.offset);
-        else glVertexArrayAttribIFormat(vao, attr.location, VertexComponents(attr.format), GL_UNSIGNED_INT, attr.offset);
-        glVertexArrayAttribBinding(vao, attr.location, attr.binding);
-    }
-    const auto handle = MakeHandle<GraphicsPipelineHandle>(m_impl->nextPipeline++); m_impl->pipelines.emplace(handle, Impl::Pipeline{program, vao}); return handle;
+    const auto handle = MakeHandle<GraphicsPipelineHandle>(m_impl->nextPipeline++, DeviceId());
+    m_impl->pipelines.emplace(handle, Impl::Pipeline{program, desc.vertexLayout, {}});
+    return handle;
 }
 
 std::unique_ptr<IRenderCommandList> OpenGLRenderDevice::CreateCommandList(QueueType) { return std::make_unique<OpenGLCommandList>(); }
 void OpenGLRenderDevice::Destroy(ImageHandle h) { m_impl->ActivateContext(); auto i=m_impl->images.find(h); if(i!=m_impl->images.end()){glDeleteTextures(1,&i->second);m_impl->images.erase(i);} }
 void OpenGLRenderDevice::Destroy(ImageViewHandle h) { m_impl->ActivateContext(); auto i=m_impl->views.find(h); if(i!=m_impl->views.end()){glDeleteTextures(1,&i->second);m_impl->views.erase(i);} }
-void OpenGLRenderDevice::Destroy(BufferHandle h) { m_impl->ActivateContext(); auto i=m_impl->buffers.find(h); if(i!=m_impl->buffers.end()){glDeleteBuffers(1,&i->second);m_impl->buffers.erase(i);} }
-void OpenGLRenderDevice::Destroy(GraphicsPipelineHandle h) { m_impl->ActivateContext(); auto i=m_impl->pipelines.find(h); if(i!=m_impl->pipelines.end()){glDeleteProgram(i->second.program);glDeleteVertexArrays(1,&i->second.vao);m_impl->pipelines.erase(i);} }
+void OpenGLRenderDevice::Destroy(BufferHandle h) { m_impl->ActivateContext(); auto i=m_impl->buffers.find(h); if(i!=m_impl->buffers.end()){glDeleteBuffers(1,&i->second.id);m_impl->buffers.erase(i);} }
+void OpenGLRenderDevice::Destroy(GraphicsPipelineHandle h) {
+    auto i = m_impl->pipelines.find(h);
+    if (i == m_impl->pipelines.end()) return;
+    m_impl->ActivateContext();
+    glDeleteProgram(i->second.program);
+    for (std::uint32_t index = 0; index < m_impl->swapchains.size(); ++index) {
+        auto& slot = m_impl->swapchains[index];
+        if (!slot.value) continue;
+        const SwapchainHandle swapchain{index, slot.generation, DeviceId()};
+        if (const auto vao = i->second.vaos.find(swapchain); vao != i->second.vaos.end()) {
+            m_impl->ActivateContext(slot.value.get());
+            glDeleteVertexArrays(1, &vao->second);
+            i->second.vaos.erase(vao);
+        }
+    }
+    m_impl->ActivateContext();
+    m_impl->pipelines.erase(i);
+}
 void OpenGLRenderDevice::Destroy(ShaderModuleHandle h) { m_impl->ActivateContext(); auto i=m_impl->shaders.find(h); if(i!=m_impl->shaders.end()){glDeleteShader(i->second);m_impl->shaders.erase(i);} }
 RenderCapabilities OpenGLRenderDevice::GetCapabilities() const { return {}; }
 
-void OpenGLRenderDevice::Submit(const IRenderCommandList& list) {
-    m_impl->ActivateContext();
+void OpenGLRenderDevice::Submit(SwapchainHandle swapchain, const IRenderCommandList& list) {
+    const auto* target = m_impl->FindSwapchain(swapchain);
+    if (!target) throw std::invalid_argument("OpenGL submit received an invalid swapchain handle");
+    m_impl->ActivateContext(target);
     const auto& commands = dynamic_cast<const OpenGLCommandList&>(list).commands;
     for (const auto& command : commands) std::visit([&](const auto& c) {
         using T = std::decay_t<decltype(c)>;
@@ -283,15 +397,21 @@ void OpenGLRenderDevice::Submit(const IRenderCommandList& list) {
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             if (m_impl->activeFramebuffer) { glDeleteFramebuffers(1, &m_impl->activeFramebuffer); m_impl->activeFramebuffer = 0; }
         }
-        else if constexpr (std::is_same_v<T, OpenGLCommandList::BindPipe>) { const auto p=m_impl->pipelines.at(c.handle); glBindVertexArray(p.vao); glUseProgram(p.program); }
-        else if constexpr (std::is_same_v<T, OpenGLCommandList::BindVertex>) { glBindVertexBuffer(0,m_impl->buffers.at(c.handle),0,static_cast<GLsizei>(c.stride)); }
-        else if constexpr (std::is_same_v<T, OpenGLCommandList::BindIndex>) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,m_impl->buffers.at(c.handle)); }
+        else if constexpr (std::is_same_v<T, OpenGLCommandList::BindPipe>) {
+            auto& pipeline = m_impl->pipelines.at(c.handle);
+            auto [vao, inserted] = pipeline.vaos.try_emplace(swapchain, 0);
+            if (inserted) vao->second = CreateVertexArray(pipeline.layout);
+            glBindVertexArray(vao->second);
+            glUseProgram(pipeline.program);
+        }
+        else if constexpr (std::is_same_v<T, OpenGLCommandList::BindVertex>) { glBindVertexBuffer(0,m_impl->buffers.at(c.handle).id,0,static_cast<GLsizei>(c.stride)); }
+        else if constexpr (std::is_same_v<T, OpenGLCommandList::BindIndex>) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,m_impl->buffers.at(c.handle).id); }
         else if constexpr (std::is_same_v<T, OpenGLCommandList::BindTextureCmd>) { glBindTextureUnit(c.slot,m_impl->images.at(c.handle)); }
         else if constexpr (std::is_same_v<T, OpenGLCommandList::DrawCmd>) { glDrawArraysInstancedBaseInstance(ToGLTopology(c.topology),static_cast<GLint>(c.first),static_cast<GLsizei>(c.count),static_cast<GLsizei>(c.instances),c.firstInstance); }
         else if constexpr (std::is_same_v<T, OpenGLCommandList::DrawIndexedCmd>) { glDrawElements(GL_TRIANGLES,static_cast<GLsizei>(c.count),GL_UNSIGNED_INT,nullptr); }
         else if constexpr (std::is_same_v<T, OpenGLCommandList::DispatchCmd>) { glDispatchCompute(c.x,c.y,c.z); }
     }, command);
-    if (eglSwapBuffers(m_impl->group->display, m_impl->surface) != EGL_TRUE)
+    if (eglSwapBuffers(m_impl->group->display, target->surface) != EGL_TRUE)
         throw std::runtime_error("EGL failed to present the rendered frame");
 }
 

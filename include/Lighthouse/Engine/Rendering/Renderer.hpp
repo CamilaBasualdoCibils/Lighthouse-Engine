@@ -7,13 +7,34 @@
 #include <Lighthouse/Engine/Rendering/RenderSession.hpp>
 #include <Lighthouse/Engine/Rendering/RenderTechnique.hpp>
 #include <Lighthouse/Engine/Rendering/RenderView.hpp>
+#include <Lighthouse/Engine/Rendering/Mesh.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
 
 namespace Lighthouse {
 
+class IRenderDevice;
+class MeshManager;
+
 class Renderer {
 public:
-    explicit Renderer(WindowManager* windows = nullptr) : m_windows(windows) {}
+    explicit Renderer(WindowManager* windows = nullptr);
+    ~Renderer();
+    Renderer(const Renderer&) = delete;
+    Renderer& operator=(const Renderer&) = delete;
+
+    // Attach the device that owns buffers referenced by meshes created below.
+    // The device must stay alive while querying its buffer-backed meshes; clear
+    // this pointer before destroying or replacing the device.
+    void SetRenderDevice(IRenderDevice* device) noexcept { m_device = device; }
+    IRenderDevice* GetRenderDevice() noexcept { return m_device; }
+    const IRenderDevice* GetRenderDevice() const noexcept { return m_device; }
+
+    MeshHandle CreateMesh(const MeshDesc& description);
+    MeshHandle CreateMesh(const MeshBuilder& builder) { return CreateMesh(builder.Build()); }
+    bool DestroyMesh(MeshHandle mesh);
+    const MeshDesc* GetMeshDesc(MeshHandle mesh) const noexcept;
+    bool IsValid(MeshHandle mesh) const noexcept;
+    MeshUploadStatus GetMeshUploadStatus(MeshHandle mesh) const noexcept;
 
     RenderViewHandle CreateView(const RenderViewDesc& desc = {});
     bool DestroyView(RenderViewHandle view);
@@ -42,6 +63,8 @@ private:
     std::vector<Slot<RenderView>> m_views;
     std::vector<Slot<RenderSession>> m_sessions;
     std::vector<Slot<IRenderTechnique>> m_techniques;
+    IRenderDevice* m_device{};
+    std::unique_ptr<MeshManager> m_meshManager;
 };
 
 } // namespace Lighthouse

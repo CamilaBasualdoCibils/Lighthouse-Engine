@@ -11,7 +11,9 @@ struct OpenGLDeviceGroup {
     EGLSurface CreateWindowSurface(void* nativeWindow) const;
 
     EGLDisplay display{EGL_NO_DISPLAY};
+    void* nativeDisplay{};
     EGLConfig config{};
+    EGLSurface pbuffer{EGL_NO_SURFACE};
     EGLContext shareContext{EGL_NO_CONTEXT};
 };
 

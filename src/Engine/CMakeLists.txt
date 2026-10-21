@@ -12,6 +12,8 @@ add_library(LighthouseEngine
     RenderView.cpp
     RenderGraph.cpp
     Renderer.cpp
+    Mesh.cpp
+    MeshManager.cpp
     EngineRuntime.cpp
 )
 add_library(Lighthouse::Engine ALIAS LighthouseEngine)

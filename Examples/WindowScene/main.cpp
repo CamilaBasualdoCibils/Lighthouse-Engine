@@ -22,7 +22,7 @@ public:
 
         if (auto* backend = GetGraphicsBackend()) {
             m_device = backend->CreateDevice(Lighthouse::DeviceConfig{});
-            m_device->CreateSwapchain(*window, Lighthouse::SwapchainConfig{});
+            m_swapchain = m_device->CreateSwapchain(*window, Lighthouse::SwapchainConfig{});
             m_window = window;
         }
     }
@@ -38,11 +38,12 @@ public:
         pass.height = m_window->FramebufferHeight();
         commands->BeginRendering(pass);
         commands->EndRendering();
-        m_device->Submit(*commands);
+        m_device->Submit(m_swapchain, *commands);
     }
 
 private:
     std::unique_ptr<Lighthouse::IRenderDevice> m_device;
+    Lighthouse::SwapchainHandle m_swapchain;
     Lighthouse::Window* m_window{};
 };
 

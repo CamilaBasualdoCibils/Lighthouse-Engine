@@ -12,6 +12,7 @@ struct Handle {
 
     std::uint32_t index{InvalidIndex};
     std::uint32_t generation{};
+    std::uint64_t owner{};
 
     constexpr bool IsValid() const noexcept { return index != InvalidIndex; }
     constexpr explicit operator bool() const noexcept { return IsValid(); }
@@ -23,12 +24,14 @@ struct RenderViewHandleTag;
 struct RenderSessionHandleTag;
 struct RenderTechniqueHandleTag;
 struct OffscreenTargetHandleTag;
+struct SwapchainHandleTag;
 
 using WindowHandle = Handle<WindowHandleTag>;
 using RenderViewHandle = Handle<RenderViewHandleTag>;
 using RenderSessionHandle = Handle<RenderSessionHandleTag>;
 using RenderTechniqueHandle = Handle<RenderTechniqueHandleTag>;
 using OffscreenTargetHandle = Handle<OffscreenTargetHandleTag>;
+using SwapchainHandle = Handle<SwapchainHandleTag>;
 
 class Scene;
 class SceneHandle {

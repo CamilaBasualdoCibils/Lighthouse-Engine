@@ -1,8 +1,15 @@
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
+
+#include "MeshManager.hpp"
 
 #include <algorithm>
 
 namespace Lighthouse {
+
+Renderer::Renderer(WindowManager* windows)
+    : m_windows(windows), m_meshManager(std::make_unique<MeshManager>()) {}
+Renderer::~Renderer() = default;
 
 template <typename T, typename Tag>
 Handle<Tag> Renderer::Add(std::vector<Slot<T>>& slots, std::unique_ptr<T> value) {
@@ -36,6 +43,14 @@ const T* Renderer::Find(const std::vector<Slot<T>>& slots, Handle<Tag> handle) n
     const auto& slot = slots[handle.index];
     return slot.generation == handle.generation ? slot.value.get() : nullptr;
 }
+
+MeshHandle Renderer::CreateMesh(const MeshDesc& description) {
+    return m_meshManager->Create(description, m_device);
+}
+bool Renderer::DestroyMesh(MeshHandle mesh) { return m_meshManager->Destroy(mesh); }
+const MeshDesc* Renderer::GetMeshDesc(MeshHandle mesh) const noexcept { return m_meshManager->GetDescription(mesh, m_device); }
+bool Renderer::IsValid(MeshHandle mesh) const noexcept { return m_meshManager->IsValid(mesh, m_device); }
+MeshUploadStatus Renderer::GetMeshUploadStatus(MeshHandle mesh) const noexcept { return m_meshManager->GetUploadStatus(mesh, m_device); }
 
 RenderViewHandle Renderer::CreateView(const RenderViewDesc& desc) {
     return Add<RenderView, RenderViewHandleTag>(m_views, std::make_unique<RenderView>(desc));

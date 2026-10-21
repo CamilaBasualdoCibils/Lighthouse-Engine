@@ -8,9 +8,12 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace Lighthouse {
 namespace {
@@ -42,10 +45,16 @@ VkFormat ToVkVertexFormat(VertexFormat format) {
     case VertexFormat::Float2: return VK_FORMAT_R32G32_SFLOAT;
     case VertexFormat::Float3: return VK_FORMAT_R32G32B32_SFLOAT;
     case VertexFormat::Float4: return VK_FORMAT_R32G32B32A32_SFLOAT;
+    case VertexFormat::Int: return VK_FORMAT_R32_SINT;
+    case VertexFormat::Int2: return VK_FORMAT_R32G32_SINT;
+    case VertexFormat::Int3: return VK_FORMAT_R32G32B32_SINT;
+    case VertexFormat::Int4: return VK_FORMAT_R32G32B32A32_SINT;
     case VertexFormat::UInt: return VK_FORMAT_R32_UINT;
     case VertexFormat::UInt2: return VK_FORMAT_R32G32_UINT;
     case VertexFormat::UInt3: return VK_FORMAT_R32G32B32_UINT;
     case VertexFormat::UInt4: return VK_FORMAT_R32G32B32A32_UINT;
+    case VertexFormat::UNorm8x4: return VK_FORMAT_R8G8B8A8_UNORM;
+    case VertexFormat::SNorm8x4: return VK_FORMAT_R8G8B8A8_SNORM;
     }
     throw std::invalid_argument("Unsupported Vulkan vertex format");
 }
@@ -54,6 +63,7 @@ VkPrimitiveTopology ToVkTopology(PrimitiveTopology topology) {
     switch (topology) {
     case PrimitiveTopology::Triangles: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     case PrimitiveTopology::TriangleStrip: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+    case PrimitiveTopology::LineStrip: return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
     case PrimitiveTopology::Lines: return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
     case PrimitiveTopology::Points: return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
     }
@@ -64,10 +74,27 @@ VkPrimitiveTopology ToVkTopology(PrimitiveTopology topology) {
 
 struct VulkanRenderDevice::Impl {
     struct QueueFamily { std::uint32_t index{}; };
-    struct BufferResource { VkBuffer buffer{}; VkDeviceMemory memory{}; };
+    struct BufferResource { VkBuffer buffer{}; VkDeviceMemory memory{}; BufferMetadata metadata; };
     struct PipelineResource { VkPipeline pipeline{}; VkPipelineLayout layout{}; };
+    struct SwapchainState {
+        GLFWwindow* window{};
+        VkSurfaceKHR surface{};
+        VkSwapchainKHR swapchain{};
+        VkSurfaceFormatKHR surfaceFormat{};
+        VkExtent2D extent{};
+        std::vector<VkImage> images;
+        std::vector<VkImageView> views;
+        std::vector<bool> imageInitialized;
+    };
+    struct SwapchainSlot { std::uint32_t generation{1}; std::unique_ptr<SwapchainState> value; };
 
-    explicit Impl(const DeviceConfig& config) {
+    SwapchainState* FindSwapchain(SwapchainHandle handle) noexcept {
+        if (!handle || handle.owner != owner || handle.index >= swapchains.size()) return nullptr;
+        auto& slot = swapchains[handle.index];
+        return slot.generation == handle.generation ? slot.value.get() : nullptr;
+    }
+
+    explicit Impl(const DeviceConfig& config, std::uint64_t deviceId) : owner(deviceId) {
         CreateInstance(config);
     }
 
@@ -110,7 +137,7 @@ struct VulkanRenderDevice::Impl {
         Check(vkCreateInstance(&create, nullptr, &instance), "vkCreateInstance");
     }
 
-    void SelectPhysicalDevice() {
+    void SelectPhysicalDevice(VkSurfaceKHR surface) {
         std::uint32_t count{};
         Check(vkEnumeratePhysicalDevices(instance, &count, nullptr), "vkEnumeratePhysicalDevices");
         if (!count) throw std::runtime_error("No Vulkan physical devices are available");
@@ -161,36 +188,36 @@ struct VulkanRenderDevice::Impl {
         vkGetDeviceQueue(device, queueFamily, 0, &queue);
     }
 
-    void CreateSwapchainResources(const SwapchainConfig& config) {
+    void CreateSwapchainResources(SwapchainState& state, const SwapchainConfig& config) {
         VkSurfaceCapabilitiesKHR caps{};
-        Check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &caps), "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+        Check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, state.surface, &caps), "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
         std::uint32_t formatCount{};
-        Check(vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, nullptr), "vkGetPhysicalDeviceSurfaceFormatsKHR");
+        Check(vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, state.surface, &formatCount, nullptr), "vkGetPhysicalDeviceSurfaceFormatsKHR");
         if (!formatCount) throw std::runtime_error("Vulkan surface has no supported formats");
         std::vector<VkSurfaceFormatKHR> formats(formatCount);
-        Check(vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, formats.data()), "vkGetPhysicalDeviceSurfaceFormatsKHR");
-        surfaceFormat = formats.front();
+        Check(vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, state.surface, &formatCount, formats.data()), "vkGetPhysicalDeviceSurfaceFormatsKHR");
+        state.surfaceFormat = formats.front();
         for (const auto& format : formats) {
             if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-                surfaceFormat = format;
+                state.surfaceFormat = format;
                 break;
             }
         }
-        if (caps.currentExtent.width != std::numeric_limits<std::uint32_t>::max()) extent = caps.currentExtent;
+        if (caps.currentExtent.width != std::numeric_limits<std::uint32_t>::max()) state.extent = caps.currentExtent;
         else {
             int width{}, height{};
-            glfwGetFramebufferSize(window, &width, &height);
-            extent.width = std::clamp(static_cast<std::uint32_t>(std::max(width, 1)), caps.minImageExtent.width, caps.maxImageExtent.width);
-            extent.height = std::clamp(static_cast<std::uint32_t>(std::max(height, 1)), caps.minImageExtent.height, caps.maxImageExtent.height);
+            glfwGetFramebufferSize(state.window, &width, &height);
+            state.extent.width = std::clamp(static_cast<std::uint32_t>(std::max(width, 1)), caps.minImageExtent.width, caps.maxImageExtent.width);
+            state.extent.height = std::clamp(static_cast<std::uint32_t>(std::max(height, 1)), caps.minImageExtent.height, caps.maxImageExtent.height);
         }
         std::uint32_t imageCount = std::max(caps.minImageCount + 1, config.imageCount);
         if (caps.maxImageCount && imageCount > caps.maxImageCount) imageCount = caps.maxImageCount;
         VkSwapchainCreateInfoKHR create{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
-        create.surface = surface;
+        create.surface = state.surface;
         create.minImageCount = imageCount;
-        create.imageFormat = surfaceFormat.format;
-        create.imageColorSpace = surfaceFormat.colorSpace;
-        create.imageExtent = extent;
+        create.imageFormat = state.surfaceFormat.format;
+        create.imageColorSpace = state.surfaceFormat.colorSpace;
+        create.imageExtent = state.extent;
         create.imageArrayLayers = 1;
         create.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         create.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -206,30 +233,30 @@ struct VulkanRenderDevice::Impl {
         create.presentMode = VK_PRESENT_MODE_FIFO_KHR;
         if (!config.vsync) {
             std::uint32_t modeCount{};
-            Check(vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &modeCount, nullptr), "vkGetPhysicalDeviceSurfacePresentModesKHR");
+            Check(vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, state.surface, &modeCount, nullptr), "vkGetPhysicalDeviceSurfacePresentModesKHR");
             std::vector<VkPresentModeKHR> modes(modeCount);
-            Check(vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &modeCount, modes.data()), "vkGetPhysicalDeviceSurfacePresentModesKHR");
+            Check(vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, state.surface, &modeCount, modes.data()), "vkGetPhysicalDeviceSurfacePresentModesKHR");
             if (std::find(modes.begin(), modes.end(), VK_PRESENT_MODE_MAILBOX_KHR) != modes.end())
                 create.presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
             else if (std::find(modes.begin(), modes.end(), VK_PRESENT_MODE_IMMEDIATE_KHR) != modes.end())
                 create.presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
         }
         create.clipped = VK_TRUE;
-        Check(vkCreateSwapchainKHR(device, &create, nullptr, &swapchain), "vkCreateSwapchainKHR");
-        Check(vkGetSwapchainImagesKHR(device, swapchain, &imageCount, nullptr), "vkGetSwapchainImagesKHR");
-        swapchainImages.resize(imageCount);
-        Check(vkGetSwapchainImagesKHR(device, swapchain, &imageCount, swapchainImages.data()), "vkGetSwapchainImagesKHR");
-        swapchainViews.resize(imageCount);
-        imageInitialized.resize(imageCount, false);
-        for (std::size_t i = 0; i < swapchainImages.size(); ++i) {
+        Check(vkCreateSwapchainKHR(device, &create, nullptr, &state.swapchain), "vkCreateSwapchainKHR");
+        Check(vkGetSwapchainImagesKHR(device, state.swapchain, &imageCount, nullptr), "vkGetSwapchainImagesKHR");
+        state.images.resize(imageCount);
+        Check(vkGetSwapchainImagesKHR(device, state.swapchain, &imageCount, state.images.data()), "vkGetSwapchainImagesKHR");
+        state.views.resize(imageCount);
+        state.imageInitialized.resize(imageCount, false);
+        for (std::size_t i = 0; i < state.images.size(); ++i) {
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-            view.image = swapchainImages[i];
+            view.image = state.images[i];
             view.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            view.format = surfaceFormat.format;
+            view.format = state.surfaceFormat.format;
             view.components = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
                                VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
             view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            Check(vkCreateImageView(device, &view, nullptr, &swapchainViews[i]), "vkCreateImageView");
+            Check(vkCreateImageView(device, &view, nullptr, &state.views[i]), "vkCreateImageView");
         }
     }
 
@@ -257,21 +284,16 @@ struct VulkanRenderDevice::Impl {
         throw std::runtime_error("No Vulkan memory type satisfies the buffer allocation");
     }
 
-    GLFWwindow* window{};
     VkInstance instance{};
-    VkSurfaceKHR surface{};
+    std::uint64_t owner{};
     VkPhysicalDevice physicalDevice{};
     VkPhysicalDeviceProperties properties{};
     VkPhysicalDeviceMemoryProperties memoryProperties{};
     std::uint32_t queueFamily{};
     VkDevice device{};
     VkQueue queue{};
-    VkSwapchainKHR swapchain{};
-    VkSurfaceFormatKHR surfaceFormat{};
-    VkExtent2D extent{};
-    std::vector<VkImage> swapchainImages;
-    std::vector<VkImageView> swapchainViews;
-    std::vector<bool> imageInitialized;
+    VkFormat defaultColorFormat{VK_FORMAT_B8G8R8A8_SRGB};
+    std::vector<SwapchainSlot> swapchains;
     VkCommandPool commandPool{};
     VkCommandBuffer commandBuffer{};
     VkSemaphore imageAvailable{}, renderFinished{};
@@ -282,7 +304,7 @@ struct VulkanRenderDevice::Impl {
     std::unordered_map<GraphicsPipelineHandle, PipelineResource, HandleHash<GraphicsPipelineHandle>> pipelines;
 };
 
-VulkanRenderDevice::VulkanRenderDevice(const DeviceConfig& config) : m_impl(std::make_unique<Impl>(config)) {}
+VulkanRenderDevice::VulkanRenderDevice(const DeviceConfig& config) : m_impl(std::make_unique<Impl>(config, DeviceId())) {}
 VulkanRenderDevice::~VulkanRenderDevice() {
     if (!m_impl) return;
     auto& d = *m_impl;
@@ -290,35 +312,67 @@ VulkanRenderDevice::~VulkanRenderDevice() {
     for (const auto& [_, pipeline] : d.pipelines) { vkDestroyPipeline(d.device, pipeline.pipeline, nullptr); vkDestroyPipelineLayout(d.device, pipeline.layout, nullptr); }
     for (const auto& [_, shader] : d.shaders) vkDestroyShaderModule(d.device, shader, nullptr);
     for (const auto& [_, buffer] : d.buffers) { vkDestroyBuffer(d.device, buffer.buffer, nullptr); vkFreeMemory(d.device, buffer.memory, nullptr); }
-    for (auto view : d.swapchainViews) vkDestroyImageView(d.device, view, nullptr);
+    for (auto& slot : d.swapchains) if (slot.value) {
+        for (auto view : slot.value->views) vkDestroyImageView(d.device, view, nullptr);
+        if (slot.value->swapchain) vkDestroySwapchainKHR(d.device, slot.value->swapchain, nullptr);
+        if (slot.value->surface) vkDestroySurfaceKHR(d.instance, slot.value->surface, nullptr);
+    }
     if (d.inFlight) vkDestroyFence(d.device, d.inFlight, nullptr);
     if (d.renderFinished) vkDestroySemaphore(d.device, d.renderFinished, nullptr);
     if (d.imageAvailable) vkDestroySemaphore(d.device, d.imageAvailable, nullptr);
     if (d.commandPool) vkDestroyCommandPool(d.device, d.commandPool, nullptr);
-    if (d.swapchain) vkDestroySwapchainKHR(d.device, d.swapchain, nullptr);
     if (d.device) vkDestroyDevice(d.device, nullptr);
-    if (d.surface) vkDestroySurfaceKHR(d.instance, d.surface, nullptr);
     if (d.instance) vkDestroyInstance(d.instance, nullptr);
 }
 
-void VulkanRenderDevice::CreateSwapchain(Window& window, const SwapchainConfig& config) {
+SwapchainHandle VulkanRenderDevice::CreateSwapchain(Window& window, const SwapchainConfig& config) {
     auto& d = *m_impl;
-    if (d.swapchain || d.surface) throw std::logic_error("Vulkan device already has a swapchain");
-    d.window = static_cast<GLFWwindow*>(window.NativeHandle());
-    if (!d.window) throw std::invalid_argument("Vulkan swapchain requires a native GLFW window");
-    Check(glfwCreateWindowSurface(d.instance, d.window, nullptr, &d.surface), "glfwCreateWindowSurface");
+    auto state = std::make_unique<Impl::SwapchainState>();
+    state->window = static_cast<GLFWwindow*>(window.NativeHandle());
+    if (!state->window) throw std::invalid_argument("Vulkan swapchain requires a native GLFW window");
+    Check(glfwCreateWindowSurface(d.instance, state->window, nullptr, &state->surface), "glfwCreateWindowSurface");
     try {
-        d.SelectPhysicalDevice();
-        d.CreateLogicalDevice();
-        d.CreateSwapchainResources(config);
-        d.CreateCommandResources();
+        if (!d.device) {
+            d.SelectPhysicalDevice(state->surface);
+            d.CreateLogicalDevice();
+            d.CreateCommandResources();
+        } else {
+            VkBool32 present{};
+            Check(vkGetPhysicalDeviceSurfaceSupportKHR(d.physicalDevice, d.queueFamily, state->surface, &present),
+                  "vkGetPhysicalDeviceSurfaceSupportKHR");
+            if (!present) throw std::runtime_error("The selected Vulkan queue cannot present to this window");
+        }
+        d.CreateSwapchainResources(*state, config);
     } catch (...) {
-        if (d.device) { vkDestroyDevice(d.device, nullptr); d.device = VK_NULL_HANDLE; }
-        if (d.surface) { vkDestroySurfaceKHR(d.instance, d.surface, nullptr); d.surface = VK_NULL_HANDLE; }
-        d.window = nullptr;
+        for (auto view : state->views) vkDestroyImageView(d.device, view, nullptr);
+        if (state->swapchain) vkDestroySwapchainKHR(d.device, state->swapchain, nullptr);
+        if (state->surface) vkDestroySurfaceKHR(d.instance, state->surface, nullptr);
         throw;
     }
+    std::uint32_t index = 0;
+    while (index < d.swapchains.size() && d.swapchains[index].value) ++index;
+    if (index == d.swapchains.size()) d.swapchains.emplace_back();
+    auto& slot = d.swapchains[index];
+    slot.value = std::move(state);
+    if (d.swapchains.size() == 1 || d.defaultColorFormat == VK_FORMAT_B8G8R8A8_SRGB)
+        d.defaultColorFormat = slot.value->surfaceFormat.format;
+    return {index, slot.generation, DeviceId()};
 }
+
+bool VulkanRenderDevice::DestroySwapchain(SwapchainHandle handle) {
+    auto& d = *m_impl;
+    if (!handle || handle.owner != DeviceId() || handle.index >= d.swapchains.size()) return false;
+    auto& slot = d.swapchains[handle.index];
+    if (!slot.value || slot.generation != handle.generation) return false;
+    if (d.device) Check(vkDeviceWaitIdle(d.device), "vkDeviceWaitIdle");
+    for (auto view : slot.value->views) vkDestroyImageView(d.device, view, nullptr);
+    if (slot.value->swapchain) vkDestroySwapchainKHR(d.device, slot.value->swapchain, nullptr);
+    if (slot.value->surface) vkDestroySurfaceKHR(d.instance, slot.value->surface, nullptr);
+    slot.value.reset();
+    if (++slot.generation == 0) ++slot.generation;
+    return true;
+}
+bool VulkanRenderDevice::IsValid(SwapchainHandle handle) const noexcept { return m_impl->FindSwapchain(handle) != nullptr; }
 
 ImageHandle VulkanRenderDevice::CreateImage(const ImageDesc&) { throw std::runtime_error("Vulkan images are not part of the triangle baseline"); }
 ImageViewHandle VulkanRenderDevice::CreateImageView(const ImageViewDesc&) { throw std::runtime_error("Vulkan image views are not part of the triangle baseline"); }
@@ -352,10 +406,18 @@ BufferHandle VulkanRenderDevice::CreateBuffer(const BufferDesc& desc) {
         std::memcpy(mapped, desc.initialData.data(), desc.initialData.size_bytes());
         vkUnmapMemory(d.device, resource.memory);
     }
-    const BufferHandle handle{d.nextBuffer++, 1};
+    const BufferHandle handle{d.nextBuffer++, 1, DeviceId()};
+    resource.metadata = {desc.size, desc.usage, desc.memory};
     d.buffers.emplace(handle, resource);
     return handle;
 }
+
+std::optional<BufferMetadata> VulkanRenderDevice::GetBufferDesc(BufferHandle handle) const noexcept {
+    const auto it = m_impl->buffers.find(handle);
+    if (it == m_impl->buffers.end()) return std::nullopt;
+    return it->second.metadata;
+}
+bool VulkanRenderDevice::IsValid(BufferHandle handle) const noexcept { return m_impl->buffers.contains(handle); }
 
 ShaderModuleHandle VulkanRenderDevice::CreateShaderModule(const ShaderModuleDesc& desc) {
     if (desc.bytecode.empty() || desc.bytecode.size_bytes() % sizeof(std::uint32_t))
@@ -365,7 +427,7 @@ ShaderModuleHandle VulkanRenderDevice::CreateShaderModule(const ShaderModuleDesc
     create.pCode = reinterpret_cast<const std::uint32_t*>(desc.bytecode.data());
     VkShaderModule shader{};
     Check(vkCreateShaderModule(m_impl->device, &create, nullptr, &shader), "vkCreateShaderModule");
-    const ShaderModuleHandle handle{m_impl->nextShader++, 1};
+    const ShaderModuleHandle handle{m_impl->nextShader++, 1, DeviceId()};
     m_impl->shaders.emplace(handle, shader);
     return handle;
 }
@@ -383,7 +445,7 @@ GraphicsPipelineHandle VulkanRenderDevice::CreatePipeline(const GraphicsPipeline
     stages[1].pName = "main";
     std::vector<VkVertexInputBindingDescription> bindings;
     for (const auto& binding : desc.vertexLayout.bindings)
-        bindings.push_back({binding.binding, binding.stride, binding.perInstance ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX});
+        bindings.push_back({binding.binding, binding.stride, binding.inputRate == VertexInputRate::PerInstance ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX});
     std::vector<VkVertexInputAttributeDescription> attributes;
     for (const auto& attr : desc.vertexLayout.attributes)
         attributes.push_back({attr.location, attr.binding, ToVkVertexFormat(attr.format), attr.offset});
@@ -417,7 +479,7 @@ GraphicsPipelineHandle VulkanRenderDevice::CreatePipeline(const GraphicsPipeline
     Impl::PipelineResource resource{};
     Check(vkCreatePipelineLayout(d.device, &layoutCreate, nullptr, &resource.layout), "vkCreatePipelineLayout");
     VkPipelineRenderingCreateInfo rendering{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    const VkFormat colorFormat = desc.colorFormats.empty() ? d.surfaceFormat.format : ToVkFormat(desc.colorFormats.front());
+    const VkFormat colorFormat = desc.colorFormats.empty() ? d.defaultColorFormat : ToVkFormat(desc.colorFormats.front());
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachmentFormats = &colorFormat;
     VkGraphicsPipelineCreateInfo create{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
@@ -434,7 +496,7 @@ GraphicsPipelineHandle VulkanRenderDevice::CreatePipeline(const GraphicsPipeline
     create.layout = resource.layout;
     create.renderPass = VK_NULL_HANDLE;
     Check(vkCreateGraphicsPipelines(d.device, VK_NULL_HANDLE, 1, &create, nullptr, &resource.pipeline), "vkCreateGraphicsPipelines");
-    const GraphicsPipelineHandle handle{d.nextPipeline++, 1};
+    const GraphicsPipelineHandle handle{d.nextPipeline++, 1, DeviceId()};
     d.pipelines.emplace(handle, resource);
     return handle;
 }
@@ -467,13 +529,15 @@ void VulkanRenderDevice::Destroy(ShaderModuleHandle handle) {
 }
 RenderCapabilities VulkanRenderDevice::GetCapabilities() const { return {}; }
 
-void VulkanRenderDevice::Submit(const IRenderCommandList& list) {
+void VulkanRenderDevice::Submit(SwapchainHandle handle, const IRenderCommandList& list) {
     auto& d = *m_impl;
+    auto* target = d.FindSwapchain(handle);
+    if (!target) throw std::invalid_argument("Vulkan submit received an invalid swapchain handle");
     const auto* commands = dynamic_cast<const VulkanCommandList*>(&list);
     if (!commands) throw std::invalid_argument("VulkanRenderDevice received a command list from another backend");
     Check(vkWaitForFences(d.device, 1, &d.inFlight, VK_TRUE, UINT64_MAX), "vkWaitForFences");
     std::uint32_t imageIndex{};
-    const auto acquire = vkAcquireNextImageKHR(d.device, d.swapchain, UINT64_MAX, d.imageAvailable, VK_NULL_HANDLE, &imageIndex);
+    const auto acquire = vkAcquireNextImageKHR(d.device, target->swapchain, UINT64_MAX, d.imageAvailable, VK_NULL_HANDLE, &imageIndex);
     if (acquire != VK_SUCCESS && acquire != VK_SUBOPTIMAL_KHR) Check(acquire, "vkAcquireNextImageKHR");
     Check(vkResetFences(d.device, 1, &d.inFlight), "vkResetFences");
     Check(vkResetCommandBuffer(d.commandBuffer, 0), "vkResetCommandBuffer");
@@ -481,13 +545,13 @@ void VulkanRenderDevice::Submit(const IRenderCommandList& list) {
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     Check(vkBeginCommandBuffer(d.commandBuffer, &begin), "vkBeginCommandBuffer");
     VkImageMemoryBarrier2 toColor{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
-    toColor.srcStageMask = d.imageInitialized[imageIndex] ? VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_2_NONE;
-    toColor.srcAccessMask = d.imageInitialized[imageIndex] ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : 0;
+    toColor.srcStageMask = target->imageInitialized[imageIndex] ? VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_2_NONE;
+    toColor.srcAccessMask = target->imageInitialized[imageIndex] ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : 0;
     toColor.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     toColor.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    toColor.oldLayout = d.imageInitialized[imageIndex] ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_UNDEFINED;
+    toColor.oldLayout = target->imageInitialized[imageIndex] ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR : VK_IMAGE_LAYOUT_UNDEFINED;
     toColor.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    toColor.image = d.swapchainImages[imageIndex];
+    toColor.image = target->images[imageIndex];
     toColor.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
     dependency.imageMemoryBarrierCount = 1;
@@ -500,15 +564,15 @@ void VulkanRenderDevice::Submit(const IRenderCommandList& list) {
         if constexpr (std::is_same_v<T, VulkanCommandList::Begin>) {
             if (rendering) vkCmdEndRendering(d.commandBuffer);
             VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-            color.imageView = d.swapchainViews[imageIndex];
+            color.imageView = target->views[imageIndex];
             color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
             color.loadOp = c.desc.clearColor ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
             color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             color.clearValue.color = {{c.desc.clearColorValue.x, c.desc.clearColorValue.y, c.desc.clearColorValue.z, 1.0f}};
             VkRenderingInfo info{VK_STRUCTURE_TYPE_RENDERING_INFO};
             info.renderArea.offset = {std::max(c.desc.offsetX, 0), std::max(c.desc.offsetY, 0)};
-            info.renderArea.extent = {c.desc.width ? c.desc.width : d.extent.width,
-                                      c.desc.height ? c.desc.height : d.extent.height};
+            info.renderArea.extent = {c.desc.width ? c.desc.width : target->extent.width,
+                                      c.desc.height ? c.desc.height : target->extent.height};
             info.layerCount = 1;
             info.colorAttachmentCount = 1;
             info.pColorAttachments = &color;
@@ -547,7 +611,7 @@ void VulkanRenderDevice::Submit(const IRenderCommandList& list) {
     toPresent.dstAccessMask = 0;
     toPresent.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    toPresent.image = d.swapchainImages[imageIndex];
+    toPresent.image = target->images[imageIndex];
     toPresent.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     dependency.pImageMemoryBarriers = &toPresent;
     vkCmdPipelineBarrier2(d.commandBuffer, &dependency);
@@ -566,12 +630,12 @@ void VulkanRenderDevice::Submit(const IRenderCommandList& list) {
     present.waitSemaphoreCount = 1;
     present.pWaitSemaphores = &d.renderFinished;
     present.swapchainCount = 1;
-    present.pSwapchains = &d.swapchain;
+    present.pSwapchains = &target->swapchain;
     present.pImageIndices = &imageIndex;
     const auto presented = vkQueuePresentKHR(d.queue, &present);
     if (presented != VK_SUCCESS && presented != VK_SUBOPTIMAL_KHR) Check(presented, "vkQueuePresentKHR");
     Check(vkQueueWaitIdle(d.queue), "vkQueueWaitIdle");
-    d.imageInitialized[imageIndex] = true;
+    target->imageInitialized[imageIndex] = true;
 }
 
 } // namespace Lighthouse

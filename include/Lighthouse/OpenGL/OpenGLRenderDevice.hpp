@@ -21,6 +21,8 @@ public:
     ImageHandle CreateImage(const ImageDesc& description) override;
     ImageViewHandle CreateImageView(const ImageViewDesc& description) override;
     BufferHandle CreateBuffer(const BufferDesc& description) override;
+    std::optional<BufferMetadata> GetBufferDesc(BufferHandle handle) const noexcept override;
+    bool IsValid(BufferHandle handle) const noexcept override;
     ShaderModuleHandle CreateShaderModule(const ShaderModuleDesc& description) override;
     GraphicsPipelineHandle CreatePipeline(const GraphicsPipelineDesc& description) override;
     std::unique_ptr<IRenderCommandList> CreateCommandList(QueueType type) override;
@@ -30,8 +32,10 @@ public:
     void Destroy(GraphicsPipelineHandle handle) override;
     void Destroy(ShaderModuleHandle handle) override;
     RenderCapabilities GetCapabilities() const override;
-    void CreateSwapchain(Window& window, const SwapchainConfig& config) override;
-    void Submit(const IRenderCommandList& commandList) override;
+    SwapchainHandle CreateSwapchain(Window& window, const SwapchainConfig& config) override;
+    bool DestroySwapchain(SwapchainHandle swapchain) override;
+    bool IsValid(SwapchainHandle swapchain) const noexcept override;
+    void Submit(SwapchainHandle swapchain, const IRenderCommandList& commandList) override;
 
 private:
     struct Impl;

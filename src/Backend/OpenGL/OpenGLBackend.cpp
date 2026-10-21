@@ -12,6 +12,7 @@ namespace Detail {
 
 OpenGLDeviceGroup::~OpenGLDeviceGroup() {
     if (display == EGL_NO_DISPLAY) return;
+    if (pbuffer != EGL_NO_SURFACE) eglDestroySurface(display, pbuffer);
     if (shareContext != EGL_NO_CONTEXT) eglDestroyContext(display, shareContext);
     eglTerminate(display);
 }
@@ -25,7 +26,7 @@ void OpenGLDeviceGroup::Initialize(void* nativeDisplay) {
         eglTerminate(candidateDisplay);
         throw std::runtime_error("Failed to bind the EGL OpenGL API");
     }
-    const EGLint configAttributes[]{EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE,
+    const EGLint configAttributes[]{EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE,
         EGL_OPENGL_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
         EGL_ALPHA_SIZE, 8, EGL_NONE};
     EGLConfig candidateConfig{};
@@ -42,8 +43,18 @@ void OpenGLDeviceGroup::Initialize(void* nativeDisplay) {
         throw std::runtime_error("Failed to create the EGL share context");
     }
     display = candidateDisplay;
+    this->nativeDisplay = nativeDisplay;
     config = candidateConfig;
     shareContext = candidateContext;
+    const EGLint pbufferAttributes[]{EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
+    pbuffer = eglCreatePbufferSurface(display, config, pbufferAttributes);
+    if (pbuffer == EGL_NO_SURFACE) {
+        eglDestroyContext(display, shareContext);
+        eglTerminate(display);
+        display = EGL_NO_DISPLAY;
+        shareContext = EGL_NO_CONTEXT;
+        throw std::runtime_error("Failed to create the EGL device pbuffer");
+    }
 }
 
 EGLContext OpenGLDeviceGroup::CreateSharedContext() const {
