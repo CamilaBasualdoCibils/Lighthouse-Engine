@@ -8,6 +8,7 @@
 namespace Lighthouse {
 
 namespace Detail { struct OpenGLDeviceGroup; }
+class OpenGLCommandList;
 
 // OpenGL 4.5 device backed by an EGL context and window surface.
 class OpenGLRenderDevice final : public IRenderDevice {
@@ -33,11 +34,15 @@ public:
     void Destroy(ShaderModuleHandle handle) override;
     RenderCapabilities GetCapabilities() const override;
     SwapchainHandle CreateSwapchain(Window& window, const SwapchainConfig& config) override;
+    ImageViewHandle AcquireSwapchainImage(SwapchainHandle) override;
     bool DestroySwapchain(SwapchainHandle swapchain) override;
     bool IsValid(SwapchainHandle swapchain) const noexcept override;
-    void Submit(SwapchainHandle swapchain, const IRenderCommandList& commandList) override;
+    void Submit(const IRenderCommandList& commandList) override;
+    void Present(SwapchainHandle swapchain) override;
+    ImageViewHandle AcquiredImageView() const noexcept;
 
 private:
+    friend class OpenGLCommandList;
     struct Impl;
     std::unique_ptr<Impl> m_impl;
 };

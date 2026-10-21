@@ -31,9 +31,11 @@ public:
     void Destroy(ShaderModuleHandle) override;
     RenderCapabilities GetCapabilities() const override;
     SwapchainHandle CreateSwapchain(Window& window, const SwapchainConfig& config) override;
+    ImageViewHandle AcquireSwapchainImage(SwapchainHandle) override;
     bool DestroySwapchain(SwapchainHandle) override;
     bool IsValid(SwapchainHandle) const noexcept override;
-    void Submit(SwapchainHandle swapchain, const IRenderCommandList&) override;
+    void Submit(const IRenderCommandList&) override;
+    void Present(SwapchainHandle swapchain) override;
 
 private:
     struct Impl;

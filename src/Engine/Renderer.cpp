@@ -4,86 +4,102 @@
 #include "MeshManager.hpp"
 
 #include <algorithm>
+#include <functional>
+#include <stdexcept>
+#include <unordered_map>
 
 namespace Lighthouse {
 
 Renderer::Renderer(WindowManager* windows)
     : m_windows(windows), m_meshManager(std::make_unique<MeshManager>()) {}
-Renderer::~Renderer() = default;
-
-template <typename T, typename Tag>
-Handle<Tag> Renderer::Add(std::vector<Slot<T>>& slots, std::unique_ptr<T> value) {
-    std::uint32_t index = 0;
-    while (index < slots.size() && slots[index].value) ++index;
-    if (index == slots.size()) slots.emplace_back();
-    slots[index].value = std::move(value);
-    return {index, slots[index].generation};
+Renderer::~Renderer() { ResetRenderDevice(); }
+void Renderer::SetRenderDevice(std::unique_ptr<IRenderDevice> device) {
+    if (!device) throw std::invalid_argument("Render device cannot be null");
+    if (m_device) throw std::logic_error("Renderer already owns a render device");
+    m_device = std::move(device);
 }
+void Renderer::ResetRenderDevice() noexcept {
+    if (m_device) for (auto& slot : m_views) {
+        auto* view = dynamic_cast<WindowView*>(slot.value.get());
+        if (!view || !view->swapchain) continue;
+        try { m_device->DestroySwapchain(view->swapchain); } catch (...) {}
+        view->swapchain = {};
+    }
+    m_device.reset();
+}
+MeshHandle Renderer::CreateMesh(const MeshDesc& description) { return m_meshManager->Create(description, m_device.get()); }
+bool Renderer::DestroyMesh(MeshHandle mesh) { return m_meshManager->Destroy(mesh); }
+const MeshDesc* Renderer::GetMeshDesc(MeshHandle mesh) const noexcept { return m_meshManager->GetDescription(mesh, m_device.get()); }
+bool Renderer::IsValid(MeshHandle mesh) const noexcept { return m_meshManager->IsValid(mesh, m_device.get()); }
+MeshUploadStatus Renderer::GetMeshUploadStatus(MeshHandle mesh) const noexcept { return m_meshManager->GetUploadStatus(mesh, m_device.get()); }
 
-template <typename T, typename Tag>
-bool Renderer::Remove(std::vector<Slot<T>>& slots, Handle<Tag> handle) {
-    if (!handle || handle.index >= slots.size()) return false;
-    auto& slot = slots[handle.index];
-    if (!slot.value || slot.generation != handle.generation) return false;
+IRenderView* Renderer::GetView(RenderViewHandle handle) noexcept {
+    if (!handle || handle.index >= m_views.size()) return nullptr;
+    auto& slot = m_views[handle.index];
+    return slot.generation == handle.generation ? slot.value.get() : nullptr;
+}
+const IRenderView* Renderer::GetView(RenderViewHandle handle) const noexcept {
+    return const_cast<Renderer*>(this)->GetView(handle);
+}
+bool Renderer::DestroyView(RenderViewHandle handle) {
+    auto* view = GetView(handle);
+    if (!view) return false;
+    if (auto* window = dynamic_cast<WindowView*>(view); window && window->swapchain && m_device)
+        m_device->DestroySwapchain(window->swapchain);
+    auto& slot = m_views[handle.index];
     slot.value.reset();
     if (++slot.generation == 0) ++slot.generation;
     return true;
 }
 
-template <typename T, typename Tag>
-T* Renderer::Find(std::vector<Slot<T>>& slots, Handle<Tag> handle) noexcept {
-    if (!handle || handle.index >= slots.size()) return nullptr;
-    auto& slot = slots[handle.index];
-    return slot.generation == handle.generation ? slot.value.get() : nullptr;
+GraphImageHandle Renderer::BuildView(RenderGraph& graph, RenderViewHandle handle) {
+    auto* view = GetView(handle);
+    if (!view) throw std::logic_error("Render view handle is invalid");
+    return BuildView(graph, *view);
 }
-
-template <typename T, typename Tag>
-const T* Renderer::Find(const std::vector<Slot<T>>& slots, Handle<Tag> handle) noexcept {
-    if (!handle || handle.index >= slots.size()) return nullptr;
-    const auto& slot = slots[handle.index];
-    return slot.generation == handle.generation ? slot.value.get() : nullptr;
-}
-
-MeshHandle Renderer::CreateMesh(const MeshDesc& description) {
-    return m_meshManager->Create(description, m_device);
-}
-bool Renderer::DestroyMesh(MeshHandle mesh) { return m_meshManager->Destroy(mesh); }
-const MeshDesc* Renderer::GetMeshDesc(MeshHandle mesh) const noexcept { return m_meshManager->GetDescription(mesh, m_device); }
-bool Renderer::IsValid(MeshHandle mesh) const noexcept { return m_meshManager->IsValid(mesh, m_device); }
-MeshUploadStatus Renderer::GetMeshUploadStatus(MeshHandle mesh) const noexcept { return m_meshManager->GetUploadStatus(mesh, m_device); }
-
-RenderViewHandle Renderer::CreateView(const RenderViewDesc& desc) {
-    return Add<RenderView, RenderViewHandleTag>(m_views, std::make_unique<RenderView>(desc));
-}
-bool Renderer::DestroyView(RenderViewHandle view) { return Remove(m_views, view); }
-RenderView* Renderer::GetView(RenderViewHandle view) noexcept { return Find(m_views, view); }
-const RenderView* Renderer::GetView(RenderViewHandle view) const noexcept { return Find(m_views, view); }
-
-RenderSessionHandle Renderer::CreateSession(const RenderSessionDesc& desc) {
-    return Add<RenderSession, RenderSessionHandleTag>(m_sessions, std::make_unique<RenderSession>(desc));
-}
-bool Renderer::DestroySession(RenderSessionHandle session) { return Remove(m_sessions, session); }
-RenderSession* Renderer::GetSession(RenderSessionHandle session) noexcept { return Find(m_sessions, session); }
-const RenderSession* Renderer::GetSession(RenderSessionHandle session) const noexcept { return Find(m_sessions, session); }
-
-bool Renderer::IsSessionValid(RenderSessionHandle handle) const noexcept {
-    const auto* session = GetSession(handle);
-    if (!session || !session->GetView() || !session->GetOutput().IsSet()) return false;
-    const auto* view = GetView(session->GetView());
-    if (!view || !view->HasValidReferences()) return false;
-    if (view->GetTechnique() && !GetTechnique(view->GetTechnique())) return false;
-    if (const auto* window = std::get_if<WindowHandle>(&session->GetOutput().target)) {
-        return m_windows && m_windows->GetWindow(*window);
+GraphImageHandle Renderer::BuildView(RenderGraph& graph, IRenderView& view) {
+    auto order = view.TechniqueOrder();
+    if (view.FinalOutput() && !view.GetTechnique(view.FinalOutput()))
+        throw std::logic_error("Final output technique is invalid");
+    std::unordered_map<std::uint32_t, std::any> outputs;
+    std::optional<GraphImageHandle> finalImage;
+    for (auto handle : order) {
+        TechniqueBuildContext context(graph, view, outputs, handle);
+        view.GetTechnique(handle)->Build(context);
+        if (handle == view.FinalOutput()) finalImage = context.FinalImage();
     }
-    return std::get<OffscreenTargetHandle>(session->GetOutput().target).IsValid();
+    if (!view.FinalOutput()) throw std::logic_error("Final output technique is not selected");
+    if (!finalImage) throw std::logic_error("Final output image is missing");
+    if (auto* window = dynamic_cast<WindowView*>(&view)) {
+        if (!m_windows || !m_windows->GetWindow(window->window)) throw std::logic_error("Window is invalid");
+        if (!m_device) throw std::logic_error("Window view requires a render device");
+        if (!window->swapchain) window->swapchain = m_device->CreateSwapchain(*m_windows->GetWindow(window->window), window->presentation);
+        throw std::logic_error("Render graph presentation is unsupported by this device interface");
+    }
+    if (dynamic_cast<ExportView*>(&view))
+        throw std::logic_error("Render graph export is unsupported by this device interface");
+    return *finalImage;
 }
-
-RenderTechniqueHandle Renderer::RegisterTechnique(std::unique_ptr<IRenderTechnique> technique) {
-    if (!technique) return {};
-    return Add<IRenderTechnique, RenderTechniqueHandleTag>(m_techniques, std::move(technique));
+std::vector<GraphImageHandle> Renderer::BuildViews(RenderGraph& graph,
+    const std::vector<RenderViewHandle>& views,
+    const std::vector<std::pair<RenderViewHandle, RenderViewHandle>>& dependencies) {
+    std::vector<unsigned char> state(views.size());
+    std::vector<GraphImageHandle> result(views.size());
+    std::function<void(std::size_t)> visit = [&](std::size_t index) {
+        if (state[index] == 1) throw std::logic_error("Cyclic view dependency");
+        if (state[index] == 2) return;
+        if (!GetView(views[index])) throw std::logic_error("View dependency is invalid");
+        state[index] = 1;
+        for (auto [consumer, producer] : dependencies) if (consumer == views[index]) {
+            auto found = std::find(views.begin(), views.end(), producer);
+            if (found == views.end()) throw std::logic_error("View dependency is missing");
+            visit(static_cast<std::size_t>(found - views.begin()));
+        }
+        result[index] = BuildView(graph, views[index]);
+        state[index] = 2;
+    };
+    for (std::size_t i = 0; i < views.size(); ++i) visit(i);
+    return result;
 }
-bool Renderer::UnregisterTechnique(RenderTechniqueHandle technique) { return Remove(m_techniques, technique); }
-IRenderTechnique* Renderer::GetTechnique(RenderTechniqueHandle technique) noexcept { return Find(m_techniques, technique); }
-const IRenderTechnique* Renderer::GetTechnique(RenderTechniqueHandle technique) const noexcept { return Find(m_techniques, technique); }
 
 } // namespace Lighthouse

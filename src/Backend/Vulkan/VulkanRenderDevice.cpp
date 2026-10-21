@@ -294,6 +294,9 @@ struct VulkanRenderDevice::Impl {
     VkQueue queue{};
     VkFormat defaultColorFormat{VK_FORMAT_B8G8R8A8_SRGB};
     std::vector<SwapchainSlot> swapchains;
+    SwapchainHandle acquiredSwapchain;
+    std::uint32_t acquiredImageIndex{};
+    bool submitted{};
     VkCommandPool commandPool{};
     VkCommandBuffer commandBuffer{};
     VkSemaphore imageAvailable{}, renderFinished{};
@@ -365,6 +368,7 @@ bool VulkanRenderDevice::DestroySwapchain(SwapchainHandle handle) {
     auto& slot = d.swapchains[handle.index];
     if (!slot.value || slot.generation != handle.generation) return false;
     if (d.device) Check(vkDeviceWaitIdle(d.device), "vkDeviceWaitIdle");
+    if (d.acquiredSwapchain == handle) { d.acquiredSwapchain = {}; d.submitted = false; }
     for (auto view : slot.value->views) vkDestroyImageView(d.device, view, nullptr);
     if (slot.value->swapchain) vkDestroySwapchainKHR(d.device, slot.value->swapchain, nullptr);
     if (slot.value->surface) vkDestroySurfaceKHR(d.instance, slot.value->surface, nullptr);
@@ -529,17 +533,30 @@ void VulkanRenderDevice::Destroy(ShaderModuleHandle handle) {
 }
 RenderCapabilities VulkanRenderDevice::GetCapabilities() const { return {}; }
 
-void VulkanRenderDevice::Submit(SwapchainHandle handle, const IRenderCommandList& list) {
+ImageViewHandle VulkanRenderDevice::AcquireSwapchainImage(SwapchainHandle handle) {
     auto& d = *m_impl;
     auto* target = d.FindSwapchain(handle);
-    if (!target) throw std::invalid_argument("Vulkan submit received an invalid swapchain handle");
-    const auto* commands = dynamic_cast<const VulkanCommandList*>(&list);
-    if (!commands) throw std::invalid_argument("VulkanRenderDevice received a command list from another backend");
+    if (!target) throw std::invalid_argument("Vulkan acquire received an invalid swapchain handle");
+    if (d.acquiredSwapchain) throw std::logic_error("A Vulkan swapchain image is already acquired");
     Check(vkWaitForFences(d.device, 1, &d.inFlight, VK_TRUE, UINT64_MAX), "vkWaitForFences");
     std::uint32_t imageIndex{};
     const auto acquire = vkAcquireNextImageKHR(d.device, target->swapchain, UINT64_MAX, d.imageAvailable, VK_NULL_HANDLE, &imageIndex);
     if (acquire != VK_SUCCESS && acquire != VK_SUBOPTIMAL_KHR) Check(acquire, "vkAcquireNextImageKHR");
-    Check(vkResetFences(d.device, 1, &d.inFlight), "vkResetFences");
+    d.acquiredSwapchain = handle;
+    d.acquiredImageIndex = imageIndex;
+    d.submitted = false;
+    return {0x80000000u | handle.index, handle.generation, DeviceId()};
+}
+
+void VulkanRenderDevice::Submit(const IRenderCommandList& list) {
+    auto& d = *m_impl;
+    const auto* commands = dynamic_cast<const VulkanCommandList*>(&list);
+    if (!commands) throw std::invalid_argument("VulkanRenderDevice received a command list from another backend");
+    const auto handle = d.acquiredSwapchain;
+    auto* target = d.FindSwapchain(handle);
+    if (!target) throw std::logic_error("Vulkan submit requires an acquired image");
+    if (d.submitted) throw std::logic_error("Vulkan image was already submitted");
+    const auto imageIndex = d.acquiredImageIndex;
     Check(vkResetCommandBuffer(d.commandBuffer, 0), "vkResetCommandBuffer");
     VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -562,6 +579,8 @@ void VulkanRenderDevice::Submit(SwapchainHandle handle, const IRenderCommandList
     for (const auto& command : commands->Commands()) std::visit([&](const auto& c) {
         using T = std::decay_t<decltype(c)>;
         if constexpr (std::is_same_v<T, VulkanCommandList::Begin>) {
+            if (c.desc.colorAttachment != ImageViewHandle{0x80000000u | handle.index, handle.generation, DeviceId()})
+                throw std::logic_error("Vulkan render pass must target the acquired image");
             if (rendering) vkCmdEndRendering(d.commandBuffer);
             VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
             color.imageView = target->views[imageIndex];
@@ -625,7 +644,17 @@ void VulkanRenderDevice::Submit(SwapchainHandle handle, const IRenderCommandList
     submit.pCommandBuffers = &d.commandBuffer;
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &d.renderFinished;
+    Check(vkResetFences(d.device, 1, &d.inFlight), "vkResetFences");
     Check(vkQueueSubmit(d.queue, 1, &submit, d.inFlight), "vkQueueSubmit");
+    d.submitted = true;
+}
+
+void VulkanRenderDevice::Present(SwapchainHandle handle) {
+    auto& d = *m_impl;
+    auto* target = d.FindSwapchain(handle);
+    if (!target || d.acquiredSwapchain != handle || !d.submitted)
+        throw std::logic_error("Vulkan present requires submitted work for the acquired image");
+    const auto imageIndex = d.acquiredImageIndex;
     VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     present.waitSemaphoreCount = 1;
     present.pWaitSemaphores = &d.renderFinished;
@@ -636,6 +665,8 @@ void VulkanRenderDevice::Submit(SwapchainHandle handle, const IRenderCommandList
     if (presented != VK_SUCCESS && presented != VK_SUBOPTIMAL_KHR) Check(presented, "vkQueuePresentKHR");
     Check(vkQueueWaitIdle(d.queue), "vkQueueWaitIdle");
     target->imageInitialized[imageIndex] = true;
+    d.acquiredSwapchain = {};
+    d.submitted = false;
 }
 
 } // namespace Lighthouse

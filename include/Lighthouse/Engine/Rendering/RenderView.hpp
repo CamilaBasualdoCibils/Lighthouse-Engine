@@ -1,12 +1,17 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <memory>
+#include <stdexcept>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <Lighthouse/Engine/Scene/Entity.hpp>
 #include <Lighthouse/Engine/Core/Handle.hpp>
 #include <Lighthouse/Engine/Core/Types.hpp>
+#include <Lighthouse/Engine/Rendering/RenderTechnique.hpp>
 
 namespace Lighthouse {
 
@@ -15,56 +20,114 @@ struct ExplicitCamera {
     Vec3 direction{0.0f, 0.0f, 1.0f};
     float fieldOfViewDegrees{70.0f};
 };
-
 class CameraSource {
 public:
     CameraSource() = default;
     CameraSource(const Entity& entity);
     CameraSource(ExplicitCamera camera) : m_source(camera) {}
-
     bool IsSet() const noexcept;
     bool IsValid() const noexcept;
     const std::variant<std::monostate, Entity, ExplicitCamera>& Value() const noexcept { return m_source; }
-
 private:
     std::variant<std::monostate, Entity, ExplicitCamera> m_source;
 };
-
 struct RenderSettings {
     Vec3 clearColor{};
     bool clearColorEnabled{true};
     bool clearDepthEnabled{true};
 };
-
 using LayerMask = std::uint64_t;
-
 struct RenderViewDesc {
     SceneHandle scene;
     CameraSource camera;
-    RenderTechniqueHandle technique;
     RenderSettings settings;
     LayerMask visibleLayers{~LayerMask{0}};
 };
 
-class RenderView {
+class IRenderView {
 public:
-    explicit RenderView(RenderViewDesc desc = {}) : m_desc(std::move(desc)) {}
-    void SetScene(SceneHandle scene) noexcept { m_desc.scene = scene; }
-    void SetCamera(CameraSource camera) { m_desc.camera = std::move(camera); }
-    void SetTechnique(RenderTechniqueHandle technique) noexcept { m_desc.technique = technique; }
-    void SetSettings(const RenderSettings& settings) { m_desc.settings = settings; }
-    void SetVisibleLayers(LayerMask layers) noexcept { m_desc.visibleLayers = layers; }
-
+    explicit IRenderView(RenderViewDesc desc = {});
+    virtual ~IRenderView() = default;
+    IRenderView(const IRenderView&) = delete;
+    IRenderView& operator=(const IRenderView&) = delete;
+    void SetScene(SceneHandle value) noexcept { m_desc.scene = value; }
+    void SetCamera(CameraSource value) { m_desc.camera = std::move(value); }
+    void SetSettings(const RenderSettings& value) { m_desc.settings = value; }
+    void SetVisibleLayers(LayerMask value) noexcept { m_desc.visibleLayers = value; }
     SceneHandle GetScene() const noexcept { return m_desc.scene; }
     const CameraSource& GetCamera() const noexcept { return m_desc.camera; }
-    RenderTechniqueHandle GetTechnique() const noexcept { return m_desc.technique; }
     const RenderSettings& GetSettings() const noexcept { return m_desc.settings; }
     LayerMask GetVisibleLayers() const noexcept { return m_desc.visibleLayers; }
-    const RenderViewDesc& Description() const noexcept { return m_desc; }
     bool HasValidReferences() const noexcept;
 
+    template <typename T, typename... Args> TechniqueRef<T> AddTechnique(Args&&... args) {
+        static_assert(std::is_base_of_v<IRenderTechnique, T>);
+        auto value = std::make_unique<T>(std::forward<Args>(args)...);
+        std::uint32_t index = 0;
+        while (index < m_techniques.size() && m_techniques[index].value) ++index;
+        if (index == m_techniques.size()) m_techniques.emplace_back();
+        auto& slot = m_techniques[index];
+        slot.value = std::move(value);
+        slot.dependencies.clear();
+        return {{index, slot.generation, m_ownerId}};
+    }
+    template <typename T> T* GetTechnique(TechniqueRef<T> ref) noexcept {
+        return dynamic_cast<T*>(GetTechnique(ref.handle));
+    }
+    template <typename T> const T* GetTechnique(TechniqueRef<T> ref) const noexcept {
+        return dynamic_cast<const T*>(GetTechnique(ref.handle));
+    }
+    IRenderTechnique* GetTechnique(RenderTechniqueHandle handle) noexcept;
+    const IRenderTechnique* GetTechnique(RenderTechniqueHandle handle) const noexcept;
+    bool RemoveTechnique(RenderTechniqueHandle handle);
+    template <typename T> bool RemoveTechnique(TechniqueRef<T> ref) { return RemoveTechnique(ref.handle); }
+    template <typename T, typename... Dependencies>
+    void SetDependencies(TechniqueRef<T> technique, Dependencies... dependencies) {
+        static_assert((std::is_same_v<decltype(dependencies.handle), RenderTechniqueHandle> && ...));
+        auto* slot = FindSlot(technique.handle);
+        if (!slot) throw std::logic_error("Technique reference is invalid");
+        slot->dependencies = {dependencies.handle...};
+    }
+    std::vector<RenderTechniqueHandle> TechniqueOrder() const;
+    std::vector<RenderTechniqueHandle> Techniques() const;
+    void SetFinalOutput(RenderTechniqueHandle technique) noexcept { m_finalTechnique = technique; }
+    template <typename T> void SetFinalOutput(TechniqueRef<T> technique) noexcept { SetFinalOutput(technique.handle); }
+    RenderTechniqueHandle FinalOutput() const noexcept { return m_finalTechnique; }
+    std::uint64_t OwnerId() const noexcept { return m_ownerId; }
+
 private:
+    struct Slot {
+        std::uint32_t generation{1};
+        std::unique_ptr<IRenderTechnique> value;
+        std::vector<RenderTechniqueHandle> dependencies;
+    };
+    Slot* FindSlot(RenderTechniqueHandle handle) noexcept;
+    const Slot* FindSlot(RenderTechniqueHandle handle) const noexcept;
     RenderViewDesc m_desc;
+    std::uint64_t m_ownerId;
+    std::vector<Slot> m_techniques;
+    RenderTechniqueHandle m_finalTechnique;
+};
+
+class WindowView final : public IRenderView {
+public:
+    WindowView(WindowHandle window, RenderViewDesc desc = {}, SwapchainConfig config = {})
+        : IRenderView(std::move(desc)), window(window), presentation(config) {}
+    WindowHandle window;
+    SwapchainConfig presentation;
+    SwapchainHandle swapchain;
+};
+class ExportView final : public IRenderView {
+public:
+    ExportView(ImageHandle image, ImageViewHandle imageView, ImageDesc description, RenderViewDesc desc = {})
+        : IRenderView(std::move(desc)), image(image), imageView(imageView), description(description) {}
+    ImageHandle image;
+    ImageViewHandle imageView;
+    ImageDesc description;
+};
+class RenderTextureView final : public IRenderView {
+public:
+    using IRenderView::IRenderView;
 };
 
 } // namespace Lighthouse

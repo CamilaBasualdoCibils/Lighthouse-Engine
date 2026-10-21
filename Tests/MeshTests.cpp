@@ -17,6 +17,7 @@ using namespace Lighthouse;
 class TestDevice final : public IRenderDevice {
 public:
     SwapchainHandle CreateSwapchain(Window&, const SwapchainConfig&) override { return {0, 1, DeviceId()}; }
+    ImageViewHandle AcquireSwapchainImage(SwapchainHandle) override { return {}; }
     bool DestroySwapchain(SwapchainHandle) override { return true; }
     bool IsValid(SwapchainHandle handle) const noexcept override { return handle.owner == DeviceId() && handle.index == 0 && handle.generation == 1; }
     ImageHandle CreateImage(const ImageDesc&) override { return {}; }
@@ -40,7 +41,8 @@ public:
     void Destroy(GraphicsPipelineHandle) override {}
     void Destroy(ShaderModuleHandle) override {}
     RenderCapabilities GetCapabilities() const override { return {}; }
-    void Submit(SwapchainHandle, const IRenderCommandList&) override {}
+    void Submit(const IRenderCommandList&) override {}
+    void Present(SwapchainHandle) override {}
 
 private:
     std::uint32_t m_next{1};
@@ -136,10 +138,24 @@ TEST(MeshTests, SupportsHostVisibleCpuDataMemoryPreferences) {
               MemoryAccess::CPUWrite | MemoryAccess::CPURead);
 }
 
-TEST(MeshTests, RendererRejectsWrongUsageAndUndersizedBuffers) {
-    TestDevice device;
+TEST(MeshTests, RendererOwnsExactlyOneDevice) {
     Renderer renderer;
-    renderer.SetRenderDevice(&device);
+    EXPECT_EQ(renderer.GetRenderDevice(), nullptr);
+    auto first = std::make_unique<TestDevice>();
+    auto* owned = first.get();
+    renderer.SetRenderDevice(std::move(first));
+    EXPECT_EQ(renderer.GetRenderDevice(), owned);
+    EXPECT_THROW(renderer.SetRenderDevice(std::make_unique<TestDevice>()), std::logic_error);
+    EXPECT_EQ(renderer.GetRenderDevice(), owned);
+    renderer.ResetRenderDevice();
+    EXPECT_EQ(renderer.GetRenderDevice(), nullptr);
+}
+
+TEST(MeshTests, RendererRejectsWrongUsageAndUndersizedBuffers) {
+    auto owned = std::make_unique<TestDevice>();
+    auto& device = *owned;
+    Renderer renderer;
+    renderer.SetRenderDevice(std::move(owned));
     const auto wrongUsage = MakeBuffer(device, 128, BufferUsage::Index);
     auto invalidUsage = MeshBuilder().Attribute("P", VertexFormat::Float3, 0)
         .VertexBuffer(wrongUsage).VertexCount(1);
@@ -169,9 +185,10 @@ TEST(MeshTests, InvalidAndStaleMeshHandlesAreRejected) {
 }
 
 TEST(MeshTests, DestroyingAReferencedDeviceBufferInvalidatesTheMesh) {
-    TestDevice device;
+    auto owned = std::make_unique<TestDevice>();
+    auto& device = *owned;
     Renderer renderer;
-    renderer.SetRenderDevice(&device);
+    renderer.SetRenderDevice(std::move(owned));
     const auto vertexBuffer = MakeBuffer(device, 36, BufferUsage::Vertex);
     const auto mesh = renderer.CreateMesh(MeshBuilder().Attribute("P", VertexFormat::Float3, 0)
         .VertexBuffer(vertexBuffer).VertexCount(3));
@@ -201,9 +218,11 @@ TEST(MeshTests, CpuVertexAndIndexDataAreCopiedAndValidated) {
 }
 
 TEST(MeshTests, RejectsBufferReferencesFromDifferentDevices) {
-    TestDevice deviceA, deviceB;
+    auto owned = std::make_unique<TestDevice>();
+    auto& deviceA = *owned;
+    TestDevice deviceB;
     Renderer renderer;
-    renderer.SetRenderDevice(&deviceA);
+    renderer.SetRenderDevice(std::move(owned));
     const auto vertex = MakeBuffer(deviceA, 12, BufferUsage::Vertex);
     const auto index = MakeBuffer(deviceB, 4, BufferUsage::Index);
     auto builder = MeshBuilder().Attribute("P", VertexFormat::Float3, 0).VertexBuffer(vertex)
@@ -218,9 +237,10 @@ TEST(MeshTests, DefaultMemorySettingsAreAlsoUsedByGenericBuffers) {
 }
 
 TEST(MeshTests, SupportsRequestedRendererCreateMeshBuilderCall) {
-    TestDevice device;
+    auto owned = std::make_unique<TestDevice>();
+    auto& device = *owned;
     Renderer renderer;
-    renderer.SetRenderDevice(&device);
+    renderer.SetRenderDevice(std::move(owned));
     const auto customBuffer = MakeBuffer(device, 1024 * 28, BufferUsage::Vertex);
     const MeshHandle mesh = renderer.CreateMesh(
         MeshBuilder()

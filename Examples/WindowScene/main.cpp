@@ -20,29 +20,30 @@ public:
         auto* window = GetWindowManager().GetWindow(handle);
         window->Show();
 
-        if (auto* backend = GetGraphicsBackend()) {
-            m_device = backend->CreateDevice(Lighthouse::DeviceConfig{});
-            m_swapchain = m_device->CreateSwapchain(*window, Lighthouse::SwapchainConfig{});
+        if (auto* device = GetRenderer().GetRenderDevice()) {
+            m_swapchain = device->CreateSwapchain(*window, Lighthouse::SwapchainConfig{});
             m_window = window;
         }
     }
 
     void OnUpdate(float) override {
-        if (!m_device || !m_window) return;
+        auto* device = GetRenderer().GetRenderDevice();
+        if (!device || !m_window) return;
 
-        auto commands = m_device->CreateCommandList(Lighthouse::QueueType::Graphics);
+        auto commands = device->CreateCommandList(Lighthouse::QueueType::Graphics);
         Lighthouse::RenderPassDesc pass;
+        pass.colorAttachment = device->AcquireSwapchainImage(m_swapchain);
         pass.clearColor = true;
         pass.clearColorValue = {0.08f, 0.10f, 0.14f};
         pass.width = m_window->FramebufferWidth();
         pass.height = m_window->FramebufferHeight();
         commands->BeginRendering(pass);
         commands->EndRendering();
-        m_device->Submit(m_swapchain, *commands);
+        device->Submit(*commands);
+        device->Present(m_swapchain);
     }
 
 private:
-    std::unique_ptr<Lighthouse::IRenderDevice> m_device;
     Lighthouse::SwapchainHandle m_swapchain;
     Lighthouse::Window* m_window{};
 };

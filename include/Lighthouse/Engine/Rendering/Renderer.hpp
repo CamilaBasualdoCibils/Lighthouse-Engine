@@ -2,10 +2,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
-#include <Lighthouse/Engine/Rendering/RenderSession.hpp>
-#include <Lighthouse/Engine/Rendering/RenderTechnique.hpp>
 #include <Lighthouse/Engine/Rendering/RenderView.hpp>
 #include <Lighthouse/Engine/Rendering/Mesh.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
@@ -21,13 +22,10 @@ public:
     ~Renderer();
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
-
-    // Attach the device that owns buffers referenced by meshes created below.
-    // The device must stay alive while querying its buffer-backed meshes; clear
-    // this pointer before destroying or replacing the device.
-    void SetRenderDevice(IRenderDevice* device) noexcept { m_device = device; }
-    IRenderDevice* GetRenderDevice() noexcept { return m_device; }
-    const IRenderDevice* GetRenderDevice() const noexcept { return m_device; }
+    void SetRenderDevice(std::unique_ptr<IRenderDevice> device);
+    void ResetRenderDevice() noexcept;
+    IRenderDevice* GetRenderDevice() noexcept { return m_device.get(); }
+    const IRenderDevice* GetRenderDevice() const noexcept { return m_device.get(); }
 
     MeshHandle CreateMesh(const MeshDesc& description);
     MeshHandle CreateMesh(const MeshBuilder& builder) { return CreateMesh(builder.Build()); }
@@ -36,34 +34,37 @@ public:
     bool IsValid(MeshHandle mesh) const noexcept;
     MeshUploadStatus GetMeshUploadStatus(MeshHandle mesh) const noexcept;
 
-    RenderViewHandle CreateView(const RenderViewDesc& desc = {});
+    template <typename T, typename... Args> RenderViewHandle CreateView(Args&&... args) {
+        static_assert(std::is_base_of_v<IRenderView, T>);
+        auto value = std::make_unique<T>(std::forward<Args>(args)...);
+        if (auto* window = dynamic_cast<WindowView*>(value.get())) {
+            for (const auto& slot : m_views)
+                if (auto* existing = dynamic_cast<WindowView*>(slot.value.get()); existing && existing->window == window->window)
+                    throw std::logic_error("Window already has a render view");
+        }
+        std::uint32_t index = 0;
+        while (index < m_views.size() && m_views[index].value) ++index;
+        if (index == m_views.size()) m_views.emplace_back();
+        m_views[index].value = std::move(value);
+        return {index, m_views[index].generation};
+    }
     bool DestroyView(RenderViewHandle view);
-    RenderView* GetView(RenderViewHandle view) noexcept;
-    const RenderView* GetView(RenderViewHandle view) const noexcept;
+    IRenderView* GetView(RenderViewHandle view) noexcept;
+    const IRenderView* GetView(RenderViewHandle view) const noexcept;
+    template <typename T> T* GetView(RenderViewHandle view) noexcept { return dynamic_cast<T*>(GetView(view)); }
+    template <typename T> const T* GetView(RenderViewHandle view) const noexcept { return dynamic_cast<const T*>(GetView(view)); }
 
-    RenderSessionHandle CreateSession(const RenderSessionDesc& desc = {});
-    bool DestroySession(RenderSessionHandle session);
-    RenderSession* GetSession(RenderSessionHandle session) noexcept;
-    const RenderSession* GetSession(RenderSessionHandle session) const noexcept;
-    bool IsSessionValid(RenderSessionHandle session) const noexcept;
-
-    RenderTechniqueHandle RegisterTechnique(std::unique_ptr<IRenderTechnique> technique);
-    bool UnregisterTechnique(RenderTechniqueHandle technique);
-    IRenderTechnique* GetTechnique(RenderTechniqueHandle technique) noexcept;
-    const IRenderTechnique* GetTechnique(RenderTechniqueHandle technique) const noexcept;
+    GraphImageHandle BuildView(RenderGraph& graph, IRenderView& view);
+    GraphImageHandle BuildView(RenderGraph& graph, RenderViewHandle view);
+    std::vector<GraphImageHandle> BuildViews(RenderGraph& graph,
+        const std::vector<RenderViewHandle>& views,
+        const std::vector<std::pair<RenderViewHandle, RenderViewHandle>>& dependencies);
 
 private:
-    template <typename T> struct Slot { std::uint32_t generation{1}; std::unique_ptr<T> value; };
-    template <typename T, typename Tag> static Handle<Tag> Add(std::vector<Slot<T>>& slots, std::unique_ptr<T> value);
-    template <typename T, typename Tag> static bool Remove(std::vector<Slot<T>>& slots, Handle<Tag> handle);
-    template <typename T, typename Tag> static T* Find(std::vector<Slot<T>>& slots, Handle<Tag> handle) noexcept;
-    template <typename T, typename Tag> static const T* Find(const std::vector<Slot<T>>& slots, Handle<Tag> handle) noexcept;
-
+    struct Slot { std::uint32_t generation{1}; std::unique_ptr<IRenderView> value; };
     WindowManager* m_windows{};
-    std::vector<Slot<RenderView>> m_views;
-    std::vector<Slot<RenderSession>> m_sessions;
-    std::vector<Slot<IRenderTechnique>> m_techniques;
-    IRenderDevice* m_device{};
+    std::vector<Slot> m_views;
+    std::unique_ptr<IRenderDevice> m_device;
     std::unique_ptr<MeshManager> m_meshManager;
 };
 

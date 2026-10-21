@@ -5,126 +5,102 @@
 #include <gtest/gtest.h>
 
 namespace {
+using namespace Lighthouse;
 
-class TestTechnique final : public Lighthouse::IRenderTechnique {
-public:
-    void Build(Lighthouse::RenderGraph&, const Lighthouse::RenderView&, const Lighthouse::RenderScene&) override {}
+struct TestTechnique final : IRenderTechnique {
+    using Outputs = int;
+    explicit TestTechnique(std::vector<int>& order, int id) : order(order), id(id) {}
+    void Build(TechniqueBuildContext& ctx) override {
+        order.push_back(id);
+        ctx.SetOutputs(id);
+    }
+    std::vector<int>& order;
+    int id;
 };
-
-Lighthouse::RenderViewDesc MakeView(Lighthouse::SceneHandle scene, Lighthouse::RenderTechniqueHandle technique = {}) {
-    Lighthouse::RenderViewDesc desc;
+struct Consumer final : IRenderTechnique {
+    using Outputs = int;
+    Consumer(TechniqueRef<TestTechnique> source, int& result) : source(source), result(result) {}
+    void Build(TechniqueBuildContext& ctx) override {
+        result = ctx.GetOutputs(source);
+        ctx.SetOutputs(result + 1);
+    }
+    TechniqueRef<TestTechnique> source;
+    int& result;
+};
+RenderViewDesc MakeView(SceneHandle scene) {
+    RenderViewDesc desc;
     desc.scene = scene;
-    desc.camera = Lighthouse::ExplicitCamera{};
-    desc.technique = technique;
+    desc.camera = ExplicitCamera{};
     return desc;
 }
-
-TEST(RendererTests, MultipleViewsCanReferenceTheSameScene) {
-    Lighthouse::Renderer renderer;
-    Lighthouse::Scene world{"World"};
-    const auto scene = world.Handle();
-    auto first = renderer.CreateView(MakeView(scene));
-    auto secondDesc = MakeView(scene);
-    secondDesc.settings.clearColor = {0.2f, 0.3f, 0.4f};
-    auto second = renderer.CreateView(secondDesc);
-
-    ASSERT_NE(first, second);
+TEST(RendererTests, ViewsHaveGenerationalHandlesAndIndependentSettings) {
+    Renderer renderer;
+    Scene scene{"World"};
+    auto first = renderer.CreateView<RenderTextureView>(MakeView(scene.Handle()));
+    auto second = renderer.CreateView<RenderTextureView>(MakeView(scene.Handle()));
     ASSERT_NE(renderer.GetView(first), nullptr);
-    EXPECT_EQ(renderer.GetView(first)->GetScene(), renderer.GetView(second)->GetScene());
-    EXPECT_NE(renderer.GetView(first)->GetSettings().clearColor.x, renderer.GetView(second)->GetSettings().clearColor.x);
+    renderer.GetView(first)->SetVisibleLayers(3);
+    EXPECT_NE(renderer.GetView(first)->GetVisibleLayers(), renderer.GetView(second)->GetVisibleLayers());
+    EXPECT_TRUE(renderer.DestroyView(first));
+    EXPECT_EQ(renderer.GetView(first), nullptr);
+    EXPECT_FALSE(renderer.DestroyView(first));
+    EXPECT_NE(first, renderer.CreateView<RenderTextureView>());
 }
-
-TEST(RendererTests, EntityCameraSourceBecomesInvalidWhenSceneIsDestroyed) {
-    Lighthouse::CameraSource camera;
+TEST(RendererTests, SceneAndCameraLifetimeIsChecked) {
+    CameraSource camera;
+    SceneHandle handle;
     {
-        Lighthouse::Scene scene{"CameraOwner"};
-        auto entity = scene.CreateEntity("Camera");
-        camera = Lighthouse::CameraSource{entity};
+        Scene scene{"Temporary"};
+        handle = scene.Handle();
+        camera = CameraSource{scene.CreateEntity("Camera")};
+        EXPECT_TRUE(handle.IsValid());
         EXPECT_TRUE(camera.IsValid());
     }
+    EXPECT_FALSE(handle.IsValid());
     EXPECT_FALSE(camera.IsValid());
 }
-
-TEST(RendererTests, SceneHandleInvalidatesWhenSceneIsDestroyed) {
-    Lighthouse::SceneHandle handle;
-    {
-        Lighthouse::Scene scene{"Temporary"};
-        handle = scene.Handle();
-        EXPECT_TRUE(handle.IsValid());
-    }
-    EXPECT_FALSE(handle.IsValid());
+TEST(RendererTests, TechniqueReferencesInvalidateAndDependenciesSort) {
+    RenderTextureView view;
+    std::vector<int> order;
+    int result{};
+    auto consumer = view.AddTechnique<Consumer>(TechniqueRef<TestTechnique>{}, result);
+    auto source = view.AddTechnique<TestTechnique>(order, 7);
+    view.GetTechnique(consumer)->source = source;
+    view.SetDependencies(consumer, source);
+    auto sorted = view.TechniqueOrder();
+    ASSERT_EQ(sorted.size(), 2);
+    EXPECT_EQ(sorted[0], source.handle);
+    EXPECT_EQ(sorted[1], consumer.handle);
+    RenderGraph graph;
+    std::unordered_map<std::uint32_t, std::any> outputs;
+    TechniqueBuildContext first(graph, view, outputs, source.handle);
+    view.GetTechnique(source)->Build(first);
+    TechniqueBuildContext second(graph, view, outputs, consumer.handle);
+    view.GetTechnique(consumer)->Build(second);
+    EXPECT_EQ(result, 7);
+    EXPECT_TRUE(view.RemoveTechnique(source));
+    EXPECT_EQ(view.GetTechnique(source), nullptr);
+    EXPECT_THROW(view.TechniqueOrder(), std::logic_error);
+    auto replacement = view.AddTechnique<TestTechnique>(order, 8);
+    EXPECT_NE(source.handle, replacement.handle);
 }
-
-TEST(RendererTests, SessionsBecomeInvalidWhenTheirSceneIsDestroyed) {
-    Lighthouse::Renderer renderer;
-    Lighthouse::RenderSessionHandle session;
-    {
-        Lighthouse::Scene scene{"Temporary"};
-        const auto view = renderer.CreateView(MakeView(scene.Handle()));
-        session = renderer.CreateSession({.view = view, .output = Lighthouse::RenderOutput::Offscreen({0, 1})});
-        EXPECT_TRUE(renderer.IsSessionValid(session));
-    }
-    EXPECT_FALSE(renderer.IsSessionValid(session));
+TEST(RendererTests, CyclesAndForeignDependenciesAreRejected) {
+    RenderTextureView first, second;
+    std::vector<int> order;
+    auto a = first.AddTechnique<TestTechnique>(order, 1);
+    auto b = first.AddTechnique<TestTechnique>(order, 2);
+    first.SetDependencies(a, b);
+    first.SetDependencies(b, a);
+    EXPECT_THROW(first.TechniqueOrder(), std::logic_error);
+    auto foreign = second.AddTechnique<TestTechnique>(order, 3);
+    first.SetDependencies(b, foreign);
+    EXPECT_THROW(first.TechniqueOrder(), std::logic_error);
 }
-
-TEST(RendererTests, TechniquesCanBeRegisteredReassignedAndRemoved) {
-    Lighthouse::Renderer renderer;
-    Lighthouse::Scene scene{"Techniques"};
-    auto firstTechnique = renderer.RegisterTechnique(std::make_unique<TestTechnique>());
-    auto secondTechnique = renderer.RegisterTechnique(std::make_unique<TestTechnique>());
-    auto viewHandle = renderer.CreateView(MakeView(scene.Handle(), firstTechnique));
-    auto* view = renderer.GetView(viewHandle);
-    ASSERT_NE(view, nullptr);
-    ASSERT_NE(renderer.GetTechnique(firstTechnique), nullptr);
-
-    view->SetTechnique(secondTechnique);
-    EXPECT_EQ(view->GetTechnique(), secondTechnique);
-    EXPECT_TRUE(renderer.UnregisterTechnique(firstTechnique));
-    EXPECT_EQ(renderer.GetTechnique(firstTechnique), nullptr);
-    EXPECT_FALSE(renderer.UnregisterTechnique(firstTechnique));
-}
-
-TEST(RendererTests, MultipleSessionsCanShareAViewAndBecomeInvalidWhenItIsDestroyed) {
-    Lighthouse::Renderer renderer;
-    Lighthouse::Scene scene{"SessionScene"};
-    const auto view = renderer.CreateView(MakeView(scene.Handle()));
-    Lighthouse::RenderSessionDesc desc{.view = view, .output = Lighthouse::RenderOutput::Offscreen({0, 1})};
-    const auto first = renderer.CreateSession(desc);
-    const auto second = renderer.CreateSession(desc);
-
-    EXPECT_TRUE(renderer.IsSessionValid(first));
-    EXPECT_TRUE(renderer.IsSessionValid(second));
-    EXPECT_TRUE(renderer.DestroyView(view));
-    EXPECT_FALSE(renderer.IsSessionValid(first));
-    EXPECT_FALSE(renderer.IsSessionValid(second));
-}
-
-TEST(RendererTests, DestroyedWindowsAndTechniquesInvalidateSessionsSafely) {
-    Lighthouse::WindowManager windows;
-    Lighthouse::Renderer renderer{&windows};
-    Lighthouse::Scene scene{"OutputScene"};
-    const auto technique = renderer.RegisterTechnique(std::make_unique<TestTechnique>());
-    const auto view = renderer.CreateView(MakeView(scene.Handle(), technique));
-    const auto staleWindow = Lighthouse::WindowHandle{0, 1};
-    const auto session = renderer.CreateSession({.view = view, .output = Lighthouse::RenderOutput::ForWindow(staleWindow)});
-    EXPECT_FALSE(renderer.IsSessionValid(session));
-    renderer.GetView(view)->SetTechnique({});
-    const auto offscreen = renderer.CreateSession({.view = view, .output = Lighthouse::RenderOutput::Offscreen({0, 1})});
-    EXPECT_TRUE(renderer.IsSessionValid(offscreen));
-    renderer.GetView(view)->SetTechnique(technique);
-    renderer.UnregisterTechnique(technique);
-    EXPECT_FALSE(renderer.IsSessionValid(offscreen));
-}
-
-TEST(EngineRuntimeTests, InitializesAndShutsDownWithoutWindowsOrGraphicsBackend) {
-    Lighthouse::BackendRegistry registry;
-    Lighthouse::EngineRuntime runtime;
-    Lighthouse::Config config;
-
+TEST(RendererTests, EngineRuntimeStartsWithoutGraphicsBackend) {
+    BackendRegistry registry;
+    EngineRuntime runtime;
+    Config config;
     EXPECT_TRUE(runtime.Initialize(config, registry));
-    EXPECT_FALSE(runtime.HasGraphicsBackend());
-    EXPECT_NO_THROW(runtime.GetWindowManager().PollEvents());
     EXPECT_NO_THROW(runtime.Shutdown());
 }
-
 } // namespace

@@ -21,16 +21,12 @@ struct Handle {
 
 struct WindowHandleTag;
 struct RenderViewHandleTag;
-struct RenderSessionHandleTag;
 struct RenderTechniqueHandleTag;
-struct OffscreenTargetHandleTag;
 struct SwapchainHandleTag;
 
 using WindowHandle = Handle<WindowHandleTag>;
 using RenderViewHandle = Handle<RenderViewHandleTag>;
-using RenderSessionHandle = Handle<RenderSessionHandleTag>;
 using RenderTechniqueHandle = Handle<RenderTechniqueHandleTag>;
-using OffscreenTargetHandle = Handle<OffscreenTargetHandleTag>;
 using SwapchainHandle = Handle<SwapchainHandleTag>;
 
 class Scene;

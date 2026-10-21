@@ -14,6 +14,7 @@
 namespace Lighthouse {
 
 using RenderGraphResource = FrameGraphResource;
+using GraphImageHandle = RenderGraphResource;
 using GraphTextureDesc = ImageDesc;
 using GraphBufferDesc = BufferDesc;
 
