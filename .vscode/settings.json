@@ -1,0 +1,6 @@
+{
+    "cmake.configureArgs": [
+        "-DLIGHTHOUSE_BUILD_EXAMPLES=ON"
+    ],
+    "C_Cpp.intelliSenseEngine": "disabled"
+}
