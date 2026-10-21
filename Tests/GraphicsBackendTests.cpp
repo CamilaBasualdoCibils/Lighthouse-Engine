@@ -1,58 +1,68 @@
-#include <Lighthouse/Engine/GraphicsBackend.hpp>
+#include <Lighthouse/Engine/Graphics/GraphicsBackend.hpp>
+#include <Lighthouse/Engine/Core/Config.hpp>
 
 #include <gtest/gtest.h>
 
 #include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace {
 
-class TestBackend final : public Engine::IGraphicsBackend {
+class TestBackend final : public Lighthouse::IGraphicsBackend {
 public:
-    explicit TestBackend(Engine::GraphicsCapabilities capabilities, bool succeeds = true)
-        : capabilities(capabilities), succeeds(succeeds) {}
+    TestBackend(std::string name, Lighthouse::GraphicsCapabilities capabilities, bool succeeds = true)
+        : name(std::move(name)), capabilities(capabilities), succeeds(succeeds) {}
+    std::string_view Name() const noexcept override { return name; }
     bool Initialize(std::string& diagnostic) override {
         ++initializeCount;
         if (!succeeds) diagnostic = "mock initialization failure";
         return succeeds;
     }
-    Engine::GraphicsCapabilities Capabilities() const override { return capabilities; }
+    Lighthouse::GraphicsCapabilities Capabilities() const override { return capabilities; }
     void Shutdown() noexcept override { ++shutdownCount; }
 
-    Engine::GraphicsCapabilities capabilities;
+    std::string name;
+    Lighthouse::GraphicsCapabilities capabilities;
     bool succeeds;
     int initializeCount{};
     int shutdownCount{};
 };
 
-TEST(GraphicsBackendTests, FallsBackInPriorityOrderAndReportsDiagnostics) {
-    Engine::BackendRegistry registry;
-    auto first = std::make_shared<TestBackend>(Engine::GraphicsCapabilities{}, false);
-    auto second = std::make_shared<TestBackend>(Engine::GraphicsCapabilities{.computeShaders = true});
-    ASSERT_TRUE(registry.Register(Engine::GraphicsBackend::Vulkan, [=] { return std::make_unique<TestBackend>(*first); }));
-    ASSERT_TRUE(registry.Register(Engine::GraphicsBackend::OpenGL, [=] { return std::make_unique<TestBackend>(*second); }));
+class ConfiguredTestBackend final : public Lighthouse::IGraphicsBackend {
+public:
+    static constexpr std::string_view BackendName = "ConfiguredTestBackend";
+    std::string_view Name() const noexcept override { return BackendName; }
+    bool Initialize(std::string&) override { return true; }
+    Lighthouse::GraphicsCapabilities Capabilities() const override { return {}; }
+    void Shutdown() noexcept override {}
+};
 
-    Engine::GraphicsConfig config;
-    config.backends = {Engine::GraphicsBackend::Vulkan, Engine::GraphicsBackend::OpenGL};
-    config.requirements.Require(Engine::GraphicsFeature::ComputeShaders);
+TEST(GraphicsBackendTests, FallsBackInPriorityOrderAndReportsDiagnostics) {
+    Lighthouse::BackendRegistry registry;
+    registry.Register("Broken", [] { return std::make_unique<TestBackend>("Broken", Lighthouse::GraphicsCapabilities{}, false); });
+    registry.Register("Compute", [] { return std::make_unique<TestBackend>("Compute", Lighthouse::GraphicsCapabilities{.computeShaders = true}); });
+
+    Lighthouse::GraphicsConfig config;
+    config.backends = {"Broken", "Compute"};
+    config.requirements.Require(Lighthouse::GraphicsFeature::ComputeShaders);
     auto result = registry.Select(config);
 
     ASSERT_TRUE(result);
-    EXPECT_EQ(result.selectedBackend, Engine::GraphicsBackend::OpenGL);
+    EXPECT_EQ(result.selectedBackend, "Compute");
     ASSERT_EQ(result.attempts.size(), 2u);
     EXPECT_FALSE(result.attempts[0].initialized);
     EXPECT_TRUE(result.attempts[1].selected);
-    EXPECT_FALSE(registry.IsRegistered(Engine::GraphicsBackend::D3D12));
+    EXPECT_FALSE(registry.IsRegistered("Missing"));
 }
 
 TEST(GraphicsBackendTests, RequireFirstDoesNotFallBack) {
-    Engine::BackendRegistry registry;
-    registry.Register(Engine::GraphicsBackend::OpenGL, [] {
-        return std::make_unique<TestBackend>(Engine::GraphicsCapabilities{});
-    });
-    Engine::GraphicsConfig config;
-    config.backends = {Engine::GraphicsBackend::Vulkan, Engine::GraphicsBackend::OpenGL};
-    config.selection = Engine::BackendSelection::RequireFirst;
+    Lighthouse::BackendRegistry registry;
+    registry.Register("Second", [] { return std::make_unique<TestBackend>("Second", Lighthouse::GraphicsCapabilities{}); });
+    Lighthouse::GraphicsConfig config;
+    config.backends = {"Missing", "Second"};
+    config.selection = Lighthouse::BackendSelection::RequireFirst;
 
     auto result = registry.Select(config);
 
@@ -62,49 +72,54 @@ TEST(GraphicsBackendTests, RequireFirstDoesNotFallBack) {
 }
 
 TEST(GraphicsBackendTests, BestAvailableScoresPreferredCapabilities) {
-    Engine::BackendRegistry registry;
-    registry.Register(Engine::GraphicsBackend::Vulkan, [] {
-        return std::make_unique<TestBackend>(Engine::GraphicsCapabilities{.computeShaders = true});
-    });
-    registry.Register(Engine::GraphicsBackend::OpenGL, [] {
-        return std::make_unique<TestBackend>(Engine::GraphicsCapabilities{.computeShaders = true, .rayTracing = true});
-    });
-    Engine::GraphicsConfig config;
-    config.backends = {Engine::GraphicsBackend::Vulkan, Engine::GraphicsBackend::OpenGL};
-    config.selection = Engine::BackendSelection::BestAvailable;
-    config.requirements.Require(Engine::GraphicsFeature::ComputeShaders).Prefer(Engine::GraphicsFeature::RayTracing);
+    Lighthouse::BackendRegistry registry;
+    registry.Register("Basic", [] { return std::make_unique<TestBackend>("Basic", Lighthouse::GraphicsCapabilities{.computeShaders = true}); });
+    registry.Register("RayTracing", [] { return std::make_unique<TestBackend>("RayTracing", Lighthouse::GraphicsCapabilities{.computeShaders = true, .rayTracing = true}); });
+    Lighthouse::GraphicsConfig config;
+    config.backends = {"Basic", "RayTracing"};
+    config.selection = Lighthouse::BackendSelection::BestAvailable;
+    config.requirements.Require(Lighthouse::GraphicsFeature::ComputeShaders).Prefer(Lighthouse::GraphicsFeature::RayTracing);
 
     auto result = registry.Select(config);
 
     ASSERT_TRUE(result);
-    EXPECT_EQ(result.selectedBackend, Engine::GraphicsBackend::OpenGL);
+    EXPECT_EQ(result.selectedBackend, "RayTracing");
     EXPECT_EQ(result.attempts.size(), 2u);
 }
 
 TEST(GraphicsBackendTests, RejectsBackendsMissingRequiredCapabilities) {
-    Engine::BackendRegistry registry;
-    registry.Register(Engine::GraphicsBackend::Vulkan, [] {
-        return std::make_unique<TestBackend>(Engine::GraphicsCapabilities{});
-    });
-    registry.Register(Engine::GraphicsBackend::D3D12, [] {
-        return std::make_unique<TestBackend>(Engine::GraphicsCapabilities{.rayTracing = true});
-    });
-    Engine::GraphicsConfig config;
-    config.backends = {Engine::GraphicsBackend::Vulkan, Engine::GraphicsBackend::D3D12};
-    config.requirements.Require(Engine::GraphicsFeature::RayTracing);
+    Lighthouse::BackendRegistry registry;
+    registry.Register("NoRayTracing", [] { return std::make_unique<TestBackend>("NoRayTracing", Lighthouse::GraphicsCapabilities{}); });
+    registry.Register("RayTracing", [] { return std::make_unique<TestBackend>("RayTracing", Lighthouse::GraphicsCapabilities{.rayTracing = true}); });
+    Lighthouse::GraphicsConfig config;
+    config.backends = {"NoRayTracing", "RayTracing"};
+    config.requirements.Require(Lighthouse::GraphicsFeature::RayTracing);
 
     auto result = registry.Select(config);
 
     ASSERT_TRUE(result);
-    EXPECT_EQ(result.selectedBackend, Engine::GraphicsBackend::D3D12);
+    EXPECT_EQ(result.selectedBackend, "RayTracing");
     EXPECT_NE(result.attempts.front().diagnostic.find("required capabilities"), std::string::npos);
 }
 
 TEST(GraphicsBackendTests, UnregisterRemovesFactory) {
-    Engine::BackendRegistry registry;
-    registry.Register(Engine::GraphicsBackend::Vulkan, [] { return std::make_unique<TestBackend>(Engine::GraphicsCapabilities{}); });
-    EXPECT_TRUE(registry.Unregister(Engine::GraphicsBackend::Vulkan));
-    EXPECT_FALSE(registry.IsRegistered(Engine::GraphicsBackend::Vulkan));
+    Lighthouse::BackendRegistry registry;
+    registry.Register("Named", [] { return std::make_unique<TestBackend>("Named", Lighthouse::GraphicsCapabilities{}); });
+    EXPECT_TRUE(registry.Unregister("Named"));
+    EXPECT_FALSE(registry.IsRegistered("Named"));
+}
+
+TEST(GraphicsBackendTests, ConfigCanRegisterBackendTypesDirectly) {
+    Lighthouse::Config config;
+    config.AddBackend<ConfiguredTestBackend>();
+    Lighthouse::BackendRegistry registry;
+
+    auto result = registry.Select(config.graphics);
+
+    ASSERT_TRUE(result);
+    EXPECT_EQ(result.selectedBackend, "ConfiguredTestBackend");
+    ASSERT_EQ(result.attempts.size(), 1u);
+    EXPECT_TRUE(result.attempts.front().registered);
 }
 
 } // namespace

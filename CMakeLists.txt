@@ -9,13 +9,23 @@ include(CTest)
 
 add_subdirectory(extern/OpenPeripherals)
 add_subdirectory(extern/VISR)
-add_subdirectory(src)
+add_subdirectory(src/Engine)
 
 if(BUILD_TESTING)
     add_subdirectory(Tests)
 endif()
 
 option(LIGHTHOUSE_BUILD_EXAMPLES "Build Lighthouse examples" OFF)
+option(LIGHTHOUSE_BUILD_OPENGL_BACKEND "Build the optional OpenGL backend" OFF)
+option(LIGHTHOUSE_BUILD_VULKAN_BACKEND "Build the optional Vulkan backend" OFF)
+
+if(LIGHTHOUSE_BUILD_OPENGL_BACKEND OR LIGHTHOUSE_BUILD_EXAMPLES)
+    add_subdirectory(src/Backend/OpenGL)
+endif()
+if(LIGHTHOUSE_BUILD_VULKAN_BACKEND OR LIGHTHOUSE_BUILD_EXAMPLES)
+    add_subdirectory(src/Backend/Vulkan)
+endif()
+
 if(LIGHTHOUSE_BUILD_EXAMPLES)
     add_subdirectory(Examples)
 endif()

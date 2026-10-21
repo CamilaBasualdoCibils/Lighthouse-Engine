@@ -1,13 +1,13 @@
-#include <Lighthouse/Engine/WindowManager.hpp>
+#include <Lighthouse/Engine/Window/WindowManager.hpp>
 
 #include <gtest/gtest.h>
 
 #include <stdexcept>
 
 TEST(WindowManagerTests, HandlesAreGenerationalAcrossDestroyAndReuse) {
-    Engine::WindowManager windows;
-    Engine::WindowHandle first;
-    Engine::WindowHandle second;
+    Lighthouse::WindowManager windows;
+    Lighthouse::WindowHandle first;
+    Lighthouse::WindowHandle second;
     try {
         first = windows.CreateWindow({.title = "First", .width = 320, .height = 240, .visible = false});
         second = windows.CreateWindow({.title = "Second", .width = 320, .height = 240, .visible = false});
@@ -28,7 +28,7 @@ TEST(WindowManagerTests, HandlesAreGenerationalAcrossDestroyAndReuse) {
 }
 
 TEST(WindowManagerTests, SupportsZeroWindowsAndInvalidHandles) {
-    Engine::WindowManager windows;
+    Lighthouse::WindowManager windows;
     EXPECT_EQ(windows.GetWindow({}), nullptr);
     EXPECT_NO_THROW(windows.PollEvents());
 }

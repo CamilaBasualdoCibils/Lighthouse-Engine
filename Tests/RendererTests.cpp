@@ -1,27 +1,27 @@
-#include <Lighthouse/Engine/Renderer.hpp>
-#include <Lighthouse/Engine/EngineRuntime.hpp>
-#include <Lighthouse/Engine/Scene.hpp>
+#include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Core/EngineRuntime.hpp>
+#include <Lighthouse/Engine/Scene/Scene.hpp>
 
 #include <gtest/gtest.h>
 
 namespace {
 
-class TestTechnique final : public Engine::IRenderTechnique {
+class TestTechnique final : public Lighthouse::IRenderTechnique {
 public:
-    void Build(Engine::RenderGraph&, const Engine::RenderView&, const Engine::RenderScene&) override {}
+    void Build(Lighthouse::RenderGraph&, const Lighthouse::RenderView&, const Lighthouse::RenderScene&) override {}
 };
 
-Engine::RenderViewDesc MakeView(Engine::SceneHandle scene, Engine::RenderTechniqueHandle technique = {}) {
-    Engine::RenderViewDesc desc;
+Lighthouse::RenderViewDesc MakeView(Lighthouse::SceneHandle scene, Lighthouse::RenderTechniqueHandle technique = {}) {
+    Lighthouse::RenderViewDesc desc;
     desc.scene = scene;
-    desc.camera = Engine::ExplicitCamera{};
+    desc.camera = Lighthouse::ExplicitCamera{};
     desc.technique = technique;
     return desc;
 }
 
 TEST(RendererTests, MultipleViewsCanReferenceTheSameScene) {
-    Engine::Renderer renderer;
-    Engine::Scene world{"World"};
+    Lighthouse::Renderer renderer;
+    Lighthouse::Scene world{"World"};
     const auto scene = world.Handle();
     auto first = renderer.CreateView(MakeView(scene));
     auto secondDesc = MakeView(scene);
@@ -35,20 +35,20 @@ TEST(RendererTests, MultipleViewsCanReferenceTheSameScene) {
 }
 
 TEST(RendererTests, EntityCameraSourceBecomesInvalidWhenSceneIsDestroyed) {
-    Engine::CameraSource camera;
+    Lighthouse::CameraSource camera;
     {
-        Engine::Scene scene{"CameraOwner"};
+        Lighthouse::Scene scene{"CameraOwner"};
         auto entity = scene.CreateEntity("Camera");
-        camera = Engine::CameraSource{entity};
+        camera = Lighthouse::CameraSource{entity};
         EXPECT_TRUE(camera.IsValid());
     }
     EXPECT_FALSE(camera.IsValid());
 }
 
 TEST(RendererTests, SceneHandleInvalidatesWhenSceneIsDestroyed) {
-    Engine::SceneHandle handle;
+    Lighthouse::SceneHandle handle;
     {
-        Engine::Scene scene{"Temporary"};
+        Lighthouse::Scene scene{"Temporary"};
         handle = scene.Handle();
         EXPECT_TRUE(handle.IsValid());
     }
@@ -56,20 +56,20 @@ TEST(RendererTests, SceneHandleInvalidatesWhenSceneIsDestroyed) {
 }
 
 TEST(RendererTests, SessionsBecomeInvalidWhenTheirSceneIsDestroyed) {
-    Engine::Renderer renderer;
-    Engine::RenderSessionHandle session;
+    Lighthouse::Renderer renderer;
+    Lighthouse::RenderSessionHandle session;
     {
-        Engine::Scene scene{"Temporary"};
+        Lighthouse::Scene scene{"Temporary"};
         const auto view = renderer.CreateView(MakeView(scene.Handle()));
-        session = renderer.CreateSession({.view = view, .output = Engine::RenderOutput::Offscreen({0, 1})});
+        session = renderer.CreateSession({.view = view, .output = Lighthouse::RenderOutput::Offscreen({0, 1})});
         EXPECT_TRUE(renderer.IsSessionValid(session));
     }
     EXPECT_FALSE(renderer.IsSessionValid(session));
 }
 
 TEST(RendererTests, TechniquesCanBeRegisteredReassignedAndRemoved) {
-    Engine::Renderer renderer;
-    Engine::Scene scene{"Techniques"};
+    Lighthouse::Renderer renderer;
+    Lighthouse::Scene scene{"Techniques"};
     auto firstTechnique = renderer.RegisterTechnique(std::make_unique<TestTechnique>());
     auto secondTechnique = renderer.RegisterTechnique(std::make_unique<TestTechnique>());
     auto viewHandle = renderer.CreateView(MakeView(scene.Handle(), firstTechnique));
@@ -85,10 +85,10 @@ TEST(RendererTests, TechniquesCanBeRegisteredReassignedAndRemoved) {
 }
 
 TEST(RendererTests, MultipleSessionsCanShareAViewAndBecomeInvalidWhenItIsDestroyed) {
-    Engine::Renderer renderer;
-    Engine::Scene scene{"SessionScene"};
+    Lighthouse::Renderer renderer;
+    Lighthouse::Scene scene{"SessionScene"};
     const auto view = renderer.CreateView(MakeView(scene.Handle()));
-    Engine::RenderSessionDesc desc{.view = view, .output = Engine::RenderOutput::Offscreen({0, 1})};
+    Lighthouse::RenderSessionDesc desc{.view = view, .output = Lighthouse::RenderOutput::Offscreen({0, 1})};
     const auto first = renderer.CreateSession(desc);
     const auto second = renderer.CreateSession(desc);
 
@@ -100,16 +100,16 @@ TEST(RendererTests, MultipleSessionsCanShareAViewAndBecomeInvalidWhenItIsDestroy
 }
 
 TEST(RendererTests, DestroyedWindowsAndTechniquesInvalidateSessionsSafely) {
-    Engine::WindowManager windows;
-    Engine::Renderer renderer{&windows};
-    Engine::Scene scene{"OutputScene"};
+    Lighthouse::WindowManager windows;
+    Lighthouse::Renderer renderer{&windows};
+    Lighthouse::Scene scene{"OutputScene"};
     const auto technique = renderer.RegisterTechnique(std::make_unique<TestTechnique>());
     const auto view = renderer.CreateView(MakeView(scene.Handle(), technique));
-    const auto staleWindow = Engine::WindowHandle{0, 1};
-    const auto session = renderer.CreateSession({.view = view, .output = Engine::RenderOutput::ForWindow(staleWindow)});
+    const auto staleWindow = Lighthouse::WindowHandle{0, 1};
+    const auto session = renderer.CreateSession({.view = view, .output = Lighthouse::RenderOutput::ForWindow(staleWindow)});
     EXPECT_FALSE(renderer.IsSessionValid(session));
     renderer.GetView(view)->SetTechnique({});
-    const auto offscreen = renderer.CreateSession({.view = view, .output = Engine::RenderOutput::Offscreen({0, 1})});
+    const auto offscreen = renderer.CreateSession({.view = view, .output = Lighthouse::RenderOutput::Offscreen({0, 1})});
     EXPECT_TRUE(renderer.IsSessionValid(offscreen));
     renderer.GetView(view)->SetTechnique(technique);
     renderer.UnregisterTechnique(technique);
@@ -117,9 +117,9 @@ TEST(RendererTests, DestroyedWindowsAndTechniquesInvalidateSessionsSafely) {
 }
 
 TEST(EngineRuntimeTests, InitializesAndShutsDownWithoutWindowsOrGraphicsBackend) {
-    Engine::BackendRegistry registry;
-    Engine::EngineRuntime runtime;
-    Engine::Config config;
+    Lighthouse::BackendRegistry registry;
+    Lighthouse::EngineRuntime runtime;
+    Lighthouse::Config config;
 
     EXPECT_TRUE(runtime.Initialize(config, registry));
     EXPECT_FALSE(runtime.HasGraphicsBackend());

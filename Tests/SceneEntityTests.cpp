@@ -28,7 +28,7 @@ struct MockComponentHolder {
 };
 
 TEST(EntityTests, AddsComponentsAndReturnsStoredReference) {
-    Engine::Scene scene{"Main"};
+    Lighthouse::Scene scene{"Main"};
     auto entity = scene.CreateEntity("Player");
 
     auto& component = entity.Add<ValueComponent>(42);
@@ -39,7 +39,7 @@ TEST(EntityTests, AddsComponentsAndReturnsStoredReference) {
 }
 
 TEST(EntityTests, SupportsGoogleMockComponents) {
-    Engine::Scene scene{"Main"};
+    Lighthouse::Scene scene{"Main"};
     auto entity = scene.CreateEntity("Mocked");
     auto mock = std::make_shared<MockComponent>();
     auto& holder = entity.Add<MockComponentHolder>(mock);
@@ -49,7 +49,7 @@ TEST(EntityTests, SupportsGoogleMockComponents) {
 }
 
 TEST(SceneTests, CreatesEntitiesWithNames) {
-    Engine::Scene scene{"Main"};
+    Lighthouse::Scene scene{"Main"};
     auto first = scene.CreateEntity("First");
     auto second = scene.CreateEntity("Second");
 
@@ -61,7 +61,7 @@ TEST(SceneTests, CreatesEntitiesWithNames) {
 }
 
 TEST(SceneTests, SetsAndReturnsActiveCamera) {
-    Engine::Scene scene{"Main"};
+    Lighthouse::Scene scene{"Main"};
     auto camera = scene.CreateEntity("Camera");
 
     scene.SetActiveCamera(camera);
@@ -72,8 +72,8 @@ TEST(SceneTests, SetsAndReturnsActiveCamera) {
 }
 
 TEST(SceneTests, RejectsCameraFromAnotherScene) {
-    Engine::Scene firstScene{"First"};
-    Engine::Scene secondScene{"Second"};
+    Lighthouse::Scene firstScene{"First"};
+    Lighthouse::Scene secondScene{"Second"};
     auto camera = firstScene.CreateEntity("Camera");
 
     EXPECT_THROW(secondScene.SetActiveCamera(camera), std::invalid_argument);

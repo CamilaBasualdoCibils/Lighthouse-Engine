@@ -1,0 +1,8 @@
+add_library(VulkanBackend STATIC VulkanBackend.cpp)
+add_library(Lighthouse::VulkanBackend ALIAS VulkanBackend)
+target_sources(VulkanBackend PRIVATE VulkanRenderDevice.cpp)
+find_package(Vulkan REQUIRED)
+find_package(glfw3 CONFIG REQUIRED)
+target_link_libraries(VulkanBackend PUBLIC Lighthouse::Engine Vulkan::Vulkan glfw)
+target_include_directories(VulkanBackend PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>)
+target_compile_features(VulkanBackend PUBLIC cxx_std_23)

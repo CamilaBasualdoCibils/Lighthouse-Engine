@@ -1,4 +1,7 @@
 add_executable(LighthouseWindowSceneExample
     WindowScene/main.cpp
 )
-target_link_libraries(LighthouseWindowSceneExample PRIVATE Lighthouse::Engine)
+target_link_libraries(LighthouseWindowSceneExample PRIVATE
+    Lighthouse::Engine
+    Lighthouse::OpenGLBackend
+)

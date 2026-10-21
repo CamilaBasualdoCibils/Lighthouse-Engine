@@ -1,55 +1,54 @@
 #include <Lighthouse/Engine/Engine.hpp>
+#include <Lighthouse/OpenGL/OpenGLBackend.hpp>
 
 #include <memory>
 
-class WindowSceneExample {
+class WindowSceneExample : public Lighthouse::Application {
 public:
-    int Run() {
-        Engine::Config config{
-            .name = "Lighthouse Window and Scene Example",
-            .graphics = {
-                .backends = {
-                    Engine::GraphicsBackend::Vulkan,
-                    Engine::GraphicsBackend::D3D12,
-                    Engine::GraphicsBackend::OpenGL
-                },
-                .selection = Engine::BackendSelection::FirstAvailable
-            }
-        };
+    void OnStart() override {
+        auto& scene = CreateScene("Main");
+        auto camera = scene.CreateEntity("Camera");
+        camera.Add<Lighthouse::Transform>();
+        camera.Add<Lighthouse::Camera>(Lighthouse::Camera{70.0f});
+        scene.SetActiveCamera(camera);
 
-        // Register graphics backend implementations here as they are added.
-        if (!m_runtime.Initialize(config, m_backends)) return 1;
+        const auto handle = GetWindowManager().CreateWindow({
+            .title = "Lighthouse Window and Scene",
+            .width = 960,
+            .height = 540,
+            .eglSurface = true});
+        auto* window = GetWindowManager().GetWindow(handle);
+        window->Show();
 
-        m_window = m_runtime.GetWindowManager().CreateWindow({
-            .title = "Lighthouse Example",
-            .width = 1280,
-            .height = 720
-        });
-
-        m_scene = std::make_unique<Engine::Scene>("Main");
-        auto camera = m_scene->CreateEntity("Camera");
-        camera.Add<Engine::Transform>();
-        camera.Add<Engine::Camera>(Engine::Camera{70.0f});
-        m_scene->SetActiveCamera(camera);
-
-        auto& windows = m_runtime.GetWindowManager();
-        while (const auto* window = windows.GetWindow(m_window)) {
-            if (window->ShouldClose()) break;
-            windows.PollEvents();
+        if (auto* backend = GetGraphicsBackend()) {
+            m_device = backend->CreateDevice(Lighthouse::DeviceConfig{});
+            m_device->CreateSwapchain(*window, Lighthouse::SwapchainConfig{});
+            m_window = window;
         }
+    }
 
-        m_runtime.Shutdown();
-        return 0;
+    void OnUpdate(float) override {
+        if (!m_device || !m_window) return;
+
+        auto commands = m_device->CreateCommandList(Lighthouse::QueueType::Graphics);
+        Lighthouse::RenderPassDesc pass;
+        pass.clearColor = true;
+        pass.clearColorValue = {0.08f, 0.10f, 0.14f};
+        pass.width = m_window->FramebufferWidth();
+        pass.height = m_window->FramebufferHeight();
+        commands->BeginRendering(pass);
+        commands->EndRendering();
+        m_device->Submit(*commands);
     }
 
 private:
-    Engine::BackendRegistry m_backends;
-    Engine::EngineRuntime m_runtime;
-    Engine::WindowHandle m_window;
-    std::unique_ptr<Engine::Scene> m_scene;
+    std::unique_ptr<Lighthouse::IRenderDevice> m_device;
+    Lighthouse::Window* m_window{};
 };
 
 int main() {
-    WindowSceneExample application;
-    return application.Run();
+    Lighthouse::Config config{.name = "Lighthouse Window and Scene Example",
+        .graphics = {.selection = Lighthouse::BackendSelection::FirstAvailable}};
+    config.AddBackend<Lighthouse::OpenGLBackend>();
+    return Lighthouse::Run<WindowSceneExample>(config);
 }

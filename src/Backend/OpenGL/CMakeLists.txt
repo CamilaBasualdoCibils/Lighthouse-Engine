@@ -1,0 +1,7 @@
+add_library(OpenGLBackend STATIC OpenGLBackend.cpp)
+add_library(Lighthouse::OpenGLBackend ALIAS OpenGLBackend)
+target_sources(OpenGLBackend PRIVATE OpenGLRenderDevice.cpp)
+find_package(OpenGL REQUIRED COMPONENTS OpenGL EGL)
+target_link_libraries(OpenGLBackend PUBLIC Lighthouse::Engine OpenGL::OpenGL OpenGL::EGL)
+target_include_directories(OpenGLBackend PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include> $<INSTALL_INTERFACE:include>)
+target_compile_features(OpenGLBackend PUBLIC cxx_std_23)
