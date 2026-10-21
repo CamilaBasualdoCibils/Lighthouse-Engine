@@ -81,7 +81,7 @@ GraphImageHandle IRenderView::BuildGraph(ViewBuildContext& ctx) {
     return BuildTechniques(ctx);
 }
 
-GraphImageHandle IRenderView::BuildTechniques(ViewBuildContext& ctx) {
+GraphImageHandle IRenderView::BuildTechniques(ViewBuildContext& ctx, GraphImageHandle target) {
     const auto order = TechniqueOrder();
     if (FinalOutput() && !GetTechnique(FinalOutput()))
         throw std::logic_error("Final output technique is invalid");
@@ -92,7 +92,7 @@ GraphImageHandle IRenderView::BuildTechniques(ViewBuildContext& ctx) {
     std::optional<GraphImageHandle> finalImage;
     for (auto handle : order) {
         TechniqueBuildContext techniqueContext(ctx.graph, *this, outputs, handle,
-            &TechniqueDependencies(handle), &ViewDependencies(), &ctx.viewOutputs, ctx.windows);
+            &TechniqueDependencies(handle), &ViewDependencies(), target);
         GetTechnique(handle)->BuildGraph(techniqueContext);
         if (handle == FinalOutput()) finalImage = techniqueContext.FinalImage();
     }
@@ -102,30 +102,55 @@ GraphImageHandle IRenderView::BuildTechniques(ViewBuildContext& ctx) {
 }
 
 GraphImageHandle WindowView::BuildGraph(ViewBuildContext& ctx) {
-    if (!ctx.windows || !ctx.windows->GetWindow(window))
+    if (!m_windows || !m_windows->GetWindow(window))
         throw std::logic_error("Window view targets an invalid window");
     if (!ctx.device) throw std::logic_error("Window view requires a render device");
     if (!swapchain || !ctx.device->IsValid(swapchain))
-        swapchain = ctx.device->CreateSwapchain(*ctx.windows->GetWindow(window), presentation);
-
-    const auto image = BuildTechniques(ctx);
+        swapchain = ctx.device->CreateSwapchain(*m_windows->GetWindow(window), presentation);
     if (Techniques().empty()) return InvalidGraphImage;
-    if (image != InvalidGraphImage)
-        throw std::logic_error("Connecting a graph image to a window is unsupported");
-    ctx.graph.AddPass("present window",
-        [](RenderGraph::Builder& builder, auto&) { builder.SetSideEffect(); },
-        [target = swapchain](const auto&, FrameGraphPassResources&, IRenderDevice& device) {
-            device.Present(target);
+
+    const auto* targetWindow = m_windows->GetWindow(window);
+    ImageDesc desc;
+    desc.width = targetWindow->FramebufferWidth();
+    desc.height = targetWindow->FramebufferHeight();
+    desc.format = ImageFormat::RGBA8;
+    desc.usage = ImageUsage::ColorAttachment;
+    const auto target = ctx.graph.Import<ImportedRenderGraphImage>("window image", desc, {});
+    struct AcquireData { GraphImageHandle image; };
+    const auto& acquired = ctx.graph.AddPass<AcquireData>("acquire window image",
+        [target](RenderGraph::Builder& builder, AcquireData& data) {
+            data.image = builder.Write(target);
+        },
+        [swapchain = swapchain](const AcquireData& data, FrameGraphPassResources& resources,
+                                IRenderDevice& device) {
+            resources.get<ImportedRenderGraphImage>(data.image).view = device.AcquireSwapchainImage(swapchain);
         });
-    return InvalidGraphImage;
+    const auto image = BuildTechniques(ctx, acquired.image);
+    if (image == InvalidGraphImage)
+        throw std::logic_error("Window view technique did not produce an output image");
+    ctx.graph.AddPass("present window",
+        [image](RenderGraph::Builder& builder, auto&) {
+            (void)builder.Read(image);
+            builder.SetSideEffect();
+        },
+        [swapchain = swapchain](const auto&, FrameGraphPassResources&, IRenderDevice& device) {
+            device.Present(swapchain);
+        });
+    return image;
 }
 
 GraphImageHandle ExportView::BuildGraph(ViewBuildContext& ctx) {
     if (!image || !imageView)
         throw std::logic_error("Export view targets an invalid external image");
-    const auto finalImage = BuildTechniques(ctx);
-    if (!Techniques().empty())
-        throw std::logic_error("Copying a graph image to an external image is unsupported");
+    const auto target = ctx.graph.Import<ImportedRenderGraphImage>("export image", description, {image, imageView});
+    const auto finalImage = BuildTechniques(ctx, target);
+    if (finalImage != InvalidGraphImage)
+        ctx.graph.AddPass("retain export image",
+            [finalImage](RenderGraph::Builder& builder, auto&) {
+                (void)builder.Read(finalImage);
+                builder.SetSideEffect();
+            },
+            [](const auto&, FrameGraphPassResources&, IRenderDevice&) {});
     return finalImage;
 }
 

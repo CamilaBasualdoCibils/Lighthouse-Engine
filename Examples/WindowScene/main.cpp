@@ -7,33 +7,29 @@
 class GreenClearTechnique final : public Lighthouse::IRenderTechnique {
 public:
     void BuildGraph(Lighthouse::TechniqueBuildContext& ctx) override {
-        auto* view = dynamic_cast<Lighthouse::WindowView*>(&ctx.view);
-        if (!view || !ctx.windows) throw std::logic_error("Green clear requires a window view");
-
-        const auto swapchain = view->swapchain;
-        const auto window = view->window;
-        const auto* windows = ctx.windows;
-        ctx.graph.AddPass("clear window green",
-            [](Lighthouse::RenderGraph::Builder& builder, auto&) {
-                builder.SetSideEffect();
+        if (ctx.TargetImage() == Lighthouse::InvalidGraphImage)
+            throw std::logic_error("Green clear requires an output image");
+        struct PassData { Lighthouse::GraphImageHandle image; };
+        const auto& pass = ctx.graph.AddPass<PassData>("clear window green",
+            [target = ctx.TargetImage()](Lighthouse::RenderGraph::Builder& builder, PassData& data) {
+                data.image = builder.Write(target);
             },
-            [swapchain, window, windows](const auto&, FrameGraphPassResources&,
-                                         Lighthouse::IRenderDevice& device) {
-                const auto* target = windows->GetWindow(window);
-                if (!target) throw std::logic_error("Window was destroyed before graph execution");
+            [](const PassData& data, FrameGraphPassResources& resources,
+               Lighthouse::IRenderDevice& device) {
+                const auto& image = resources.get<Lighthouse::ImportedRenderGraphImage>(data.image);
+                const auto& desc = resources.getDescriptor<Lighthouse::ImportedRenderGraphImage>(data.image);
                 auto commands = device.CreateCommandList(Lighthouse::QueueType::Graphics);
                 Lighthouse::RenderPassDesc pass;
-                pass.colorAttachment = device.AcquireSwapchainImage(swapchain);
-                pass.width = target->FramebufferWidth();
-                pass.height = target->FramebufferHeight();
+                pass.colorAttachment = image.view;
+                pass.width = desc.width;
+                pass.height = desc.height;
                 pass.clearColor = true;
                 pass.clearColorValue = {0.0f, 1.0f, 0.0f};
                 commands->BeginRendering(pass);
                 commands->EndRendering();
                 device.Submit(*commands);
             });
-        // This pass writes the acquired presentation image directly.
-        ctx.SetFinalImage(Lighthouse::InvalidGraphImage);
+        ctx.SetFinalImage(pass.image);
     }
 };
 

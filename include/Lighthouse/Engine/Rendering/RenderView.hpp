@@ -19,9 +19,7 @@ class WindowManager;
 class IRenderDevice;
 struct ViewBuildContext {
     RenderGraph& graph;
-    WindowManager* windows{};
     IRenderDevice* device{};
-    const std::vector<std::pair<RenderViewHandle, GraphImageHandle>>& viewOutputs;
 };
 
 struct ExplicitCamera {
@@ -109,7 +107,7 @@ public:
     const std::vector<RenderTechniqueHandle>& TechniqueDependencies(RenderTechniqueHandle handle) const;
 
 protected:
-    GraphImageHandle BuildTechniques(ViewBuildContext& ctx);
+    GraphImageHandle BuildTechniques(ViewBuildContext& ctx, GraphImageHandle target = InvalidGraphImage);
 
 private:
     struct Slot {
@@ -139,6 +137,9 @@ public:
     SwapchainConfig presentation;
     SwapchainHandle swapchain;
     GraphImageHandle BuildGraph(ViewBuildContext& ctx) override;
+private:
+    friend class Renderer;
+    WindowManager* m_windows{};
 };
 class ExportView final : public IOutputView {
 public:

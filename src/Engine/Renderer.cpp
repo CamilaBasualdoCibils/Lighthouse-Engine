@@ -59,7 +59,6 @@ bool Renderer::DestroyView(RenderViewHandle handle) {
 RenderGraph Renderer::Compile(std::span<const OutputViewHandle> roots) {
     RenderGraph graph;
     std::vector<unsigned char> state(m_views.size());
-    std::vector<std::pair<RenderViewHandle, GraphImageHandle>> viewOutputs;
     std::function<void(RenderViewHandle)> build = [&](RenderViewHandle handle) {
         auto* view = GetView(handle);
         if (!view) throw std::logic_error("View dependency is missing or invalidated");
@@ -69,10 +68,10 @@ RenderGraph Renderer::Compile(std::span<const OutputViewHandle> roots) {
         state[handle.index] = 1;
         for (auto dependency : view->ViewDependencies()) build(dependency);
 
-        ViewBuildContext context{graph, m_windows, m_device.get(), viewOutputs};
+        ViewBuildContext context{graph, m_device.get()};
         const auto output = view->BuildGraph(context);
         if (dynamic_cast<RenderTextureView*>(view))
-            viewOutputs.emplace_back(handle, output);
+            graph.SetViewOutput(handle, output);
         state[handle.index] = 2;
     };
     for (auto root : roots) {

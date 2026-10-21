@@ -16,7 +16,6 @@
 namespace Lighthouse {
 
 class IRenderView;
-class WindowManager;
 
 template <typename T> struct TechniqueRef {
     RenderTechniqueHandle handle;
@@ -30,24 +29,20 @@ public:
                           RenderTechniqueHandle current,
                           const std::vector<RenderTechniqueHandle>* dependencies = nullptr,
                           const std::vector<RenderViewHandle>* viewDependencies = nullptr,
-                          const std::vector<std::pair<RenderViewHandle, GraphImageHandle>>* viewOutputs = nullptr,
-                          WindowManager* windows = nullptr)
+                          GraphImageHandle target = InvalidGraphImage)
         : graph(graph), view(view), m_outputs(outputs), m_current(current),
-          m_dependencies(dependencies), m_viewDependencies(viewDependencies), m_viewOutputs(viewOutputs),
-          windows(windows) {}
+          m_dependencies(dependencies), m_viewDependencies(viewDependencies), m_target(target) {}
 
     RenderGraph& graph;
     IRenderView& view;
-    WindowManager* windows{};
+    GraphImageHandle TargetImage() const noexcept { return m_target; }
     void SetFinalImage(RenderGraphResource image) { m_finalImage = image; }
     const std::optional<RenderGraphResource>& FinalImage() const noexcept { return m_finalImage; }
 
     GraphImageHandle GetViewOutput(RenderViewHandle handle) const {
         if (!m_viewDependencies || std::find(m_viewDependencies->begin(), m_viewDependencies->end(), handle) == m_viewDependencies->end())
             throw std::logic_error("View output was not declared as a dependency");
-        if (m_viewOutputs) for (const auto& [viewHandle, output] : *m_viewOutputs)
-            if (viewHandle == handle) return output;
-        throw std::logic_error("View output is missing");
+        return graph.GetViewOutput(handle);
     }
 
     template <typename T> const typename T::Outputs& GetOutputs(TechniqueRef<T> ref) const {
@@ -70,7 +65,7 @@ private:
     RenderTechniqueHandle m_current;
     const std::vector<RenderTechniqueHandle>* m_dependencies{};
     const std::vector<RenderViewHandle>* m_viewDependencies{};
-    const std::vector<std::pair<RenderViewHandle, GraphImageHandle>>* m_viewOutputs{};
+    GraphImageHandle m_target{InvalidGraphImage};
     std::optional<RenderGraphResource> m_finalImage;
 };
 

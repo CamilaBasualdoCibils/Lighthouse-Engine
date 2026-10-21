@@ -41,6 +41,7 @@ public:
         static_assert(std::is_base_of_v<IRenderView, T>);
         auto value = std::make_unique<T>(std::forward<Args>(args)...);
         if (auto* window = dynamic_cast<WindowView*>(value.get())) {
+            window->m_windows = m_windows;
             for (const auto& slot : m_views)
                 if (auto* existing = dynamic_cast<WindowView*>(slot.value.get()); existing && existing->window == window->window)
                     throw std::logic_error("Window already has a render view");

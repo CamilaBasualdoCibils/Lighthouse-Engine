@@ -41,10 +41,11 @@ struct RenderGraphBuffer {
     void preWrite(const Desc&, std::uint32_t, void*) {}
 };
 
-struct ImportedRenderGraphTexture {
+struct ImportedRenderGraphImage {
     using Desc = GraphTextureDesc;
 
     ImageHandle handle;
+    ImageViewHandle view;
     void create(const Desc&, void*) {}
     void destroy(const Desc&, void*) {}
     void preRead(const Desc&, std::uint32_t, void*) {}
@@ -125,6 +126,11 @@ public:
     void Compile();
     void Execute(IRenderDevice& device);
     void Clear();
+    void SetViewOutput(RenderViewHandle view, GraphImageHandle image) { m_viewOutputs.emplace_back(view, image); }
+    GraphImageHandle GetViewOutput(RenderViewHandle view) const {
+        for (const auto& [handle, image] : m_viewOutputs) if (handle == view) return image;
+        throw std::logic_error("View output is missing");
+    }
     FrameGraphBlackboard& Blackboard() noexcept { return m_blackboard; }
     const FrameGraphBlackboard& Blackboard() const noexcept { return m_blackboard; }
 
@@ -136,6 +142,7 @@ private:
     std::vector<std::unique_ptr<std::string>> m_names;
     std::unique_ptr<FrameGraph> m_graph;
     FrameGraphBlackboard m_blackboard;
+    std::vector<std::pair<RenderViewHandle, GraphImageHandle>> m_viewOutputs;
     bool m_compiled{};
 };
 

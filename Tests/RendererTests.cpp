@@ -77,6 +77,24 @@ struct CountingTechnique final : IRenderTechnique {
     }
     int& count;
 };
+struct ExportWriterTechnique final : IRenderTechnique {
+    explicit ExportWriterTechnique(ImageViewHandle expected, int& writes) : expected(expected), writes(writes) {}
+    struct PassData { GraphImageHandle image; };
+    void BuildGraph(TechniqueBuildContext& ctx) override {
+        const auto& pass = ctx.graph.AddPass<PassData>("write export image",
+            [target = ctx.TargetImage()](RenderGraph::Builder& builder, PassData& data) {
+                data.image = builder.Write(target);
+            },
+            [expected = expected, writes = &writes](const PassData& data,
+                FrameGraphPassResources& resources, IRenderDevice&) {
+                EXPECT_EQ(resources.get<ImportedRenderGraphImage>(data.image).view, expected);
+                ++*writes;
+            });
+        ctx.SetFinalImage(pass.image);
+    }
+    ImageViewHandle expected;
+    int& writes;
+};
 class CountingOutputView final : public IOutputView {
 public:
     CountingOutputView(RenderViewDesc desc, int& count) : IOutputView(std::move(desc)), count(count) {}
@@ -202,6 +220,20 @@ TEST(RendererTests, CompileDelegatesGraphBuildingToViewAndTechnique) {
     EXPECT_EQ(techniqueBuilds, 1);
     TestRenderDevice device;
     EXPECT_NO_THROW(graph.Execute(device));
+}
+TEST(RendererTests, ExportViewImportsItsTargetForTechniqueWrites) {
+    Renderer renderer;
+    Scene scene{"Export"};
+    const ImageViewHandle imageView{3, 1};
+    auto handle = renderer.CreateView<ExportView>(ImageHandle{2, 1}, imageView,
+        ImageDesc{}, MakeView(scene.Handle()));
+    int writes{};
+    auto* view = renderer.GetView(handle);
+    view->SetFinalOutput(view->AddTechnique<ExportWriterTechnique>(imageView, writes));
+    auto graph = renderer.Compile({handle});
+    TestRenderDevice device;
+    graph.Execute(device);
+    EXPECT_EQ(writes, 1);
 }
 TEST(RendererTests, CompileBuildsSharedTransientDependencyOnceAndReturnedGraphExecutes) {
     int producerBuilds{}, consumerBuilds{}, executions{};
