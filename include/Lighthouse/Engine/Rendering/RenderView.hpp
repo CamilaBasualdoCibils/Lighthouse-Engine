@@ -15,6 +15,15 @@
 
 namespace Lighthouse {
 
+class WindowManager;
+class IRenderDevice;
+struct ViewBuildContext {
+    RenderGraph& graph;
+    WindowManager* windows{};
+    IRenderDevice* device{};
+    const std::vector<std::pair<RenderViewHandle, GraphImageHandle>>& viewOutputs;
+};
+
 struct ExplicitCamera {
     Vec3 position{};
     Vec3 direction{0.0f, 0.0f, 1.0f};
@@ -59,6 +68,7 @@ public:
     const RenderSettings& GetSettings() const noexcept { return m_desc.settings; }
     LayerMask GetVisibleLayers() const noexcept { return m_desc.visibleLayers; }
     bool HasValidReferences() const noexcept;
+    virtual GraphImageHandle BuildGraph(ViewBuildContext& ctx);
 
     template <typename T, typename... Args> TechniqueRef<T> AddTechnique(Args&&... args) {
         static_assert(std::is_base_of_v<IRenderTechnique, T>);
@@ -94,6 +104,12 @@ public:
     template <typename T> void SetFinalOutput(TechniqueRef<T> technique) noexcept { SetFinalOutput(technique.handle); }
     RenderTechniqueHandle FinalOutput() const noexcept { return m_finalTechnique; }
     std::uint64_t OwnerId() const noexcept { return m_ownerId; }
+    void AddViewDependency(RenderViewHandle handle);
+    const std::vector<RenderViewHandle>& ViewDependencies() const noexcept { return m_viewDependencies; }
+    const std::vector<RenderTechniqueHandle>& TechniqueDependencies(RenderTechniqueHandle handle) const;
+
+protected:
+    GraphImageHandle BuildTechniques(ViewBuildContext& ctx);
 
 private:
     struct Slot {
@@ -107,27 +123,36 @@ private:
     std::uint64_t m_ownerId;
     std::vector<Slot> m_techniques;
     RenderTechniqueHandle m_finalTechnique;
+    std::vector<RenderViewHandle> m_viewDependencies;
 };
 
-class WindowView final : public IRenderView {
+class IOutputView : public IRenderView {
+public:
+    using IRenderView::IRenderView;
+};
+
+class WindowView final : public IOutputView {
 public:
     WindowView(WindowHandle window, RenderViewDesc desc = {}, SwapchainConfig config = {})
-        : IRenderView(std::move(desc)), window(window), presentation(config) {}
+        : IOutputView(std::move(desc)), window(window), presentation(config) {}
     WindowHandle window;
     SwapchainConfig presentation;
     SwapchainHandle swapchain;
+    GraphImageHandle BuildGraph(ViewBuildContext& ctx) override;
 };
-class ExportView final : public IRenderView {
+class ExportView final : public IOutputView {
 public:
     ExportView(ImageHandle image, ImageViewHandle imageView, ImageDesc description, RenderViewDesc desc = {})
-        : IRenderView(std::move(desc)), image(image), imageView(imageView), description(description) {}
+        : IOutputView(std::move(desc)), image(image), imageView(imageView), description(description) {}
     ImageHandle image;
     ImageViewHandle imageView;
     ImageDesc description;
+    GraphImageHandle BuildGraph(ViewBuildContext& ctx) override;
 };
 class RenderTextureView final : public IRenderView {
 public:
     using IRenderView::IRenderView;
+    GraphImageHandle BuildGraph(ViewBuildContext& ctx) override;
 };
 
 } // namespace Lighthouse

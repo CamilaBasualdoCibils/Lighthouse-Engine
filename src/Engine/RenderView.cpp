@@ -1,6 +1,9 @@
 #include <Lighthouse/Engine/Rendering/RenderView.hpp>
+#include <Lighthouse/Engine/Window/WindowManager.hpp>
+#include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 
 #include <functional>
+#include <algorithm>
 
 namespace Lighthouse {
 
@@ -41,6 +44,16 @@ bool IRenderView::RemoveTechnique(RenderTechniqueHandle handle) {
     if (++slot->generation == 0) ++slot->generation;
     return true;
 }
+void IRenderView::AddViewDependency(RenderViewHandle handle) {
+    if (!handle) throw std::invalid_argument("View dependency is invalid");
+    if (std::find(m_viewDependencies.begin(), m_viewDependencies.end(), handle) == m_viewDependencies.end())
+        m_viewDependencies.push_back(handle);
+}
+const std::vector<RenderTechniqueHandle>& IRenderView::TechniqueDependencies(RenderTechniqueHandle handle) const {
+    const auto* slot = FindSlot(handle);
+    if (!slot) throw std::logic_error("Technique reference is invalid");
+    return slot->dependencies;
+}
 std::vector<RenderTechniqueHandle> IRenderView::Techniques() const {
     std::vector<RenderTechniqueHandle> result;
     for (std::uint32_t i = 0; i < m_techniques.size(); ++i)
@@ -62,6 +75,65 @@ std::vector<RenderTechniqueHandle> IRenderView::TechniqueOrder() const {
     };
     for (auto handle : Techniques()) visit(handle);
     return result;
+}
+
+GraphImageHandle IRenderView::BuildGraph(ViewBuildContext& ctx) {
+    return BuildTechniques(ctx);
+}
+
+GraphImageHandle IRenderView::BuildTechniques(ViewBuildContext& ctx) {
+    const auto order = TechniqueOrder();
+    if (FinalOutput() && !GetTechnique(FinalOutput()))
+        throw std::logic_error("Final output technique is invalid");
+    if (!order.empty() && !FinalOutput())
+        throw std::logic_error("Final output technique is not selected");
+
+    std::unordered_map<std::uint32_t, std::any> outputs;
+    std::optional<GraphImageHandle> finalImage;
+    for (auto handle : order) {
+        TechniqueBuildContext techniqueContext(ctx.graph, *this, outputs, handle,
+            &TechniqueDependencies(handle), &ViewDependencies(), &ctx.viewOutputs, ctx.windows);
+        GetTechnique(handle)->BuildGraph(techniqueContext);
+        if (handle == FinalOutput()) finalImage = techniqueContext.FinalImage();
+    }
+    if (FinalOutput() && !finalImage)
+        throw std::logic_error("Final output image is missing");
+    return finalImage.value_or(InvalidGraphImage);
+}
+
+GraphImageHandle WindowView::BuildGraph(ViewBuildContext& ctx) {
+    if (!ctx.windows || !ctx.windows->GetWindow(window))
+        throw std::logic_error("Window view targets an invalid window");
+    if (!ctx.device) throw std::logic_error("Window view requires a render device");
+    if (!swapchain || !ctx.device->IsValid(swapchain))
+        swapchain = ctx.device->CreateSwapchain(*ctx.windows->GetWindow(window), presentation);
+
+    const auto image = BuildTechniques(ctx);
+    if (Techniques().empty()) return InvalidGraphImage;
+    if (image != InvalidGraphImage)
+        throw std::logic_error("Connecting a graph image to a window is unsupported");
+    ctx.graph.AddPass("present window",
+        [](RenderGraph::Builder& builder, auto&) { builder.SetSideEffect(); },
+        [target = swapchain](const auto&, FrameGraphPassResources&, IRenderDevice& device) {
+            device.Present(target);
+        });
+    return InvalidGraphImage;
+}
+
+GraphImageHandle ExportView::BuildGraph(ViewBuildContext& ctx) {
+    if (!image || !imageView)
+        throw std::logic_error("Export view targets an invalid external image");
+    const auto finalImage = BuildTechniques(ctx);
+    if (!Techniques().empty())
+        throw std::logic_error("Copying a graph image to an external image is unsupported");
+    return finalImage;
+}
+
+GraphImageHandle RenderTextureView::BuildGraph(ViewBuildContext& ctx) {
+    const auto image = BuildTechniques(ctx);
+    if (image == InvalidGraphImage)
+        throw std::logic_error("Transient dependency view has no output");
+    return image;
 }
 
 } // namespace Lighthouse

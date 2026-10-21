@@ -1,7 +1,41 @@
 #include <Lighthouse/Engine/Engine.hpp>
 #include <Lighthouse/OpenGL/OpenGLBackend.hpp>
 
-#include <memory>
+#include <optional>
+#include <stdexcept>
+
+class GreenClearTechnique final : public Lighthouse::IRenderTechnique {
+public:
+    void BuildGraph(Lighthouse::TechniqueBuildContext& ctx) override {
+        auto* view = dynamic_cast<Lighthouse::WindowView*>(&ctx.view);
+        if (!view || !ctx.windows) throw std::logic_error("Green clear requires a window view");
+
+        const auto swapchain = view->swapchain;
+        const auto window = view->window;
+        const auto* windows = ctx.windows;
+        ctx.graph.AddPass("clear window green",
+            [](Lighthouse::RenderGraph::Builder& builder, auto&) {
+                builder.SetSideEffect();
+            },
+            [swapchain, window, windows](const auto&, FrameGraphPassResources&,
+                                         Lighthouse::IRenderDevice& device) {
+                const auto* target = windows->GetWindow(window);
+                if (!target) throw std::logic_error("Window was destroyed before graph execution");
+                auto commands = device.CreateCommandList(Lighthouse::QueueType::Graphics);
+                Lighthouse::RenderPassDesc pass;
+                pass.colorAttachment = device.AcquireSwapchainImage(swapchain);
+                pass.width = target->FramebufferWidth();
+                pass.height = target->FramebufferHeight();
+                pass.clearColor = true;
+                pass.clearColorValue = {0.0f, 1.0f, 0.0f};
+                commands->BeginRendering(pass);
+                commands->EndRendering();
+                device.Submit(*commands);
+            });
+        // This pass writes the acquired presentation image directly.
+        ctx.SetFinalImage(Lighthouse::InvalidGraphImage);
+    }
+};
 
 class WindowSceneExample : public Lighthouse::Application {
 public:
@@ -12,40 +46,30 @@ public:
         camera.Add<Lighthouse::Camera>(Lighthouse::Camera{70.0f});
         scene.SetActiveCamera(camera);
 
-        const auto handle = GetWindowManager().CreateWindow({
+        const auto windowHandle = GetWindowManager().CreateWindow({
             .title = "Lighthouse Window and Scene",
             .width = 960,
             .height = 540,
             .eglSurface = true});
-        auto* window = GetWindowManager().GetWindow(handle);
-        window->Show();
+        GetWindowManager().GetWindow(windowHandle)->Show();
 
-        if (auto* device = GetRenderer().GetRenderDevice()) {
-            m_swapchain = device->CreateSwapchain(*window, Lighthouse::SwapchainConfig{});
-            m_window = window;
-        }
+        Lighthouse::RenderViewDesc description;
+        description.scene = scene.Handle();
+        description.camera = Lighthouse::CameraSource{camera};
+        m_windowView = GetRenderer().CreateView<Lighthouse::WindowView>(windowHandle, description);
+        auto* view = GetRenderer().GetView<Lighthouse::WindowView>(m_windowView);
+        view->SetFinalOutput(view->AddTechnique<GreenClearTechnique>());
+        m_graph.emplace(GetRenderer().Compile({m_windowView}));
     }
 
     void OnUpdate(float) override {
-        auto* device = GetRenderer().GetRenderDevice();
-        if (!device || !m_window) return;
-
-        auto commands = device->CreateCommandList(Lighthouse::QueueType::Graphics);
-        Lighthouse::RenderPassDesc pass;
-        pass.colorAttachment = device->AcquireSwapchainImage(m_swapchain);
-        pass.clearColor = true;
-        pass.clearColorValue = {0.08f, 0.10f, 0.14f};
-        pass.width = m_window->FramebufferWidth();
-        pass.height = m_window->FramebufferHeight();
-        commands->BeginRendering(pass);
-        commands->EndRendering();
-        device->Submit(*commands);
-        device->Present(m_swapchain);
+        if (auto* device = GetRenderer().GetRenderDevice(); device && m_graph)
+            m_graph->Execute(*device);
     }
 
 private:
-    Lighthouse::SwapchainHandle m_swapchain;
-    Lighthouse::Window* m_window{};
+    Lighthouse::RenderViewHandle m_windowView;
+    std::optional<Lighthouse::RenderGraph> m_graph;
 };
 
 int main() {

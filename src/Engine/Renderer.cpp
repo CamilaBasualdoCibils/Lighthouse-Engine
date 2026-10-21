@@ -4,6 +4,7 @@
 #include "MeshManager.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <functional>
 #include <stdexcept>
 #include <unordered_map>
@@ -11,7 +12,10 @@
 namespace Lighthouse {
 
 Renderer::Renderer(WindowManager* windows)
-    : m_windows(windows), m_meshManager(std::make_unique<MeshManager>()) {}
+    : m_windows(windows), m_meshManager(std::make_unique<MeshManager>()) {
+    static std::atomic<std::uint64_t> nextOwner{1};
+    m_ownerId = nextOwner.fetch_add(1, std::memory_order_relaxed);
+}
 Renderer::~Renderer() { ResetRenderDevice(); }
 void Renderer::SetRenderDevice(std::unique_ptr<IRenderDevice> device) {
     if (!device) throw std::invalid_argument("Render device cannot be null");
@@ -34,7 +38,7 @@ bool Renderer::IsValid(MeshHandle mesh) const noexcept { return m_meshManager->I
 MeshUploadStatus Renderer::GetMeshUploadStatus(MeshHandle mesh) const noexcept { return m_meshManager->GetUploadStatus(mesh, m_device.get()); }
 
 IRenderView* Renderer::GetView(RenderViewHandle handle) noexcept {
-    if (!handle || handle.index >= m_views.size()) return nullptr;
+    if (!handle || handle.owner != m_ownerId || handle.index >= m_views.size()) return nullptr;
     auto& slot = m_views[handle.index];
     return slot.generation == handle.generation ? slot.value.get() : nullptr;
 }
@@ -52,54 +56,32 @@ bool Renderer::DestroyView(RenderViewHandle handle) {
     return true;
 }
 
-GraphImageHandle Renderer::BuildView(RenderGraph& graph, RenderViewHandle handle) {
-    auto* view = GetView(handle);
-    if (!view) throw std::logic_error("Render view handle is invalid");
-    return BuildView(graph, *view);
-}
-GraphImageHandle Renderer::BuildView(RenderGraph& graph, IRenderView& view) {
-    auto order = view.TechniqueOrder();
-    if (view.FinalOutput() && !view.GetTechnique(view.FinalOutput()))
-        throw std::logic_error("Final output technique is invalid");
-    std::unordered_map<std::uint32_t, std::any> outputs;
-    std::optional<GraphImageHandle> finalImage;
-    for (auto handle : order) {
-        TechniqueBuildContext context(graph, view, outputs, handle);
-        view.GetTechnique(handle)->Build(context);
-        if (handle == view.FinalOutput()) finalImage = context.FinalImage();
-    }
-    if (!view.FinalOutput()) throw std::logic_error("Final output technique is not selected");
-    if (!finalImage) throw std::logic_error("Final output image is missing");
-    if (auto* window = dynamic_cast<WindowView*>(&view)) {
-        if (!m_windows || !m_windows->GetWindow(window->window)) throw std::logic_error("Window is invalid");
-        if (!m_device) throw std::logic_error("Window view requires a render device");
-        if (!window->swapchain) window->swapchain = m_device->CreateSwapchain(*m_windows->GetWindow(window->window), window->presentation);
-        throw std::logic_error("Render graph presentation is unsupported by this device interface");
-    }
-    if (dynamic_cast<ExportView*>(&view))
-        throw std::logic_error("Render graph export is unsupported by this device interface");
-    return *finalImage;
-}
-std::vector<GraphImageHandle> Renderer::BuildViews(RenderGraph& graph,
-    const std::vector<RenderViewHandle>& views,
-    const std::vector<std::pair<RenderViewHandle, RenderViewHandle>>& dependencies) {
-    std::vector<unsigned char> state(views.size());
-    std::vector<GraphImageHandle> result(views.size());
-    std::function<void(std::size_t)> visit = [&](std::size_t index) {
-        if (state[index] == 1) throw std::logic_error("Cyclic view dependency");
-        if (state[index] == 2) return;
-        if (!GetView(views[index])) throw std::logic_error("View dependency is invalid");
-        state[index] = 1;
-        for (auto [consumer, producer] : dependencies) if (consumer == views[index]) {
-            auto found = std::find(views.begin(), views.end(), producer);
-            if (found == views.end()) throw std::logic_error("View dependency is missing");
-            visit(static_cast<std::size_t>(found - views.begin()));
-        }
-        result[index] = BuildView(graph, views[index]);
-        state[index] = 2;
+RenderGraph Renderer::Compile(std::span<const OutputViewHandle> roots) {
+    RenderGraph graph;
+    std::vector<unsigned char> state(m_views.size());
+    std::vector<std::pair<RenderViewHandle, GraphImageHandle>> viewOutputs;
+    std::function<void(RenderViewHandle)> build = [&](RenderViewHandle handle) {
+        auto* view = GetView(handle);
+        if (!view) throw std::logic_error("View dependency is missing or invalidated");
+        if (!view->HasValidReferences()) throw std::logic_error("View scene or camera is invalid");
+        if (state[handle.index] == 1) throw std::logic_error("Cyclic view dependency");
+        if (state[handle.index] == 2) return;
+        state[handle.index] = 1;
+        for (auto dependency : view->ViewDependencies()) build(dependency);
+
+        ViewBuildContext context{graph, m_windows, m_device.get(), viewOutputs};
+        const auto output = view->BuildGraph(context);
+        if (dynamic_cast<RenderTextureView*>(view))
+            viewOutputs.emplace_back(handle, output);
+        state[handle.index] = 2;
     };
-    for (std::size_t i = 0; i < views.size(); ++i) visit(i);
-    return result;
+    for (auto root : roots) {
+        if (!dynamic_cast<IOutputView*>(GetView(root)))
+            throw std::logic_error("Compilation root must be a valid output view");
+        build(root);
+    }
+    graph.Compile();
+    return graph;
 }
 
 } // namespace Lighthouse

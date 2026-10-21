@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
+#include <initializer_list>
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
@@ -15,6 +17,7 @@ namespace Lighthouse {
 
 class IRenderDevice;
 class MeshManager;
+using OutputViewHandle = RenderViewHandle;
 
 class Renderer {
 public:
@@ -46,7 +49,7 @@ public:
         while (index < m_views.size() && m_views[index].value) ++index;
         if (index == m_views.size()) m_views.emplace_back();
         m_views[index].value = std::move(value);
-        return {index, m_views[index].generation};
+        return {index, m_views[index].generation, m_ownerId};
     }
     bool DestroyView(RenderViewHandle view);
     IRenderView* GetView(RenderViewHandle view) noexcept;
@@ -54,15 +57,15 @@ public:
     template <typename T> T* GetView(RenderViewHandle view) noexcept { return dynamic_cast<T*>(GetView(view)); }
     template <typename T> const T* GetView(RenderViewHandle view) const noexcept { return dynamic_cast<const T*>(GetView(view)); }
 
-    GraphImageHandle BuildView(RenderGraph& graph, IRenderView& view);
-    GraphImageHandle BuildView(RenderGraph& graph, RenderViewHandle view);
-    std::vector<GraphImageHandle> BuildViews(RenderGraph& graph,
-        const std::vector<RenderViewHandle>& views,
-        const std::vector<std::pair<RenderViewHandle, RenderViewHandle>>& dependencies);
+    RenderGraph Compile(std::span<const OutputViewHandle> views);
+    RenderGraph Compile(std::initializer_list<OutputViewHandle> views) {
+        return Compile(std::span<const OutputViewHandle>(views.begin(), views.size()));
+    }
 
 private:
     struct Slot { std::uint32_t generation{1}; std::unique_ptr<IRenderView> value; };
     WindowManager* m_windows{};
+    std::uint64_t m_ownerId{};
     std::vector<Slot> m_views;
     std::unique_ptr<IRenderDevice> m_device;
     std::unique_ptr<MeshManager> m_meshManager;
