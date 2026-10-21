@@ -1,4 +1,4 @@
-#include <Lighthouse/Engine/Rendering/ImGuiTechniques.hpp>
+#include <Lighthouse/Engine/Rendering/ImGuiTechnique.hpp>
 
 #include <Lighthouse/Engine/Rendering/IImGuiDevice.hpp>
 #include <Lighthouse/Engine/Rendering/RenderView.hpp>
@@ -14,8 +14,8 @@ namespace Lighthouse {
 namespace {
 SwapchainHandle WindowSwapchain(TechniqueBuildContext& ctx) {
     auto* view = ctx.GetParentViewAs<WindowView>();
-    if (!view || !view->swapchain || view->GetSwapchainImage() == InvalidGraphImage)
-        throw std::logic_error("ImGui techniques require a window image");
+    if (!view || !view->swapchain)
+        throw std::logic_error("ImGui technique requires a window image");
     return view->swapchain;
 }
 } // namespace
@@ -65,38 +65,23 @@ void ImGuiSession::End(IRenderDevice& device, SwapchainHandle swapchain, ImageVi
     m_backend->RenderImGui(swapchain, image, ImGui::GetDrawData());
 }
 
-void ImGuiStartTechnique::BuildGraph(TechniqueBuildContext& ctx) {
-    const auto swapchain = WindowSwapchain(ctx);
-    const auto sourceImage = m_sourceImage(ctx);
-    const auto& pass = ctx.graph.AddPass<PassData>("begin ImGui",
-        [input = sourceImage](RenderGraph::Builder& builder, PassData& data) {
-            data.image = builder.Write(input);
-        },
-        [session = m_session, swapchain](const PassData&, FrameGraphPassResources&, IRenderDevice& device) {
-            auto active = session.lock();
-            if (!active) throw std::logic_error("ImGui session was destroyed before rendering");
-            active->Begin(device, swapchain);
-        });
-    m_passData = pass;
-    ctx.SetFinalImage(m_passData.image);
-}
-
-void ImGuiEndTechnique::BuildGraph(TechniqueBuildContext& ctx) {
+void ImGuiTechnique::BuildGraph(TechniqueBuildContext& ctx) {
     const auto swapchain = WindowSwapchain(ctx);
     const auto sourceImage = m_sourceImage(ctx);
     const auto& pass = ctx.graph.AddPass<PassData>("render ImGui",
         [input = sourceImage](RenderGraph::Builder& builder, PassData& data) {
             data.image = builder.Write(input);
         },
-        [session = m_session, swapchain](const PassData& data, FrameGraphPassResources& resources,
-                                         IRenderDevice& device) {
-            const auto& image = resources.get<ImportedRenderGraphImage>(data.image);
+        [session = m_session, swapchain, draw = m_draw](const PassData& data,
+                FrameGraphPassResources& resources, IRenderDevice& device) {
             auto active = session.lock();
             if (!active) throw std::logic_error("ImGui session was destroyed before rendering");
+            const auto& image = resources.get<ImportedRenderGraphImage>(data.image);
+            active->Begin(device, swapchain);
+            draw();
             active->End(device, swapchain, image.view);
         });
     m_passData = pass;
-    ctx.SetFinalImage(m_passData.image);
 }
 
 } // namespace Lighthouse

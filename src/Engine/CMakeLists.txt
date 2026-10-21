@@ -10,6 +10,7 @@ add_library(LighthouseEngine
     GraphicsBackend.cpp
     WindowManager.cpp
     RenderView.cpp
+    SwapchainTechniques.cpp
     RenderGraph.cpp
     Renderer.cpp
     Mesh.cpp
@@ -19,7 +20,7 @@ add_library(LighthouseEngine
 if(LIGHTHOUSE_IMGUI)
     find_package(imgui CONFIG REQUIRED)
     find_package(implot CONFIG REQUIRED)
-    target_sources(LighthouseEngine PRIVATE ImGuiTechniques.cpp)
+    target_sources(LighthouseEngine PRIVATE ImGuiTechnique.cpp)
     target_link_libraries(LighthouseEngine PUBLIC imgui::imgui implot::implot)
     target_compile_definitions(LighthouseEngine PUBLIC LIGHTHOUSE_IMGUI=1)
 endif()

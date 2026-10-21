@@ -1,4 +1,5 @@
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Rendering/SwapchainTechniques.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 #include <Lighthouse/Engine/Core/EngineRuntime.hpp>
 #include <Lighthouse/Engine/Scene/Scene.hpp>
@@ -52,33 +53,29 @@ struct ImagePassTechnique final : IRenderTechnique {
                 ++*counter;
             });
         m_passData = data;
-        ctx.SetFinalImage(m_passData.image);
     }
     int& builds;
     int& executions;
     PassData m_passData;
 };
 struct TypedImageConsumerTechnique final : IRenderTechnique {
-    explicit TypedImageConsumerTechnique(TechniqueRef<ImagePassTechnique> source) : source(source) {}
+    TypedImageConsumerTechnique(TechniqueRef<ImagePassTechnique> source, GraphImageHandle& observed)
+        : source(source), observed(observed) {}
     void BuildGraph(TechniqueBuildContext& ctx) override {
-        ctx.SetFinalImage(ctx.GetTechnique(source).GetPassData().image);
+        observed = ctx.GetTechnique(source).GetPassData().image;
     }
     TechniqueRef<ImagePassTechnique> source;
+    GraphImageHandle& observed;
 };
-struct ViewConsumerTechnique final : IRenderTechnique {
-    ViewConsumerTechnique(RenderViewHandle source, int& builds) : source(source), builds(builds) {}
-    void BuildGraph(TechniqueBuildContext& ctx) override {
-        ++builds;
-        ctx.SetFinalImage(ctx.GetViewOutput(source));
-    }
-    RenderViewHandle source;
+struct ViewBuildCounterTechnique final : IRenderTechnique {
+    explicit ViewBuildCounterTechnique(int& builds) : builds(builds) {}
+    void BuildGraph(TechniqueBuildContext&) override { ++builds; }
     int& builds;
 };
 struct CountingTechnique final : IRenderTechnique {
     explicit CountingTechnique(int& count) : count(count) {}
     void BuildGraph(TechniqueBuildContext& ctx) override {
         ++count;
-        ctx.SetFinalImage(InvalidGraphImage);
     }
     int& count;
 };
@@ -95,7 +92,7 @@ struct ExportWriterTechnique final : IRenderTechnique {
                 EXPECT_EQ(resources.get<ImportedRenderGraphImage>(data.image).view, expected);
                 ++*writes;
             });
-        ctx.SetFinalImage(pass.image);
+        (void)pass;
     }
     ImageViewHandle expected;
     int& writes;
@@ -103,9 +100,9 @@ struct ExportWriterTechnique final : IRenderTechnique {
 class CountingOutputView final : public IOutputView {
 public:
     CountingOutputView(RenderViewDesc desc, int& count) : IOutputView(std::move(desc)), count(count) {}
-    GraphImageHandle BuildGraph(ViewBuildContext& ctx) override {
+    void BuildGraph(ViewBuildContext& ctx) override {
         ++count;
-        return BuildTechniques(ctx);
+        BuildTechniques(ctx);
     }
     int& count;
 };
@@ -164,42 +161,39 @@ TEST(RendererTests, SceneAndCameraLifetimeIsChecked) {
     EXPECT_FALSE(handle.IsValid());
     EXPECT_FALSE(camera.IsValid());
 }
-TEST(RendererTests, TechniqueReferencesInvalidateAndDependenciesSort) {
+TEST(RendererTests, TechniquesBuildInInsertionOrderAndReferencesInvalidate) {
     RenderTextureView view;
     std::vector<int> order;
     int result{};
-    auto consumer = view.AddTechnique<Consumer>(TechniqueRef<TestTechnique>{}, result);
     auto source = view.AddTechnique<TestTechnique>(order, 7);
-    view.GetTechnique(consumer)->source = source;
-    view.SetDependencies(consumer, source);
-    auto sorted = view.TechniqueOrder();
-    ASSERT_EQ(sorted.size(), 2);
-    EXPECT_EQ(sorted[0], source.handle);
-    EXPECT_EQ(sorted[1], consumer.handle);
+    auto consumer = view.AddTechnique<Consumer>(source, result);
     RenderGraph graph;
-    TechniqueBuildContext first(graph, view, source.handle);
-    view.GetTechnique(source)->BuildGraph(first);
-    const std::vector<RenderTechniqueHandle> dependencies{source.handle};
-    TechniqueBuildContext second(graph, view, consumer.handle, &dependencies);
-    view.GetTechnique(consumer)->BuildGraph(second);
+    ViewBuildContext context{graph};
+    view.IRenderView::BuildGraph(context);
+    EXPECT_EQ(order, std::vector<int>{7});
     EXPECT_EQ(result, 7);
     EXPECT_TRUE(view.RemoveTechnique(source));
-    EXPECT_EQ(view.GetTechnique(source), nullptr);
-    EXPECT_THROW(view.TechniqueOrder(), std::logic_error);
+    TechniqueBuildContext techniqueContext(graph, view);
+    EXPECT_THROW(view.GetTechnique(consumer)->BuildGraph(techniqueContext), std::logic_error);
     auto replacement = view.AddTechnique<TestTechnique>(order, 8);
     EXPECT_NE(source.handle, replacement.handle);
 }
-TEST(RendererTests, CyclesAndForeignDependenciesAreRejected) {
+TEST(RendererTests, ForeignTechniqueReferencesAreRejected) {
     RenderTextureView first, second;
     std::vector<int> order;
-    auto a = first.AddTechnique<TestTechnique>(order, 1);
-    auto b = first.AddTechnique<TestTechnique>(order, 2);
-    first.SetDependencies(a, b);
-    first.SetDependencies(b, a);
-    EXPECT_THROW(first.TechniqueOrder(), std::logic_error);
     auto foreign = second.AddTechnique<TestTechnique>(order, 3);
-    first.SetDependencies(b, foreign);
-    EXPECT_THROW(first.TechniqueOrder(), std::logic_error);
+    RenderGraph graph;
+    TechniqueBuildContext context(graph, first);
+    EXPECT_THROW(context.GetTechnique(foreign), std::logic_error);
+}
+TEST(RendererTests, SwapchainTechniquesRequireWindowView) {
+    RenderTextureView view;
+    RenderGraph graph;
+    TechniqueBuildContext context(graph, view);
+    AcquireSwapchainImageTechnique acquire;
+    EXPECT_THROW(acquire.BuildGraph(context), std::logic_error);
+    PresentSwapchainImageTechnique present(TechniqueRef<AcquireSwapchainImageTechnique>{});
+    EXPECT_THROW(present.BuildGraph(context), std::logic_error);
 }
 TEST(RendererTests, CompileAcceptsOutputRootsAndRejectsTransientRoots) {
     Renderer renderer;
@@ -219,7 +213,7 @@ TEST(RendererTests, CompileDelegatesGraphBuildingToViewAndTechnique) {
     int viewBuilds{}, techniqueBuilds{};
     auto handle = renderer.CreateView<CountingOutputView>(MakeView(scene.Handle()), viewBuilds);
     auto* view = renderer.GetView(handle);
-    view->SetFinalOutput(view->AddTechnique<CountingTechnique>(techniqueBuilds));
+    view->AddTechnique<CountingTechnique>(techniqueBuilds);
     auto graph = renderer.Compile({handle});
     EXPECT_EQ(viewBuilds, 1);
     EXPECT_EQ(techniqueBuilds, 1);
@@ -234,11 +228,35 @@ TEST(RendererTests, ExportViewImportsItsTargetForTechniqueWrites) {
         ImageDesc{}, MakeView(scene.Handle()));
     int writes{};
     auto* view = renderer.GetView(handle);
-    view->SetFinalOutput(view->AddTechnique<ExportWriterTechnique>(imageView, writes));
+    view->AddTechnique<ExportWriterTechnique>(imageView, writes);
     auto graph = renderer.Compile({handle});
     TestRenderDevice device;
     graph.Execute(device);
     EXPECT_EQ(writes, 1);
+}
+TEST(RendererTests, LambdaTechniqueBuildsAndExecutesWithItsPassData) {
+    Renderer renderer;
+    Scene scene{"Lambda"};
+    const ImageViewHandle imageView{4, 1};
+    auto handle = renderer.CreateView<ExportView>(ImageHandle{4, 1}, imageView,
+        ImageDesc{}, MakeView(scene.Handle()));
+    auto* view = renderer.GetView<ExportView>(handle);
+    struct Data { GraphImageHandle image{InvalidGraphImage}; };
+    int executions{};
+    Data& data = view->AddLambdaTechnique<Data>(
+        [](Data& pass, TechniqueBuildContext& ctx) {
+            pass.image = ctx.Builder().Write(ctx.GetParentViewAs<ExportView>()->GetExportImage());
+        },
+        [&executions, imageView](const Data& pass, TechniqueExecuteContext& ctx) {
+            EXPECT_EQ(ctx.resources.get<ImportedRenderGraphImage>(pass.image).view, imageView);
+            ++executions;
+        });
+    EXPECT_EQ(data.image, InvalidGraphImage);
+    auto graph = renderer.Compile({handle});
+    EXPECT_NE(data.image, InvalidGraphImage);
+    TestRenderDevice device;
+    graph.Execute(device);
+    EXPECT_EQ(executions, 1);
 }
 TEST(RendererTests, CompileBuildsSharedTransientDependencyOnceAndReturnedGraphExecutes) {
     int producerBuilds{}, consumerBuilds{}, executions{};
@@ -249,14 +267,12 @@ TEST(RendererTests, CompileBuildsSharedTransientDependencyOnceAndReturnedGraphEx
         auto desc = MakeView(scene.Handle());
         auto producer = renderer.CreateView<RenderTextureView>(desc);
         auto* producerView = renderer.GetView(producer);
-        auto image = producerView->AddTechnique<ImagePassTechnique>(producerBuilds, executions);
-        producerView->SetFinalOutput(image);
+        producerView->AddTechnique<ImagePassTechnique>(producerBuilds, executions);
 
         auto consumer = renderer.CreateView<RenderTextureView>(desc);
         auto* consumerView = renderer.GetView(consumer);
         consumerView->AddViewDependency(producer);
-        auto use = consumerView->AddTechnique<ViewConsumerTechnique>(producer, consumerBuilds);
-        consumerView->SetFinalOutput(use);
+        consumerView->AddTechnique<ViewBuildCounterTechnique>(consumerBuilds);
 
         auto first = renderer.CreateView<ExportView>(ImageHandle{1, 1}, ImageViewHandle{1, 1}, ImageDesc{}, desc);
         auto second = renderer.CreateView<ExportView>(ImageHandle{2, 1}, ImageViewHandle{2, 1}, ImageDesc{}, desc);
@@ -277,16 +293,15 @@ TEST(RendererTests, CompileResolvesTechniquePassDataBeforeConsumers) {
     auto desc = MakeView(scene.Handle());
     auto source = renderer.CreateView<RenderTextureView>(desc);
     auto* view = renderer.GetView(source);
-    auto consumer = view->AddTechnique<TypedImageConsumerTechnique>(TechniqueRef<ImagePassTechnique>{});
     int builds{}, executions{};
     auto producer = view->AddTechnique<ImagePassTechnique>(builds, executions);
-    view->GetTechnique(consumer)->source = producer;
-    view->SetDependencies(consumer, producer);
-    view->SetFinalOutput(consumer);
+    GraphImageHandle observed = InvalidGraphImage;
+    view->AddTechnique<TypedImageConsumerTechnique>(producer, observed);
     auto output = renderer.CreateView<ExportView>(ImageHandle{1, 1}, ImageViewHandle{1, 1}, ImageDesc{}, desc);
     renderer.GetView(output)->AddViewDependency(source);
     auto graph = renderer.Compile({output});
     EXPECT_EQ(builds, 1);
+    EXPECT_NE(observed, InvalidGraphImage);
     TestRenderDevice device;
     graph.Execute(device);
     EXPECT_EQ(executions, 1);

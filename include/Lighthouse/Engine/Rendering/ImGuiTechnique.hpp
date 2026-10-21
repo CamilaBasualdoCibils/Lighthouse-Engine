@@ -34,37 +34,23 @@ private:
     bool m_rendererInitialized{};
 };
 
-class ImGuiStartTechnique final : public IRenderTechnique {
+class ImGuiTechnique final : public IRenderTechnique {
 public:
     struct PassData { GraphImageHandle image{InvalidGraphImage}; };
     template <typename Source>
-    ImGuiStartTechnique(std::shared_ptr<ImGuiSession> session, TechniqueRef<Source> source)
+    ImGuiTechnique(std::shared_ptr<ImGuiSession> session, TechniqueRef<Source> source,
+                   std::function<void()> draw)
         : m_session(std::move(session)),
           m_sourceImage([source](TechniqueBuildContext& ctx) {
               return ctx.GetTechnique(source).GetPassData().image;
-          }) {}
+          }),
+          m_draw(std::move(draw)) {}
     void BuildGraph(TechniqueBuildContext& ctx) override;
     const PassData& GetPassData() const noexcept { return m_passData; }
 private:
     std::weak_ptr<ImGuiSession> m_session;
     std::function<GraphImageHandle(TechniqueBuildContext&)> m_sourceImage;
-    PassData m_passData;
-};
-
-class ImGuiEndTechnique final : public IRenderTechnique {
-public:
-    struct PassData { GraphImageHandle image{InvalidGraphImage}; };
-    template <typename Source>
-    ImGuiEndTechnique(std::shared_ptr<ImGuiSession> session, TechniqueRef<Source> source)
-        : m_session(std::move(session)),
-          m_sourceImage([source](TechniqueBuildContext& ctx) {
-              return ctx.GetTechnique(source).GetPassData().image;
-          }) {}
-    void BuildGraph(TechniqueBuildContext& ctx) override;
-    const PassData& GetPassData() const noexcept { return m_passData; }
-private:
-    std::weak_ptr<ImGuiSession> m_session;
-    std::function<GraphImageHandle(TechniqueBuildContext&)> m_sourceImage;
+    std::function<void()> m_draw;
     PassData m_passData;
 };
 

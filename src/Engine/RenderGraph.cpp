@@ -48,7 +48,6 @@ void RenderGraph::Clear() {
     m_graph = std::make_unique<FrameGraph>();
     m_names.clear();
     m_blackboard = FrameGraphBlackboard{};
-    m_viewOutputs.clear();
     m_compiled = false;
 }
 

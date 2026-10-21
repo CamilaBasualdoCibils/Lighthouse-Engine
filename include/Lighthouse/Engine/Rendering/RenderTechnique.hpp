@@ -1,12 +1,10 @@
 #pragma once
 
-#include <algorithm>
 #include <cstdint>
-#include <optional>
+#include <functional>
 #include <utility>
 #include <stdexcept>
 #include <type_traits>
-#include <vector>
 
 #include <Lighthouse/Engine/Core/Handle.hpp>
 #include <Lighthouse/Engine/Rendering/RenderGraph.hpp>
@@ -22,38 +20,63 @@ template <typename T> struct TechniqueRef {
 
 class TechniqueBuildContext {
 public:
-    TechniqueBuildContext(RenderGraph& graph, IRenderView& view,
-                          RenderTechniqueHandle current,
-                          const std::vector<RenderTechniqueHandle>* dependencies = nullptr,
-                          const std::vector<RenderViewHandle>* viewDependencies = nullptr)
-        : graph(graph), view(view), m_current(current),
-          m_dependencies(dependencies), m_viewDependencies(viewDependencies) {}
+    TechniqueBuildContext(RenderGraph& graph, IRenderView& view, RenderGraph::Builder* builder = nullptr)
+        : graph(graph), view(view), m_builder(builder) {}
 
     RenderGraph& graph;
     IRenderView& view;
     template <typename T> T* GetParentViewAs() noexcept;
     template <typename T> const T* GetParentViewAs() const noexcept;
     template <typename T> const T& GetTechnique(TechniqueRef<T> ref) const;
-    void SetFinalImage(RenderGraphResource image) { m_finalImage = image; }
-    const std::optional<RenderGraphResource>& FinalImage() const noexcept { return m_finalImage; }
-
-    GraphImageHandle GetViewOutput(RenderViewHandle handle) const {
-        if (!m_viewDependencies || std::find(m_viewDependencies->begin(), m_viewDependencies->end(), handle) == m_viewDependencies->end())
-            throw std::logic_error("View output was not declared as a dependency");
-        return graph.GetViewOutput(handle);
+    RenderGraph::Builder& Builder() const {
+        if (!m_builder) throw std::logic_error("No render graph pass is being built");
+        return *m_builder;
     }
 
 private:
-    RenderTechniqueHandle m_current;
-    const std::vector<RenderTechniqueHandle>* m_dependencies{};
-    const std::vector<RenderViewHandle>* m_viewDependencies{};
-    std::optional<RenderGraphResource> m_finalImage;
+    RenderGraph::Builder* m_builder{};
+};
+
+struct TechniqueExecuteContext {
+    FrameGraphPassResources& resources;
+    IRenderDevice& device;
 };
 
 class IRenderTechnique {
 public:
     virtual ~IRenderTechnique() = default;
     virtual void BuildGraph(TechniqueBuildContext& context) = 0;
+};
+
+template <typename Data> class LambdaTechnique final : public IRenderTechnique {
+public:
+    using Setup = std::function<void(Data&, TechniqueBuildContext&)>;
+    using Execute = std::function<void(const Data&, TechniqueExecuteContext&)>;
+
+    LambdaTechnique(Setup setup, Execute execute)
+        : m_setup(std::move(setup)), m_execute(std::move(execute)) {}
+
+    Data& GetPassData() noexcept { return m_passData; }
+    const Data& GetPassData() const noexcept { return m_passData; }
+
+    void BuildGraph(TechniqueBuildContext& ctx) override {
+        const auto& pass = ctx.graph.AddPass<Data>("lambda technique",
+            [this, &ctx](RenderGraph::Builder& builder, Data& data) {
+                TechniqueBuildContext setupContext(ctx.graph, ctx.view, &builder);
+                m_setup(data, setupContext);
+            },
+            [execute = m_execute](const Data& data, FrameGraphPassResources& resources,
+                                  IRenderDevice& device) {
+                TechniqueExecuteContext executeContext{resources, device};
+                execute(data, executeContext);
+            });
+        m_passData = pass;
+    }
+
+private:
+    Setup m_setup;
+    Execute m_execute;
+    Data m_passData{};
 };
 
 } // namespace Lighthouse

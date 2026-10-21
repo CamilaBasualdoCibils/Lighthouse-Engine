@@ -66,7 +66,7 @@ public:
     const RenderSettings& GetSettings() const noexcept { return m_desc.settings; }
     LayerMask GetVisibleLayers() const noexcept { return m_desc.visibleLayers; }
     bool HasValidReferences() const noexcept;
-    virtual GraphImageHandle BuildGraph(ViewBuildContext& ctx);
+    virtual void BuildGraph(ViewBuildContext& ctx);
 
     template <typename T, typename... Args> TechniqueRef<T> AddTechnique(Args&&... args) {
         static_assert(std::is_base_of_v<IRenderTechnique, T>);
@@ -76,8 +76,14 @@ public:
         if (index == m_techniques.size()) m_techniques.emplace_back();
         auto& slot = m_techniques[index];
         slot.value = std::move(value);
-        slot.dependencies.clear();
         return {{index, slot.generation, m_ownerId}};
+    }
+    template <typename Data, typename Setup, typename Execute>
+    Data& AddLambdaTechnique(Setup&& setup, Execute&& execute) {
+        auto ref = AddTechnique<LambdaTechnique<Data>>(
+            typename LambdaTechnique<Data>::Setup(std::forward<Setup>(setup)),
+            typename LambdaTechnique<Data>::Execute(std::forward<Execute>(execute)));
+        return GetTechnique(ref)->GetPassData();
     }
     template <typename T> T* GetTechnique(TechniqueRef<T> ref) noexcept {
         return dynamic_cast<T*>(GetTechnique(ref.handle));
@@ -89,38 +95,24 @@ public:
     const IRenderTechnique* GetTechnique(RenderTechniqueHandle handle) const noexcept;
     bool RemoveTechnique(RenderTechniqueHandle handle);
     template <typename T> bool RemoveTechnique(TechniqueRef<T> ref) { return RemoveTechnique(ref.handle); }
-    template <typename T, typename... Dependencies>
-    void SetDependencies(TechniqueRef<T> technique, Dependencies... dependencies) {
-        static_assert((std::is_same_v<decltype(dependencies.handle), RenderTechniqueHandle> && ...));
-        auto* slot = FindSlot(technique.handle);
-        if (!slot) throw std::logic_error("Technique reference is invalid");
-        slot->dependencies = {dependencies.handle...};
-    }
-    std::vector<RenderTechniqueHandle> TechniqueOrder() const;
     std::vector<RenderTechniqueHandle> Techniques() const;
-    void SetFinalOutput(RenderTechniqueHandle technique) noexcept { m_finalTechnique = technique; }
-    template <typename T> void SetFinalOutput(TechniqueRef<T> technique) noexcept { SetFinalOutput(technique.handle); }
-    RenderTechniqueHandle FinalOutput() const noexcept { return m_finalTechnique; }
     std::uint64_t OwnerId() const noexcept { return m_ownerId; }
     void AddViewDependency(RenderViewHandle handle);
     const std::vector<RenderViewHandle>& ViewDependencies() const noexcept { return m_viewDependencies; }
-    const std::vector<RenderTechniqueHandle>& TechniqueDependencies(RenderTechniqueHandle handle) const;
 
 protected:
-    GraphImageHandle BuildTechniques(ViewBuildContext& ctx);
+    void BuildTechniques(ViewBuildContext& ctx);
 
 private:
     struct Slot {
         std::uint32_t generation{1};
         std::unique_ptr<IRenderTechnique> value;
-        std::vector<RenderTechniqueHandle> dependencies;
     };
     Slot* FindSlot(RenderTechniqueHandle handle) noexcept;
     const Slot* FindSlot(RenderTechniqueHandle handle) const noexcept;
     RenderViewDesc m_desc;
     std::uint64_t m_ownerId;
     std::vector<Slot> m_techniques;
-    RenderTechniqueHandle m_finalTechnique;
     std::vector<RenderViewHandle> m_viewDependencies;
 };
 
@@ -136,12 +128,11 @@ public:
     WindowHandle window;
     SwapchainConfig presentation;
     SwapchainHandle swapchain;
-    GraphImageHandle GetSwapchainImage() const noexcept { return m_swapchainImage; }
-    GraphImageHandle BuildGraph(ViewBuildContext& ctx) override;
+    Window* GetWindow() const noexcept;
+    void BuildGraph(ViewBuildContext& ctx) override;
 private:
     friend class Renderer;
     WindowManager* m_windows{};
-    GraphImageHandle m_swapchainImage{InvalidGraphImage};
 };
 class ExportView final : public IOutputView {
 public:
@@ -151,14 +142,14 @@ public:
     ImageViewHandle imageView;
     ImageDesc description;
     GraphImageHandle GetExportImage() const noexcept { return m_exportImage; }
-    GraphImageHandle BuildGraph(ViewBuildContext& ctx) override;
+    void BuildGraph(ViewBuildContext& ctx) override;
 private:
     GraphImageHandle m_exportImage{InvalidGraphImage};
 };
 class RenderTextureView final : public IRenderView {
 public:
     using IRenderView::IRenderView;
-    GraphImageHandle BuildGraph(ViewBuildContext& ctx) override;
+    void BuildGraph(ViewBuildContext& ctx) override;
 };
 
 template <typename T> T* TechniqueBuildContext::GetParentViewAs() noexcept {
@@ -168,11 +159,8 @@ template <typename T> const T* TechniqueBuildContext::GetParentViewAs() const no
     return dynamic_cast<const T*>(&view);
 }
 template <typename T> const T& TechniqueBuildContext::GetTechnique(TechniqueRef<T> ref) const {
-    if (!m_dependencies || std::find(m_dependencies->begin(), m_dependencies->end(), ref.handle) == m_dependencies->end())
-        throw std::logic_error("Technique was not declared as a dependency");
-    if (ref.handle.owner != m_current.owner) throw std::logic_error("Technique belongs to another view");
     const auto* technique = view.GetTechnique(ref);
-    if (!technique) throw std::logic_error("Technique dependency is invalid");
+    if (!technique) throw std::logic_error("Technique reference is invalid or belongs to another view");
     return *technique;
 }
 

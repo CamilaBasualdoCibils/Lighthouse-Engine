@@ -69,9 +69,7 @@ RenderGraph Renderer::Compile(std::span<const OutputViewHandle> roots) {
         for (auto dependency : view->ViewDependencies()) build(dependency);
 
         ViewBuildContext context{graph, m_device.get()};
-        const auto output = view->BuildGraph(context);
-        if (dynamic_cast<RenderTextureView*>(view))
-            graph.SetViewOutput(handle, output);
+        view->BuildGraph(context);
         state[handle.index] = 2;
     };
     for (auto root : roots) {

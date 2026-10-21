@@ -1,8 +1,9 @@
 #include <Lighthouse/Engine/Engine.hpp>
+#include <Lighthouse/Engine/Rendering/SwapchainTechniques.hpp>
 #include <Lighthouse/OpenGL/OpenGLBackend.hpp>
 #include <Lighthouse/Vulkan/VulkanBackend.hpp>
 #ifdef LIGHTHOUSE_IMGUI
-#include <Lighthouse/Engine/Rendering/ImGuiTechniques.hpp>
+#include <Lighthouse/Engine/Rendering/ImGuiTechnique.hpp>
 #include <imgui.h>
 #endif
 
@@ -12,13 +13,15 @@
 class GreenClearTechnique final : public Lighthouse::IRenderTechnique {
 public:
     struct PassData { Lighthouse::GraphImageHandle image{Lighthouse::InvalidGraphImage}; };
+    explicit GreenClearTechnique(Lighthouse::TechniqueRef<Lighthouse::AcquireSwapchainImageTechnique> source)
+        : m_source(source) {}
     const PassData& GetPassData() const noexcept { return m_passData; }
     void BuildGraph(Lighthouse::TechniqueBuildContext& ctx) override {
-        const auto* view = ctx.GetParentViewAs<Lighthouse::WindowView>();
-        if (!view || view->GetSwapchainImage() == Lighthouse::InvalidGraphImage)
-            throw std::logic_error("Green clear requires a window swapchain image");
+        const auto target = ctx.GetTechnique(m_source).GetPassData().image;
+        if (target == Lighthouse::InvalidGraphImage)
+            throw std::logic_error("Green clear requires an acquired image");
         const auto& pass = ctx.graph.AddPass<PassData>("clear window green",
-            [target = view->GetSwapchainImage()](Lighthouse::RenderGraph::Builder& builder, PassData& data) {
+            [target](Lighthouse::RenderGraph::Builder& builder, PassData& data) {
                 data.image = builder.Write(target);
             },
             [](const PassData& data, FrameGraphPassResources& resources,
@@ -37,36 +40,11 @@ public:
                 device.Submit(*commands);
             });
         m_passData = pass;
-        ctx.SetFinalImage(m_passData.image);
     }
 private:
+    Lighthouse::TechniqueRef<Lighthouse::AcquireSwapchainImageTechnique> m_source;
     PassData m_passData;
 };
-
-#ifdef LIGHTHOUSE_IMGUI
-class ImGuiDemoTechnique final : public Lighthouse::IRenderTechnique {
-public:
-    struct PassData { Lighthouse::GraphImageHandle image{Lighthouse::InvalidGraphImage}; };
-    explicit ImGuiDemoTechnique(Lighthouse::TechniqueRef<Lighthouse::ImGuiStartTechnique> source)
-        : m_source(source) {}
-    const PassData& GetPassData() const noexcept { return m_passData; }
-    void BuildGraph(Lighthouse::TechniqueBuildContext& ctx) override {
-        const auto sourceImage = ctx.GetTechnique(m_source).GetPassData().image;
-        const auto& pass = ctx.graph.AddPass<PassData>("ImGui demo",
-            [input = sourceImage](Lighthouse::RenderGraph::Builder& builder, PassData& data) {
-                data.image = builder.Write(input);
-            },
-            [](const PassData&, FrameGraphPassResources&, Lighthouse::IRenderDevice&) {
-                ImGui::ShowDemoWindow();
-            });
-        m_passData = pass;
-        ctx.SetFinalImage(m_passData.image);
-    }
-private:
-    Lighthouse::TechniqueRef<Lighthouse::ImGuiStartTechnique> m_source;
-    PassData m_passData;
-};
-#endif
 
 class WindowSceneExample : public Lighthouse::Application {
 public:
@@ -89,20 +67,18 @@ public:
         description.camera = Lighthouse::CameraSource{camera};
         m_windowView = GetRenderer().CreateView<Lighthouse::WindowView>(windowHandle, description);
         auto* view = GetRenderer().GetView<Lighthouse::WindowView>(m_windowView);
-        const auto clear = view->AddTechnique<GreenClearTechnique>();
+        const auto acquire = view->AddTechnique<Lighthouse::AcquireSwapchainImageTechnique>();
+        const auto clear = view->AddTechnique<GreenClearTechnique>(acquire);
 #ifdef LIGHTHOUSE_IMGUI
         m_imgui = std::make_shared<Lighthouse::ImGuiSession>(*GetWindowManager().GetWindow(windowHandle));
-        const auto begin = view->AddTechnique<Lighthouse::ImGuiStartTechnique>(m_imgui, clear);
-        const auto demo = view->AddTechnique<ImGuiDemoTechnique>(begin);
-        const auto end = view->AddTechnique<Lighthouse::ImGuiEndTechnique>(m_imgui, demo);
-        view->SetDependencies(begin, clear);
-        view->SetDependencies(demo, begin);
-        view->SetDependencies(end, demo);
-        view->SetFinalOutput(end);
+        const auto imgui = view->AddTechnique<Lighthouse::ImGuiTechnique>(
+            m_imgui, clear, [] { ImGui::ShowDemoWindow(); });
+        view->AddTechnique<Lighthouse::PresentSwapchainImageTechnique>(imgui);
 #else
-        view->SetFinalOutput(clear);
+        view->AddTechnique<Lighthouse::PresentSwapchainImageTechnique>(clear);
 #endif
         m_graph.emplace(GetRenderer().Compile({m_windowView}));
+        std::cout << m_graph->Dot() << std::endl;
     }
 
     void OnUpdate(float) override {

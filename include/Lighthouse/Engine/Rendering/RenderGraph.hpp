@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <cstdint>
+#include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -126,10 +127,12 @@ public:
     void Compile();
     void Execute(IRenderDevice& device);
     void Clear();
-    void SetViewOutput(RenderViewHandle view, GraphImageHandle image) { m_viewOutputs.emplace_back(view, image); }
-    GraphImageHandle GetViewOutput(RenderViewHandle view) const {
-        for (const auto& [handle, image] : m_viewOutputs) if (handle == view) return image;
-        throw std::logic_error("View output is missing");
+    std::string Dot() const
+    {
+        if (!m_graph) return "";
+        std::stringstream ss;
+        ss << *m_graph;
+        return ss.str();
     }
     FrameGraphBlackboard& Blackboard() noexcept { return m_blackboard; }
     const FrameGraphBlackboard& Blackboard() const noexcept { return m_blackboard; }
@@ -142,7 +145,6 @@ private:
     std::vector<std::unique_ptr<std::string>> m_names;
     std::unique_ptr<FrameGraph> m_graph;
     FrameGraphBlackboard m_blackboard;
-    std::vector<std::pair<RenderViewHandle, GraphImageHandle>> m_viewOutputs;
     bool m_compiled{};
 };
 
