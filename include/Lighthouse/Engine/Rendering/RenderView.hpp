@@ -107,7 +107,7 @@ public:
     const std::vector<RenderTechniqueHandle>& TechniqueDependencies(RenderTechniqueHandle handle) const;
 
 protected:
-    GraphImageHandle BuildTechniques(ViewBuildContext& ctx, GraphImageHandle target = InvalidGraphImage);
+    GraphImageHandle BuildTechniques(ViewBuildContext& ctx);
 
 private:
     struct Slot {
@@ -136,10 +136,12 @@ public:
     WindowHandle window;
     SwapchainConfig presentation;
     SwapchainHandle swapchain;
+    GraphImageHandle GetSwapchainImage() const noexcept { return m_swapchainImage; }
     GraphImageHandle BuildGraph(ViewBuildContext& ctx) override;
 private:
     friend class Renderer;
     WindowManager* m_windows{};
+    GraphImageHandle m_swapchainImage{InvalidGraphImage};
 };
 class ExportView final : public IOutputView {
 public:
@@ -148,12 +150,30 @@ public:
     ImageHandle image;
     ImageViewHandle imageView;
     ImageDesc description;
+    GraphImageHandle GetExportImage() const noexcept { return m_exportImage; }
     GraphImageHandle BuildGraph(ViewBuildContext& ctx) override;
+private:
+    GraphImageHandle m_exportImage{InvalidGraphImage};
 };
 class RenderTextureView final : public IRenderView {
 public:
     using IRenderView::IRenderView;
     GraphImageHandle BuildGraph(ViewBuildContext& ctx) override;
 };
+
+template <typename T> T* TechniqueBuildContext::GetParentViewAs() noexcept {
+    return dynamic_cast<T*>(&view);
+}
+template <typename T> const T* TechniqueBuildContext::GetParentViewAs() const noexcept {
+    return dynamic_cast<const T*>(&view);
+}
+template <typename T> const T& TechniqueBuildContext::GetTechnique(TechniqueRef<T> ref) const {
+    if (!m_dependencies || std::find(m_dependencies->begin(), m_dependencies->end(), ref.handle) == m_dependencies->end())
+        throw std::logic_error("Technique was not declared as a dependency");
+    if (ref.handle.owner != m_current.owner) throw std::logic_error("Technique belongs to another view");
+    const auto* technique = view.GetTechnique(ref);
+    if (!technique) throw std::logic_error("Technique dependency is invalid");
+    return *technique;
+}
 
 } // namespace Lighthouse

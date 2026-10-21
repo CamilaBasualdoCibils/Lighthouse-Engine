@@ -14,6 +14,9 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#ifdef LIGHTHOUSE_IMGUI
+#include <imgui_impl_vulkan.h>
+#endif
 
 namespace Lighthouse {
 namespace {
@@ -177,12 +180,16 @@ struct VulkanRenderDevice::Impl {
         VkPhysicalDeviceVulkan13Features features13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
         features13.dynamicRendering = VK_TRUE;
         features13.synchronization2 = VK_TRUE;
-        const char* extensions[]{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+        const char* extensions[]{VK_KHR_SWAPCHAIN_EXTENSION_NAME
+#ifdef LIGHTHOUSE_IMGUI
+            , VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME
+#endif
+        };
         VkDeviceCreateInfo create{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
         create.pNext = &features13;
         create.queueCreateInfoCount = 1;
         create.pQueueCreateInfos = &queueCreate;
-        create.enabledExtensionCount = 1;
+        create.enabledExtensionCount = static_cast<std::uint32_t>(std::size(extensions));
         create.ppEnabledExtensionNames = extensions;
         Check(vkCreateDevice(physicalDevice, &create, nullptr, &device), "vkCreateDevice");
         vkGetDeviceQueue(device, queueFamily, 0, &queue);
@@ -273,6 +280,9 @@ struct VulkanRenderDevice::Impl {
         VkSemaphoreCreateInfo semaphore{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         Check(vkCreateSemaphore(device, &semaphore, nullptr, &imageAvailable), "vkCreateSemaphore");
         Check(vkCreateSemaphore(device, &semaphore, nullptr, &renderFinished), "vkCreateSemaphore");
+#ifdef LIGHTHOUSE_IMGUI
+        Check(vkCreateSemaphore(device, &semaphore, nullptr, &imguiFinished), "vkCreateSemaphore");
+#endif
         VkFenceCreateInfo fence{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
         fence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
         Check(vkCreateFence(device, &fence, nullptr, &inFlight), "vkCreateFence");
@@ -300,6 +310,11 @@ struct VulkanRenderDevice::Impl {
     VkCommandPool commandPool{};
     VkCommandBuffer commandBuffer{};
     VkSemaphore imageAvailable{}, renderFinished{};
+#ifdef LIGHTHOUSE_IMGUI
+    VkSemaphore imguiFinished{};
+    bool imguiSubmitted{};
+    bool imguiInitialized{};
+#endif
     VkFence inFlight{};
     std::uint32_t nextBuffer{1}, nextShader{1}, nextPipeline{1};
     std::unordered_map<BufferHandle, BufferResource, HandleHash<BufferHandle>> buffers;
@@ -312,6 +327,9 @@ VulkanRenderDevice::~VulkanRenderDevice() {
     if (!m_impl) return;
     auto& d = *m_impl;
     if (d.device) vkDeviceWaitIdle(d.device);
+#ifdef LIGHTHOUSE_IMGUI
+    if (d.imguiInitialized) ImGui_ImplVulkan_Shutdown();
+#endif
     for (const auto& [_, pipeline] : d.pipelines) { vkDestroyPipeline(d.device, pipeline.pipeline, nullptr); vkDestroyPipelineLayout(d.device, pipeline.layout, nullptr); }
     for (const auto& [_, shader] : d.shaders) vkDestroyShaderModule(d.device, shader, nullptr);
     for (const auto& [_, buffer] : d.buffers) { vkDestroyBuffer(d.device, buffer.buffer, nullptr); vkFreeMemory(d.device, buffer.memory, nullptr); }
@@ -322,6 +340,9 @@ VulkanRenderDevice::~VulkanRenderDevice() {
     }
     if (d.inFlight) vkDestroyFence(d.device, d.inFlight, nullptr);
     if (d.renderFinished) vkDestroySemaphore(d.device, d.renderFinished, nullptr);
+#ifdef LIGHTHOUSE_IMGUI
+    if (d.imguiFinished) vkDestroySemaphore(d.device, d.imguiFinished, nullptr);
+#endif
     if (d.imageAvailable) vkDestroySemaphore(d.device, d.imageAvailable, nullptr);
     if (d.commandPool) vkDestroyCommandPool(d.device, d.commandPool, nullptr);
     if (d.device) vkDestroyDevice(d.device, nullptr);
@@ -545,6 +566,9 @@ ImageViewHandle VulkanRenderDevice::AcquireSwapchainImage(SwapchainHandle handle
     d.acquiredSwapchain = handle;
     d.acquiredImageIndex = imageIndex;
     d.submitted = false;
+#ifdef LIGHTHOUSE_IMGUI
+    d.imguiSubmitted = false;
+#endif
     return {0x80000000u | handle.index, handle.generation, DeviceId()};
 }
 
@@ -657,7 +681,11 @@ void VulkanRenderDevice::Present(SwapchainHandle handle) {
     const auto imageIndex = d.acquiredImageIndex;
     VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     present.waitSemaphoreCount = 1;
+#ifdef LIGHTHOUSE_IMGUI
+    present.pWaitSemaphores = d.imguiSubmitted ? &d.imguiFinished : &d.renderFinished;
+#else
     present.pWaitSemaphores = &d.renderFinished;
+#endif
     present.swapchainCount = 1;
     present.pSwapchains = &target->swapchain;
     present.pImageIndices = &imageIndex;
@@ -667,6 +695,112 @@ void VulkanRenderDevice::Present(SwapchainHandle handle) {
     target->imageInitialized[imageIndex] = true;
     d.acquiredSwapchain = {};
     d.submitted = false;
+#ifdef LIGHTHOUSE_IMGUI
+    d.imguiSubmitted = false;
+#endif
 }
+
+#ifdef LIGHTHOUSE_IMGUI
+void VulkanRenderDevice::InitializeImGui(SwapchainHandle swapchain) {
+    auto& d = *m_impl;
+    auto* target = d.FindSwapchain(swapchain);
+    if (!target || !d.device) throw std::invalid_argument("ImGui requires a valid Vulkan swapchain");
+    if (d.imguiInitialized) return;
+    VkFormat colorFormat = target->surfaceFormat.format;
+    ImGui_ImplVulkan_InitInfo info{};
+    info.ApiVersion = VK_API_VERSION_1_4;
+    info.Instance = d.instance;
+    info.PhysicalDevice = d.physicalDevice;
+    info.Device = d.device;
+    info.QueueFamily = d.queueFamily;
+    info.Queue = d.queue;
+    info.DescriptorPoolSize = 1000;
+    info.MinImageCount = std::max<std::uint32_t>(2, static_cast<std::uint32_t>(target->images.size()));
+    info.ImageCount = static_cast<std::uint32_t>(target->images.size());
+    info.UseDynamicRendering = true;
+    info.PipelineInfoMain.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    info.PipelineInfoMain.PipelineRenderingCreateInfo.pColorAttachmentFormats = &colorFormat;
+    info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    if (!ImGui_ImplVulkan_Init(&info))
+        throw std::runtime_error("Failed to initialize the ImGui Vulkan renderer");
+    d.imguiInitialized = true;
+}
+
+void VulkanRenderDevice::ShutdownImGui() noexcept {
+    auto& d = *m_impl;
+    if (!d.imguiInitialized) return;
+    if (d.device) vkDeviceWaitIdle(d.device);
+    ImGui_ImplVulkan_Shutdown();
+    d.imguiInitialized = false;
+}
+
+void VulkanRenderDevice::NewImGuiFrame() { ImGui_ImplVulkan_NewFrame(); }
+
+void VulkanRenderDevice::RenderImGui(SwapchainHandle swapchain, ImageViewHandle image, ImDrawData* drawData) {
+    auto& d = *m_impl;
+    auto* target = d.FindSwapchain(swapchain);
+    if (!target || d.acquiredSwapchain != swapchain || !d.submitted || d.imguiSubmitted || !d.imguiInitialized)
+        throw std::logic_error("Vulkan ImGui requires submitted work on the acquired image");
+    if (image != ImageViewHandle{0x80000000u | swapchain.index, swapchain.generation, DeviceId()})
+        throw std::logic_error("Vulkan ImGui received the wrong image view");
+
+    Check(vkWaitForFences(d.device, 1, &d.inFlight, VK_TRUE, UINT64_MAX), "vkWaitForFences");
+    Check(vkResetCommandBuffer(d.commandBuffer, 0), "vkResetCommandBuffer");
+    VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    Check(vkBeginCommandBuffer(d.commandBuffer, &begin), "vkBeginCommandBuffer");
+
+    const auto index = d.acquiredImageIndex;
+    VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier.image = target->images[index];
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.imageMemoryBarrierCount = 1;
+    dependency.pImageMemoryBarriers = &barrier;
+    vkCmdPipelineBarrier2(d.commandBuffer, &dependency);
+
+    VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    color.imageView = target->views[index];
+    color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    rendering.renderArea.extent = target->extent;
+    rendering.layerCount = 1;
+    rendering.colorAttachmentCount = 1;
+    rendering.pColorAttachments = &color;
+    vkCmdBeginRendering(d.commandBuffer, &rendering);
+    ImGui_ImplVulkan_RenderDrawData(drawData, d.commandBuffer);
+    vkCmdEndRendering(d.commandBuffer);
+
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
+    barrier.dstAccessMask = 0;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    vkCmdPipelineBarrier2(d.commandBuffer, &dependency);
+    Check(vkEndCommandBuffer(d.commandBuffer), "vkEndCommandBuffer");
+
+    constexpr VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submit.waitSemaphoreCount = 1;
+    submit.pWaitSemaphores = &d.renderFinished;
+    submit.pWaitDstStageMask = &waitStage;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &d.commandBuffer;
+    submit.signalSemaphoreCount = 1;
+    submit.pSignalSemaphores = &d.imguiFinished;
+    Check(vkResetFences(d.device, 1, &d.inFlight), "vkResetFences");
+    Check(vkQueueSubmit(d.queue, 1, &submit, d.inFlight), "vkQueueSubmit");
+    d.imguiSubmitted = true;
+}
+#endif
 
 } // namespace Lighthouse

@@ -1,6 +1,9 @@
 #pragma once
 
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
+#ifdef LIGHTHOUSE_IMGUI
+#include <Lighthouse/Engine/Rendering/IImGuiDevice.hpp>
+#endif
 
 #include <memory>
 
@@ -9,7 +12,11 @@ namespace Lighthouse {
 class Window;
 
 // Minimal Vulkan 1.4 swapchain renderer using dynamic rendering.
-class VulkanRenderDevice final : public IRenderDevice {
+class VulkanRenderDevice final : public IRenderDevice
+#ifdef LIGHTHOUSE_IMGUI
+    , public IImGuiDevice
+#endif
+{
 public:
     explicit VulkanRenderDevice(const DeviceConfig& config = {});
     ~VulkanRenderDevice() override;
@@ -36,6 +43,13 @@ public:
     bool IsValid(SwapchainHandle) const noexcept override;
     void Submit(const IRenderCommandList&) override;
     void Present(SwapchainHandle swapchain) override;
+#ifdef LIGHTHOUSE_IMGUI
+    ImGuiPlatformBackend PlatformBackend() const noexcept override { return ImGuiPlatformBackend::Vulkan; }
+    void InitializeImGui(SwapchainHandle swapchain) override;
+    void ShutdownImGui() noexcept override;
+    void NewImGuiFrame() override;
+    void RenderImGui(SwapchainHandle swapchain, ImageViewHandle image, ImDrawData* drawData) override;
+#endif
 
 private:
     struct Impl;

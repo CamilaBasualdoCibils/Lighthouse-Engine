@@ -4,6 +4,9 @@
 #include <cstdint>
 
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
+#ifdef LIGHTHOUSE_IMGUI
+#include <Lighthouse/Engine/Rendering/IImGuiDevice.hpp>
+#endif
 
 namespace Lighthouse {
 
@@ -11,7 +14,11 @@ namespace Detail { struct OpenGLDeviceGroup; }
 class OpenGLCommandList;
 
 // OpenGL 4.5 device backed by an EGL context and window surface.
-class OpenGLRenderDevice final : public IRenderDevice {
+class OpenGLRenderDevice final : public IRenderDevice
+#ifdef LIGHTHOUSE_IMGUI
+    , public IImGuiDevice
+#endif
+{
 public:
     explicit OpenGLRenderDevice(std::shared_ptr<Detail::OpenGLDeviceGroup> group,
                                 const DeviceConfig& config = {});
@@ -40,6 +47,12 @@ public:
     void Submit(const IRenderCommandList& commandList) override;
     void Present(SwapchainHandle swapchain) override;
     ImageViewHandle AcquiredImageView() const noexcept;
+#ifdef LIGHTHOUSE_IMGUI
+    void InitializeImGui(SwapchainHandle swapchain) override;
+    void ShutdownImGui() noexcept override;
+    void NewImGuiFrame() override;
+    void RenderImGui(SwapchainHandle swapchain, ImageViewHandle image, ImDrawData* drawData) override;
+#endif
 
 private:
     friend class OpenGLCommandList;

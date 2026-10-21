@@ -1,6 +1,7 @@
 {
     "cmake.configureArgs": [
-        "-DLIGHTHOUSE_BUILD_EXAMPLES=ON"
+        "-DLIGHTHOUSE_BUILD_EXAMPLES=ON",
+        "-DLIGHTHOUSE_IMGUI=ON"
     ],
     "C_Cpp.intelliSenseEngine": "disabled"
 }

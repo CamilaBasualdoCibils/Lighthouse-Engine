@@ -17,6 +17,9 @@
 #include <unordered_map>
 #include <variant>
 #include <vector>
+#ifdef LIGHTHOUSE_IMGUI
+#include <imgui_impl_opengl3.h>
+#endif
 
 namespace Lighthouse {
 namespace {
@@ -289,5 +292,34 @@ void OpenGLRenderDevice::Present(SwapchainHandle swapchain) {
     m_impl->acquired.reset();
     m_impl->frameReady = false;
 }
+
+#ifdef LIGHTHOUSE_IMGUI
+void OpenGLRenderDevice::InitializeImGui(SwapchainHandle swapchain) {
+    const auto* target = m_impl->FindSwapchain(swapchain);
+    if (!target) throw std::invalid_argument("ImGui requires a valid OpenGL swapchain");
+    m_impl->ActivateContext(target);
+    if (!ImGui_ImplOpenGL3_Init("#version 450 core"))
+        throw std::runtime_error("Failed to initialize the ImGui OpenGL renderer");
+}
+
+void OpenGLRenderDevice::ShutdownImGui() noexcept {
+    try {
+        if (m_impl->acquired) m_impl->ActivateContext(m_impl->FindSwapchain(*m_impl->acquired));
+        else m_impl->ActivateContext();
+        ImGui_ImplOpenGL3_Shutdown();
+    } catch (...) {}
+}
+
+void OpenGLRenderDevice::NewImGuiFrame() { ImGui_ImplOpenGL3_NewFrame(); }
+
+void OpenGLRenderDevice::RenderImGui(SwapchainHandle swapchain, ImageViewHandle image, ImDrawData* drawData) {
+    if (m_impl->acquired != swapchain || image != AcquiredImageView())
+        throw std::logic_error("ImGui must render to the acquired OpenGL image");
+    m_impl->ActivateContext(m_impl->FindSwapchain(swapchain));
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    ImGui_ImplOpenGL3_RenderDrawData(drawData);
+    m_impl->frameReady = true;
+}
+#endif
 
 } // namespace Lighthouse

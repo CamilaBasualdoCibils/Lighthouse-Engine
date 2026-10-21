@@ -4,4 +4,5 @@ add_executable(LighthouseWindowSceneExample
 target_link_libraries(LighthouseWindowSceneExample PRIVATE
     Lighthouse::Engine
     Lighthouse::OpenGLBackend
+    Lighthouse::VulkanBackend
 )

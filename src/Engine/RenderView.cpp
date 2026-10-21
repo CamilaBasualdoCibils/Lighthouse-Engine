@@ -81,18 +81,17 @@ GraphImageHandle IRenderView::BuildGraph(ViewBuildContext& ctx) {
     return BuildTechniques(ctx);
 }
 
-GraphImageHandle IRenderView::BuildTechniques(ViewBuildContext& ctx, GraphImageHandle target) {
+GraphImageHandle IRenderView::BuildTechniques(ViewBuildContext& ctx) {
     const auto order = TechniqueOrder();
     if (FinalOutput() && !GetTechnique(FinalOutput()))
         throw std::logic_error("Final output technique is invalid");
     if (!order.empty() && !FinalOutput())
         throw std::logic_error("Final output technique is not selected");
 
-    std::unordered_map<std::uint32_t, std::any> outputs;
     std::optional<GraphImageHandle> finalImage;
     for (auto handle : order) {
-        TechniqueBuildContext techniqueContext(ctx.graph, *this, outputs, handle,
-            &TechniqueDependencies(handle), &ViewDependencies(), target);
+        TechniqueBuildContext techniqueContext(ctx.graph, *this, handle,
+            &TechniqueDependencies(handle), &ViewDependencies());
         GetTechnique(handle)->BuildGraph(techniqueContext);
         if (handle == FinalOutput()) finalImage = techniqueContext.FinalImage();
     }
@@ -102,6 +101,7 @@ GraphImageHandle IRenderView::BuildTechniques(ViewBuildContext& ctx, GraphImageH
 }
 
 GraphImageHandle WindowView::BuildGraph(ViewBuildContext& ctx) {
+    m_swapchainImage = InvalidGraphImage;
     if (!m_windows || !m_windows->GetWindow(window))
         throw std::logic_error("Window view targets an invalid window");
     if (!ctx.device) throw std::logic_error("Window view requires a render device");
@@ -125,7 +125,8 @@ GraphImageHandle WindowView::BuildGraph(ViewBuildContext& ctx) {
                                 IRenderDevice& device) {
             resources.get<ImportedRenderGraphImage>(data.image).view = device.AcquireSwapchainImage(swapchain);
         });
-    const auto image = BuildTechniques(ctx, acquired.image);
+    m_swapchainImage = acquired.image;
+    const auto image = BuildTechniques(ctx);
     if (image == InvalidGraphImage)
         throw std::logic_error("Window view technique did not produce an output image");
     ctx.graph.AddPass("present window",
@@ -140,10 +141,11 @@ GraphImageHandle WindowView::BuildGraph(ViewBuildContext& ctx) {
 }
 
 GraphImageHandle ExportView::BuildGraph(ViewBuildContext& ctx) {
+    m_exportImage = InvalidGraphImage;
     if (!image || !imageView)
         throw std::logic_error("Export view targets an invalid external image");
-    const auto target = ctx.graph.Import<ImportedRenderGraphImage>("export image", description, {image, imageView});
-    const auto finalImage = BuildTechniques(ctx, target);
+    m_exportImage = ctx.graph.Import<ImportedRenderGraphImage>("export image", description, {image, imageView});
+    const auto finalImage = BuildTechniques(ctx);
     if (finalImage != InvalidGraphImage)
         ctx.graph.AddPass("retain export image",
             [finalImage](RenderGraph::Builder& builder, auto&) {

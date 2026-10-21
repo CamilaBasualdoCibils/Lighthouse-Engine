@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(LIGHTHOUSE_ENABLE_TRACY "Enable Tracy profiling instead of mimalloc" OFF)
+option(LIGHTHOUSE_IMGUI "Enable Dear ImGui and ImPlot rendering techniques" OFF)
 include(CTest)
 
 add_subdirectory(extern/OpenPeripherals)

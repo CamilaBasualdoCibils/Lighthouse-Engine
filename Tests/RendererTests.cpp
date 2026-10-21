@@ -9,30 +9,34 @@ namespace {
 using namespace Lighthouse;
 
 struct TestTechnique final : IRenderTechnique {
-    using Outputs = int;
+    struct PassData { int value{}; };
     explicit TestTechnique(std::vector<int>& order, int id) : order(order), id(id) {}
     void BuildGraph(TechniqueBuildContext& ctx) override {
         order.push_back(id);
-        ctx.SetOutputs(id);
+        m_passData.value = id;
     }
+    const PassData& GetPassData() const noexcept { return m_passData; }
     std::vector<int>& order;
     int id;
+    PassData m_passData;
 };
 struct Consumer final : IRenderTechnique {
-    using Outputs = int;
+    struct PassData { int value{}; };
     Consumer(TechniqueRef<TestTechnique> source, int& result) : source(source), result(result) {}
     void BuildGraph(TechniqueBuildContext& ctx) override {
-        result = ctx.GetOutputs(source);
-        ctx.SetOutputs(result + 1);
+        result = ctx.GetTechnique(source).GetPassData().value;
+        m_passData.value = result + 1;
     }
+    const PassData& GetPassData() const noexcept { return m_passData; }
     TechniqueRef<TestTechnique> source;
     int& result;
+    PassData m_passData;
 };
 struct ImagePassTechnique final : IRenderTechnique {
-    using Outputs = GraphImageHandle;
+    struct PassData { GraphImageHandle image{InvalidGraphImage}; };
     explicit ImagePassTechnique(int& builds, int& executions)
         : builds(builds), executions(executions) {}
-    struct PassData { GraphImageHandle image{}; };
+    const PassData& GetPassData() const noexcept { return m_passData; }
     void BuildGraph(TechniqueBuildContext& ctx) override {
         ++builds;
         const std::string passName = "test image";
@@ -47,16 +51,17 @@ struct ImagePassTechnique final : IRenderTechnique {
             [counter = &executions](const PassData&, FrameGraphPassResources&, IRenderDevice&) {
                 ++*counter;
             });
-        ctx.SetFinalImage(data.image);
-        ctx.SetOutputs(data.image);
+        m_passData = data;
+        ctx.SetFinalImage(m_passData.image);
     }
     int& builds;
     int& executions;
+    PassData m_passData;
 };
 struct TypedImageConsumerTechnique final : IRenderTechnique {
     explicit TypedImageConsumerTechnique(TechniqueRef<ImagePassTechnique> source) : source(source) {}
     void BuildGraph(TechniqueBuildContext& ctx) override {
-        ctx.SetFinalImage(ctx.GetOutputs(source));
+        ctx.SetFinalImage(ctx.GetTechnique(source).GetPassData().image);
     }
     TechniqueRef<ImagePassTechnique> source;
 };
@@ -82,7 +87,7 @@ struct ExportWriterTechnique final : IRenderTechnique {
     struct PassData { GraphImageHandle image; };
     void BuildGraph(TechniqueBuildContext& ctx) override {
         const auto& pass = ctx.graph.AddPass<PassData>("write export image",
-            [target = ctx.TargetImage()](RenderGraph::Builder& builder, PassData& data) {
+            [target = ctx.GetParentViewAs<ExportView>()->GetExportImage()](RenderGraph::Builder& builder, PassData& data) {
                 data.image = builder.Write(target);
             },
             [expected = expected, writes = &writes](const PassData& data,
@@ -172,10 +177,10 @@ TEST(RendererTests, TechniqueReferencesInvalidateAndDependenciesSort) {
     EXPECT_EQ(sorted[0], source.handle);
     EXPECT_EQ(sorted[1], consumer.handle);
     RenderGraph graph;
-    std::unordered_map<std::uint32_t, std::any> outputs;
-    TechniqueBuildContext first(graph, view, outputs, source.handle);
+    TechniqueBuildContext first(graph, view, source.handle);
     view.GetTechnique(source)->BuildGraph(first);
-    TechniqueBuildContext second(graph, view, outputs, consumer.handle);
+    const std::vector<RenderTechniqueHandle> dependencies{source.handle};
+    TechniqueBuildContext second(graph, view, consumer.handle, &dependencies);
     view.GetTechnique(consumer)->BuildGraph(second);
     EXPECT_EQ(result, 7);
     EXPECT_TRUE(view.RemoveTechnique(source));
@@ -266,7 +271,7 @@ TEST(RendererTests, CompileBuildsSharedTransientDependencyOnceAndReturnedGraphEx
     EXPECT_NO_THROW(graph.Execute(device));
     EXPECT_EQ(executions, 2);
 }
-TEST(RendererTests, CompileResolvesTypedTechniqueOutputsBeforeConsumers) {
+TEST(RendererTests, CompileResolvesTechniquePassDataBeforeConsumers) {
     Renderer renderer;
     Scene scene{"Typed outputs"};
     auto desc = MakeView(scene.Handle());

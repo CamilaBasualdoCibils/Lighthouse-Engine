@@ -16,6 +16,13 @@ add_library(LighthouseEngine
     MeshManager.cpp
     EngineRuntime.cpp
 )
+if(LIGHTHOUSE_IMGUI)
+    find_package(imgui CONFIG REQUIRED)
+    find_package(implot CONFIG REQUIRED)
+    target_sources(LighthouseEngine PRIVATE ImGuiTechniques.cpp)
+    target_link_libraries(LighthouseEngine PUBLIC imgui::imgui implot::implot)
+    target_compile_definitions(LighthouseEngine PUBLIC LIGHTHOUSE_IMGUI=1)
+endif()
 add_library(Lighthouse::Engine ALIAS LighthouseEngine)
 
 target_include_directories(LighthouseEngine PUBLIC
