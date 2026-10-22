@@ -8,6 +8,7 @@ add_library(LighthouseEngine
     Application.cpp
     Entity.cpp
     Scene.cpp
+    WorldRenderer.cpp
     GraphicsBackend.cpp
     WindowManager.cpp
     RenderView.cpp

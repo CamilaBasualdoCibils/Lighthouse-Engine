@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 
@@ -52,3 +53,15 @@ private:
 };
 
 } // namespace Lighthouse
+
+namespace std {
+template <typename Tag>
+struct hash<Lighthouse::Handle<Tag>> {
+    std::size_t operator()(const Lighthouse::Handle<Tag>& handle) const noexcept {
+        std::size_t value = std::hash<std::uint32_t>{}(handle.index);
+        value ^= std::hash<std::uint32_t>{}(handle.generation) + 0x9e3779b9u + (value << 6) + (value >> 2);
+        value ^= std::hash<std::uint64_t>{}(handle.owner) + 0x9e3779b9u + (value << 6) + (value >> 2);
+        return value;
+    }
+};
+} // namespace std

@@ -10,6 +10,8 @@
 
 namespace Lighthouse {
 
+class WorldRenderer;
+
 class Scene {
 public:
     explicit Scene(std::string name);
@@ -22,6 +24,8 @@ public:
     const std::string& Name() const;
 
 private:
+    friend class WorldRenderer;
+
     std::shared_ptr<entt::registry> m_registry;
     Entity m_activeCamera;
     std::string m_name;
