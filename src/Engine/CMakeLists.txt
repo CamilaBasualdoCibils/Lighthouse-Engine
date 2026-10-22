@@ -1,4 +1,5 @@
 find_package(EnTT CONFIG REQUIRED)
+find_package(glslang CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WAYLAND_EGL REQUIRED IMPORTED_TARGET wayland-egl)
@@ -18,6 +19,8 @@ add_library(LighthouseEngine
     RenderMesh.cpp
     AssetMesh.cpp
     GLTFLoader.cpp
+    Shader.cpp
+    ShaderCompiler.cpp
     RenderMeshManager.cpp
     EngineRuntime.cpp
 )
@@ -35,6 +38,7 @@ target_include_directories(LighthouseEngine PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 target_include_directories(LighthouseEngine PRIVATE ${TINYGLTF_INCLUDE_DIR})
-target_link_libraries(LighthouseEngine PUBLIC EnTT::EnTT glm::glm fg::FrameGraph PRIVATE glfw PkgConfig::WAYLAND_EGL)
+target_link_libraries(LighthouseEngine PUBLIC EnTT::EnTT glm::glm fg::FrameGraph PRIVATE glfw PkgConfig::WAYLAND_EGL
+    glslang::glslang glslang::SPIRV glslang::glslang-default-resource-limits)
 target_compile_features(LighthouseEngine PUBLIC cxx_std_23)
 

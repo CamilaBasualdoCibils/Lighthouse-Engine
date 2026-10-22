@@ -59,6 +59,8 @@
     "gtest",
     "freetype",
     "rpclib",
-    "tinygltf"
+    "tinygltf",
+    "glslang",
+    "spirv-cross"
   ]
 }

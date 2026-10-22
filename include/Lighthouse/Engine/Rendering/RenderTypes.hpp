@@ -118,6 +118,7 @@ struct BufferMetadata {
 
 struct ShaderModuleDesc {
     ShaderStageFlags stage{ShaderStageFlags::Vertex};
+    // Canonical Vulkan-targeted SPIR-V, provided as bytes for backend compatibility.
     std::span<const std::byte> bytecode{};
     std::string_view entryPoint{"main"};
 };

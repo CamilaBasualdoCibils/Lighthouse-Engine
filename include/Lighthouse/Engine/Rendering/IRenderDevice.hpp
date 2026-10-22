@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include <Lighthouse/Engine/Rendering/IRenderCommandList.hpp>
+#include <Lighthouse/Engine/Assets/Shader.hpp>
 
 namespace Lighthouse {
 
@@ -32,6 +33,12 @@ public:
     virtual std::optional<BufferMetadata> GetBufferDesc(BufferHandle handle) const noexcept = 0;
     virtual bool IsValid(BufferHandle handle) const noexcept = 0;
     virtual ShaderModuleHandle CreateShaderModule(const ShaderModuleDesc& description) = 0;
+    ShaderModuleHandle CreateShaderModule(const Shader& shader) {
+        const auto words = shader.GetSPIRV();
+        const auto bytes = std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(words.data()), words.size_bytes());
+        return CreateShaderModule(ShaderModuleDesc{shader.GetStage(), bytes, shader.GetEntryPoint()});
+    }
     virtual GraphicsPipelineHandle CreatePipeline(const GraphicsPipelineDesc& description) = 0;
     virtual std::unique_ptr<IRenderCommandList> CreateCommandList(QueueType type) = 0;
 

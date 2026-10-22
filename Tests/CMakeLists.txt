@@ -5,8 +5,10 @@ add_executable(LighthouseEngineTests
     GraphicsBackendTests.cpp
     WindowManagerTests.cpp
     RendererTests.cpp
+    WorldRendererTests.cpp
     MeshTests.cpp
     GLTFTests.cpp
+    ShaderTests.cpp
 )
 target_link_libraries(LighthouseEngineTests PRIVATE
     Lighthouse::Engine

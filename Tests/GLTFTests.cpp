@@ -18,17 +18,17 @@ void CheckMeshes(const GLTFAsset& asset) {
     ASSERT_EQ(triangle.vertices.size(), 3u);
     EXPECT_EQ(triangle.indices, (std::vector<std::uint32_t>{0, 1, 2}));
     EXPECT_EQ(triangle.topology, PrimitiveTopology::TriangleList);
-    EXPECT_EQ(triangle.vertices[1].position.x, 1.0f);
-    EXPECT_EQ(triangle.vertices[1].normal.z, 1.0f);
-    EXPECT_EQ(triangle.vertices[1].uv.x, 1.0f);
+    EXPECT_FLOAT_EQ(triangle.vertices[1].position.x, 1.0f);
+    EXPECT_FLOAT_EQ(triangle.vertices[1].normal.z, 1.0f);
+    EXPECT_FLOAT_EQ(triangle.vertices[1].uv.x, 1.0f);
     EXPECT_EQ(triangle.ToRenderMesh().indexCount, 3u);
 
     const auto& points = asset.meshes[1];
     EXPECT_EQ(points.topology, PrimitiveTopology::PointList);
     EXPECT_TRUE(points.indices.empty());
     ASSERT_EQ(points.vertices.size(), 3u);
-    EXPECT_EQ(points.vertices[2].position.y, 1.0f);
-    EXPECT_EQ(points.vertices[2].normal.z, 0.0f);
+    EXPECT_FLOAT_EQ(points.vertices[2].position.y, 1.0f);
+    EXPECT_FLOAT_EQ(points.vertices[2].normal.z, 0.0f);
     EXPECT_EQ(points.ToRenderMesh().vertexCount, 3u);
 
     EXPECT_TRUE(asset.materials.empty());

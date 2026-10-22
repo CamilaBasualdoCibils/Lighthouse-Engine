@@ -8,7 +8,7 @@
 #include <entt/entt.hpp>
 
 namespace Lighthouse {
-
+using EntityID = entt::entity;
 class Entity {
 public:
     Entity() = default;
@@ -24,14 +24,15 @@ public:
 
     const std::string& Name() const;
     bool IsValid() const;
+    EntityID ID() const noexcept { return m_entity; }
 
 private:
     friend class Scene;
 
-    Entity(std::shared_ptr<entt::registry> registry, entt::entity entity, std::string name);
+    Entity(std::shared_ptr<entt::registry> registry, EntityID entity, std::string name);
 
     std::weak_ptr<entt::registry> m_registry;
-    entt::entity m_entity{entt::null};
+    EntityID m_entity{entt::null};
     std::string m_name;
 };
 

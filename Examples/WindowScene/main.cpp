@@ -17,7 +17,9 @@ public:
         : m_source(source) {}
     const PassData& GetPassData() const noexcept { return m_passData; }
     void BuildGraph(Lighthouse::TechniqueBuildContext& ctx) override {
+
         const auto target = ctx.GetTechnique(m_source).GetPassData().image;
+        
         if (target == Lighthouse::InvalidGraphImage)
             throw std::logic_error("Green clear requires an acquired image");
         const auto& pass = ctx.graph.AddPass<PassData>("clear window green",
@@ -49,6 +51,7 @@ private:
 class WindowSceneExample : public Lighthouse::Application {
 public:
     void OnStart() override {
+
         auto& scene = CreateScene("Main");
         auto camera = scene.CreateEntity("Camera");
         camera.Add<Lighthouse::Transform>();
@@ -65,10 +68,16 @@ public:
         Lighthouse::RenderViewDesc description;
         description.scene = scene.Handle();
         description.camera = Lighthouse::CameraSource{camera};
+        
         m_windowView = GetRenderer().CreateView<Lighthouse::WindowView>(windowHandle, description);
         auto* view = GetRenderer().GetView<Lighthouse::WindowView>(m_windowView);
+
+        //acquire swapchain image
         const auto acquire = view->AddTechnique<Lighthouse::AcquireSwapchainImageTechnique>();
+
+        //clear technique
         const auto clear = view->AddTechnique<GreenClearTechnique>(acquire);
+
 #ifdef LIGHTHOUSE_IMGUI
         m_imgui = std::make_shared<Lighthouse::ImGuiSession>(*GetWindowManager().GetWindow(windowHandle));
         const auto imgui = view->AddTechnique<Lighthouse::ImGuiTechnique>(
@@ -78,6 +87,7 @@ public:
         view->AddTechnique<Lighthouse::PresentSwapchainImageTechnique>(clear);
 #endif
         m_graph.emplace(GetRenderer().Compile({m_windowView}));
+
         std::cout << m_graph->Dot() << std::endl;
     }
 

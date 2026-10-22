@@ -1,8 +1,10 @@
 #include <Lighthouse/OpenGL/OpenGLRenderDevice.hpp>
+#include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
 #include "OpenGLDeviceGroup.hpp"
 #include "OpenGLCommandList.hpp"
 #include "OpenGLRenderDeviceImpl.hpp"
+#include "OpenGLShaderTranslator.hpp"
 
 #define GL_GLEXT_PROTOTYPES
 #include <GL/glcorearb.h>
@@ -13,6 +15,7 @@
 #include <stdexcept>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <variant>
@@ -45,6 +48,46 @@ GLenum ToGLImageFormat(ImageFormat format) {
     case ImageFormat::Undefined: break;
     }
     throw std::invalid_argument("Unsupported image format");
+}
+
+bool HasOpenGLSpirvSupport() {
+    const auto* versionText = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+    if (!versionText)
+        return false;
+    GLint major{}, minor{};
+    glGetIntegerv(GL_MAJOR_VERSION, &major);
+    glGetIntegerv(GL_MINOR_VERSION, &minor);
+    bool supported = major > 4 || (major == 4 && minor >= 6);
+    GLint extensionCount{};
+    glGetIntegerv(GL_NUM_EXTENSIONS, &extensionCount);
+    for (GLint i = 0; !supported && i < extensionCount; ++i) {
+        const auto* extension = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
+        supported = extension && std::string_view(extension) == "GL_ARB_gl_spirv";
+    }
+    if (!supported)
+        return false;
+    GLint formatCount{};
+    glGetIntegerv(GL_NUM_SHADER_BINARY_FORMATS, &formatCount);
+    std::vector<GLint> formats(static_cast<std::size_t>(std::max(formatCount, 0)));
+    if (!formats.empty())
+        glGetIntegerv(GL_SHADER_BINARY_FORMATS, formats.data());
+    return std::find(formats.begin(), formats.end(), GL_SHADER_BINARY_FORMAT_SPIR_V) != formats.end();
+}
+
+void CompileGLSL(GLuint shader, const std::string& source) {
+    const auto* data = source.c_str();
+    const auto length = static_cast<GLint>(source.size());
+    glShaderSource(shader, 1, &data, &length);
+    glCompileShader(shader);
+    GLint ok{};
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        GLint logSize{};
+        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logSize);
+        std::string log(static_cast<std::size_t>(std::max(logSize, 1)), '\0');
+        glGetShaderInfoLog(shader, logSize, nullptr, log.data());
+        throw std::runtime_error("OpenGL shader compilation failed: " + log);
+    }
 }
 
 GLenum ToGLImageType(ImageType type) {
@@ -214,14 +257,50 @@ bool OpenGLRenderDevice::IsValid(BufferHandle handle) const noexcept { return m_
 ShaderModuleHandle OpenGLRenderDevice::CreateShaderModule(const ShaderModuleDesc& desc) {
     m_impl->ActivateContext();
     const auto shader = glCreateShader(ToGLShaderStage(desc.stage));
-    const auto* source = reinterpret_cast<const GLchar*>(desc.bytecode.data());
-    const auto length = static_cast<GLint>(desc.bytecode.size_bytes());
-    glShaderSource(shader, 1, &source, &length); glCompileShader(shader);
-    GLint ok{}; glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        GLint size{}; glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &size);
-        std::string log(static_cast<std::size_t>(std::max(size, 1)), '\0'); glGetShaderInfoLog(shader, size, nullptr, log.data());
-        glDeleteShader(shader); throw std::runtime_error("OpenGL shader compilation failed: " + log);
+    try {
+        GLint uniformBuffers{}, storageBuffers{}, textureUnits{}, imageUnits{}, atomicCounterBuffers{};
+        glGetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS, &uniformBuffers);
+        glGetIntegerv(GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS, &storageBuffers);
+        glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &textureUnits);
+        glGetIntegerv(GL_MAX_IMAGE_UNITS, &imageUnits);
+        glGetIntegerv(GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, &atomicCounterBuffers);
+        if (desc.bytecode.empty() || desc.bytecode.size_bytes() % sizeof(std::uint32_t))
+            throw std::invalid_argument("Shader module input must contain SPIR-V words");
+        const auto words = std::span<const std::uint32_t>(
+            reinterpret_cast<const std::uint32_t*>(desc.bytecode.data()),
+            desc.bytecode.size_bytes() / sizeof(std::uint32_t));
+        const auto glsl = Detail::TranslateShaderToOpenGL(words, desc.stage, desc.entryPoint,
+            {static_cast<std::uint32_t>(std::max(uniformBuffers, 0)),
+             static_cast<std::uint32_t>(std::max(storageBuffers, 0)),
+             static_cast<std::uint32_t>(std::max(textureUnits, 0)),
+             static_cast<std::uint32_t>(std::max(imageUnits, 0)),
+             static_cast<std::uint32_t>(std::max(atomicCounterBuffers, 0))});
+        if (HasOpenGLSpirvSupport()) {
+            const auto spirv = ShaderCompiler::CompileOpenGL(glsl, desc.stage);
+            auto specialize = reinterpret_cast<PFNGLSPECIALIZESHADERPROC>(eglGetProcAddress("glSpecializeShader"));
+            if (!specialize)
+                specialize = reinterpret_cast<PFNGLSPECIALIZESHADERPROC>(eglGetProcAddress("glSpecializeShaderARB"));
+            if (!specialize)
+                throw std::runtime_error("OpenGL reports SPIR-V support but glSpecializeShader is unavailable");
+            glShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, spirv.data(),
+                           static_cast<GLsizei>(spirv.size() * sizeof(std::uint32_t)));
+            const std::string entryPoint{"main"};
+            specialize(shader, entryPoint.c_str(), 0, nullptr, nullptr);
+            GLint specialized{};
+            glGetShaderiv(shader, GL_COMPILE_STATUS, &specialized);
+            if (!specialized) {
+                GLint logSize{};
+                glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logSize);
+                std::string log(static_cast<std::size_t>(std::max(logSize, 1)), '\0');
+                glGetShaderInfoLog(shader, logSize, nullptr, log.data());
+                throw std::runtime_error("OpenGL SPIR-V specialization failed: " + log);
+            }
+        } else {
+            CompileGLSL(shader, glsl);
+        }
+    } catch (...) {
+        glDeleteShader(shader);
+        throw;
     }
     const auto handle = MakeHandle<ShaderModuleHandle>(m_impl->nextShader++, DeviceId()); m_impl->shaders.emplace(handle, shader); return handle;
 }

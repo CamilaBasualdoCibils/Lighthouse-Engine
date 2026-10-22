@@ -20,6 +20,7 @@ class OpenGLRenderDevice final : public IRenderDevice
 #endif
 {
 public:
+    using IRenderDevice::CreateShaderModule;
     explicit OpenGLRenderDevice(std::shared_ptr<Detail::OpenGLDeviceGroup> group,
                                 const DeviceConfig& config = {});
     ~OpenGLRenderDevice() override;

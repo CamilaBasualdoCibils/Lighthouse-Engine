@@ -5,10 +5,12 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <Lighthouse/Engine/Assets/Mesh.hpp>
 #include <Lighthouse/Engine/Core/Types.hpp>
+#include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 
 namespace Lighthouse {
 
@@ -54,5 +56,15 @@ template <typename AssetType>
 std::shared_ptr<AssetType> Load(const std::string& path);
 
 GLTFAsset LoadGLTF(const std::filesystem::path& path);
+std::string LoadText(const std::filesystem::path& path);
+
+struct ShaderLoadOptions {
+    std::optional<ShaderSourceLanguage> language;
+    std::optional<ShaderStage> stage;
+    std::string entryPoint{"main"};
+};
+
+Shader LoadShader(const std::filesystem::path& path, const ShaderLoadOptions& options = {});
+Shader LoadShader(std::string_view source, const ShaderCompileOptions& options);
 
 } // namespace Lighthouse::Assets

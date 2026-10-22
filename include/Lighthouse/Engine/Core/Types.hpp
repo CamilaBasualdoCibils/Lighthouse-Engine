@@ -1,5 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 namespace Lighthouse {
 
 using Vec2 = glm::vec2;

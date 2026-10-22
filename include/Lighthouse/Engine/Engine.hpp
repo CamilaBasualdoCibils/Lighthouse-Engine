@@ -17,6 +17,8 @@
 #include <Lighthouse/Engine/Scene/Transform.hpp>
 
 #include <Lighthouse/Engine/Assets/Assets.hpp>
+#include <Lighthouse/Engine/Assets/Shader.hpp>
+#include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 #include <Lighthouse/Engine/Assets/Material.hpp>
 #include <Lighthouse/Engine/Assets/Mesh.hpp>
 

@@ -1,7 +1,12 @@
 {
     "cmake.configureArgs": [
         "-DLIGHTHOUSE_BUILD_EXAMPLES=ON",
-        "-DLIGHTHOUSE_IMGUI=ON"
+        "-DLIGHTHOUSE_IMGUI=ON",
+        "-DOPENPERIPHERAL_BUILD_TESTS=OFF",
+        "-DOPENPERIPHERAL_BUILD_TOOLS=OFF",
+        "-DOPENPERIPHERAL_BUILD_EXAMPLES=OFF",
+        "-DVISR_BUILD_TESTS=OFF",
+        "-DVISR_BUILD_TOOLS=OFF"
     ],
     "C_Cpp.intelliSenseEngine": "disabled"
 }

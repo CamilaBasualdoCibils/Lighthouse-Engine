@@ -18,6 +18,7 @@ class VulkanRenderDevice final : public IRenderDevice
 #endif
 {
 public:
+    using IRenderDevice::CreateShaderModule;
     explicit VulkanRenderDevice(const DeviceConfig& config = {});
     ~VulkanRenderDevice() override;
     VulkanRenderDevice(const VulkanRenderDevice&) = delete;
