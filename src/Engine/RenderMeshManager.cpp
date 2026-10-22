@@ -1,4 +1,4 @@
-#include "MeshManager.hpp"
+#include "RenderMeshManager.hpp"
 
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 
@@ -23,7 +23,7 @@ std::uint64_t RequiredBytes(std::uint64_t offset, std::uint64_t count, std::uint
     return offset + count * stride;
 }
 
-void ValidateMeshDescription(const MeshDesc& desc, IRenderDevice* device) {
+void ValidateRenderMeshription(const RenderMesh& desc, IRenderDevice* device) {
     const bool hasBufferReferences = !desc.vertexBuffers.empty() ||
         (desc.indexBuffer && static_cast<bool>(desc.indexBuffer->buffer));
     if (hasBufferReferences && !device)
@@ -52,7 +52,7 @@ void ValidateMeshDescription(const MeshDesc& desc, IRenderDevice* device) {
     default: throw std::invalid_argument("Mesh has an unsupported primitive topology");
     }
 
-    std::unordered_map<std::uint32_t, const MeshVertexBufferBinding*> vertexBuffers;
+    std::unordered_map<std::uint32_t, const RenderMeshVertexBufferBinding*> vertexBuffers;
     for (const auto& binding : desc.vertexBuffers) {
         if (!binding.buffer) throw std::invalid_argument("Mesh vertex binding " + std::to_string(binding.binding) + " has an invalid buffer handle");
         if (!vertexBuffers.emplace(binding.binding, &binding).second)
@@ -64,7 +64,7 @@ void ValidateMeshDescription(const MeshDesc& desc, IRenderDevice* device) {
             throw std::invalid_argument("Referenced buffer for vertex binding " + std::to_string(binding.binding) + " lacks Vertex usage");
     }
 
-    std::unordered_map<std::uint32_t, const MeshVertexData*> vertexData;
+    std::unordered_map<std::uint32_t, const RenderMeshVertexData*> vertexData;
     for (const auto& data : desc.vertexData) {
         if (!vertexData.emplace(data.binding, &data).second)
             throw std::invalid_argument("Mesh contains duplicate CPU vertex data binding " + std::to_string(data.binding));
@@ -126,8 +126,8 @@ void ValidateMeshDescription(const MeshDesc& desc, IRenderDevice* device) {
 
 } // namespace
 
-MeshHandle MeshManager::Create(const MeshDesc& description, IRenderDevice* device) {
-    ValidateMeshDescription(description, device);
+RenderMeshHandle RenderMeshManager::Create(const RenderMesh& description, IRenderDevice* device) {
+    ValidateRenderMeshription(description, device);
     std::uint32_t index = 0;
     while (index < m_slots.size() && m_slots[index].value) ++index;
     if (index == m_slots.size()) m_slots.emplace_back();
@@ -135,7 +135,7 @@ MeshHandle MeshManager::Create(const MeshDesc& description, IRenderDevice* devic
     return {index, m_slots[index].generation};
 }
 
-bool MeshManager::Destroy(MeshHandle handle) {
+bool RenderMeshManager::Destroy(RenderMeshHandle handle) {
     if (!handle || handle.index >= m_slots.size()) return false;
     auto& slot = m_slots[handle.index];
     if (!slot.value || slot.generation != handle.generation) return false;
@@ -144,7 +144,7 @@ bool MeshManager::Destroy(MeshHandle handle) {
     return true;
 }
 
-bool MeshManager::IsValid(MeshHandle handle, IRenderDevice* device) const noexcept {
+bool RenderMeshManager::IsValid(RenderMeshHandle handle, IRenderDevice* device) const noexcept {
     if (!handle || handle.index >= m_slots.size()) return false;
     const auto& slot = m_slots[handle.index];
     if (!slot.value || slot.generation != handle.generation) return false;
@@ -160,16 +160,16 @@ bool MeshManager::IsValid(MeshHandle handle, IRenderDevice* device) const noexce
     return true;
 }
 
-const MeshDesc* MeshManager::GetDescription(MeshHandle handle, IRenderDevice* device) const noexcept {
+const RenderMesh* RenderMeshManager::GetDescription(RenderMeshHandle handle, IRenderDevice* device) const noexcept {
     if (!IsValid(handle, device)) return nullptr;
     return &m_slots[handle.index].value->description;
 }
 
-MeshUploadStatus MeshManager::GetUploadStatus(MeshHandle handle, IRenderDevice* device) const noexcept {
+RenderMeshUploadStatus RenderMeshManager::GetUploadStatus(RenderMeshHandle handle, IRenderDevice* device) const noexcept {
     const auto* description = GetDescription(handle, device);
-    if (!description) return MeshUploadStatus::Invalid;
+    if (!description) return RenderMeshUploadStatus::Invalid;
     return (!description->vertexData.empty() || description->hasIndexData)
-        ? MeshUploadStatus::UploadNotImplemented : MeshUploadStatus::Ready;
+        ? RenderMeshUploadStatus::UploadNotImplemented : RenderMeshUploadStatus::Ready;
 }
 
 } // namespace Lighthouse

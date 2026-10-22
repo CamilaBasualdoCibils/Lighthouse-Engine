@@ -3,6 +3,7 @@ find_package(glfw3 CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(WAYLAND_EGL REQUIRED IMPORTED_TARGET wayland-egl)
 find_package(glm CONFIG REQUIRED)
+find_path(TINYGLTF_INCLUDE_DIR NAMES tiny_gltf.h REQUIRED)
 add_library(LighthouseEngine
     Application.cpp
     Entity.cpp
@@ -13,8 +14,10 @@ add_library(LighthouseEngine
     SwapchainTechniques.cpp
     RenderGraph.cpp
     Renderer.cpp
-    Mesh.cpp
-    MeshManager.cpp
+    RenderMesh.cpp
+    AssetMesh.cpp
+    GLTFLoader.cpp
+    RenderMeshManager.cpp
     EngineRuntime.cpp
 )
 if(LIGHTHOUSE_IMGUI)
@@ -30,6 +33,7 @@ target_include_directories(LighthouseEngine PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
+target_include_directories(LighthouseEngine PRIVATE ${TINYGLTF_INCLUDE_DIR})
 target_link_libraries(LighthouseEngine PUBLIC EnTT::EnTT glm::glm fg::FrameGraph PRIVATE glfw PkgConfig::WAYLAND_EGL)
 target_compile_features(LighthouseEngine PUBLIC cxx_std_23)
 

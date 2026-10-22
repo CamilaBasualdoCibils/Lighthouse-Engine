@@ -1,4 +1,4 @@
-#include <Lighthouse/Engine/Rendering/Mesh.hpp>
+#include <Lighthouse/Engine/Rendering/RenderMesh.hpp>
 
 #include <algorithm>
 #include <limits>
@@ -26,61 +26,61 @@ std::uint32_t IndexFormatByteSize(IndexFormat format) {
     throw std::invalid_argument("Unknown index format");
 }
 
-MeshBuilder& MeshBuilder::Attribute(std::string semantic, VertexFormat format, std::uint32_t location,
+RenderMeshBuilder& RenderMeshBuilder::Attribute(std::string semantic, VertexFormat format, std::uint32_t location,
                                     std::uint32_t binding, std::uint32_t offset) {
     m_attributes.push_back({std::move(semantic), format, location, binding, offset});
     return *this;
 }
 
-MeshBuilder& MeshBuilder::VertexBuffer(BufferHandle buffer, std::uint32_t binding, std::uint64_t offset) {
+RenderMeshBuilder& RenderMeshBuilder::VertexBuffer(BufferHandle buffer, std::uint32_t binding, std::uint64_t offset) {
     m_vertexBuffers.push_back({buffer, offset, binding});
     return *this;
 }
 
-MeshBuilder& MeshBuilder::VertexStride(std::uint32_t stride, std::uint32_t binding) {
+RenderMeshBuilder& RenderMeshBuilder::VertexStride(std::uint32_t stride, std::uint32_t binding) {
     const auto it = std::find_if(m_bindings.begin(), m_bindings.end(), [binding](const auto& item) { return item.binding == binding; });
     if (it == m_bindings.end()) m_bindings.push_back({binding, stride, VertexInputRate::PerVertex});
     else it->stride = stride;
     return *this;
 }
 
-MeshBuilder& MeshBuilder::InputRate(VertexInputRate rate, std::uint32_t binding) {
+RenderMeshBuilder& RenderMeshBuilder::InputRate(VertexInputRate rate, std::uint32_t binding) {
     const auto it = std::find_if(m_bindings.begin(), m_bindings.end(), [binding](const auto& item) { return item.binding == binding; });
     if (it == m_bindings.end()) m_bindings.push_back({binding, 0, rate});
     else it->inputRate = rate;
     return *this;
 }
 
-MeshBuilder& MeshBuilder::IndexBuffer(BufferHandle buffer, IndexFormat format, std::uint64_t offset) {
+RenderMeshBuilder& RenderMeshBuilder::IndexBuffer(BufferHandle buffer, IndexFormat format, std::uint64_t offset) {
     if (m_indexBuffer) throw std::invalid_argument("A mesh can have only one index buffer");
-    m_indexBuffer = MeshIndexBufferBinding{buffer, offset, format};
+    m_indexBuffer = RenderMeshIndexBufferBinding{buffer, offset, format};
     return *this;
 }
 
-MeshBuilder& MeshBuilder::VertexData(std::span<const std::byte> bytes, std::uint32_t binding, MemoryDesc memory) {
+RenderMeshBuilder& RenderMeshBuilder::VertexData(std::span<const std::byte> bytes, std::uint32_t binding, MemoryDesc memory) {
     const auto it = std::find_if(m_vertexData.begin(), m_vertexData.end(), [binding](const auto& item) { return item.binding == binding; });
     if (it != m_vertexData.end()) throw std::invalid_argument("Vertex data was already supplied for this binding");
     m_vertexData.push_back({binding, {bytes.begin(), bytes.end()}, memory});
     return *this;
 }
 
-MeshBuilder& MeshBuilder::IndexData(std::span<const std::byte> bytes, IndexFormat format, MemoryDesc memory) {
+RenderMeshBuilder& RenderMeshBuilder::IndexData(std::span<const std::byte> bytes, IndexFormat format, MemoryDesc memory) {
     if (m_indexBuffer) throw std::invalid_argument("CPU index data cannot be combined with an external index buffer");
     if (m_hasIndexData) throw std::invalid_argument("CPU index data was already supplied");
     m_indexData.assign(bytes.begin(), bytes.end());
-    m_indexBuffer = MeshIndexBufferBinding{{}, 0, format};
+    m_indexBuffer = RenderMeshIndexBufferBinding{{}, 0, format};
     m_indexMemory = memory;
     m_hasIndexData = true;
     return *this;
 }
 
-MeshBuilder& MeshBuilder::Topology(PrimitiveTopology topology) { m_topology = topology; return *this; }
-MeshBuilder& MeshBuilder::VertexCount(std::uint32_t count) { m_vertexCount = count; return *this; }
-MeshBuilder& MeshBuilder::IndexCount(std::uint32_t count) { m_indexCount = count; return *this; }
-MeshBuilder& MeshBuilder::InstanceCount(std::uint32_t count) { m_instanceCount = count; return *this; }
+RenderMeshBuilder& RenderMeshBuilder::Topology(PrimitiveTopology topology) { m_topology = topology; return *this; }
+RenderMeshBuilder& RenderMeshBuilder::VertexCount(std::uint32_t count) { m_vertexCount = count; return *this; }
+RenderMeshBuilder& RenderMeshBuilder::IndexCount(std::uint32_t count) { m_indexCount = count; return *this; }
+RenderMeshBuilder& RenderMeshBuilder::InstanceCount(std::uint32_t count) { m_instanceCount = count; return *this; }
 
-MeshDesc MeshBuilder::Build() const {
-    MeshDesc result;
+RenderMesh RenderMeshBuilder::Build() const {
+    RenderMesh result;
     result.vertexBuffers = m_vertexBuffers;
     result.indexBuffer = m_indexBuffer;
     result.vertexData = m_vertexData;

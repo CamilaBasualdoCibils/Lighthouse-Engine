@@ -1,7 +1,7 @@
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 
-#include "MeshManager.hpp"
+#include "RenderMeshManager.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -12,7 +12,7 @@
 namespace Lighthouse {
 
 Renderer::Renderer(WindowManager* windows)
-    : m_windows(windows), m_meshManager(std::make_unique<MeshManager>()) {
+    : m_windows(windows), m_renderMeshManager(std::make_unique<RenderMeshManager>()) {
     static std::atomic<std::uint64_t> nextOwner{1};
     m_ownerId = nextOwner.fetch_add(1, std::memory_order_relaxed);
 }
@@ -31,11 +31,11 @@ void Renderer::ResetRenderDevice() noexcept {
     }
     m_device.reset();
 }
-MeshHandle Renderer::CreateMesh(const MeshDesc& description) { return m_meshManager->Create(description, m_device.get()); }
-bool Renderer::DestroyMesh(MeshHandle mesh) { return m_meshManager->Destroy(mesh); }
-const MeshDesc* Renderer::GetMeshDesc(MeshHandle mesh) const noexcept { return m_meshManager->GetDescription(mesh, m_device.get()); }
-bool Renderer::IsValid(MeshHandle mesh) const noexcept { return m_meshManager->IsValid(mesh, m_device.get()); }
-MeshUploadStatus Renderer::GetMeshUploadStatus(MeshHandle mesh) const noexcept { return m_meshManager->GetUploadStatus(mesh, m_device.get()); }
+RenderMeshHandle Renderer::CreateRenderMesh(const RenderMesh& description) { return m_renderMeshManager->Create(description, m_device.get()); }
+bool Renderer::DestroyRenderMesh(RenderMeshHandle mesh) { return m_renderMeshManager->Destroy(mesh); }
+const RenderMesh* Renderer::GetRenderMesh(RenderMeshHandle mesh) const noexcept { return m_renderMeshManager->GetDescription(mesh, m_device.get()); }
+bool Renderer::IsValid(RenderMeshHandle mesh) const noexcept { return m_renderMeshManager->IsValid(mesh, m_device.get()); }
+RenderMeshUploadStatus Renderer::GetRenderMeshUploadStatus(RenderMeshHandle mesh) const noexcept { return m_renderMeshManager->GetUploadStatus(mesh, m_device.get()); }
 
 IRenderView* Renderer::GetView(RenderViewHandle handle) noexcept {
     if (!handle || handle.owner != m_ownerId || handle.index >= m_views.size()) return nullptr;

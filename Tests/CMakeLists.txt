@@ -6,6 +6,7 @@ add_executable(LighthouseEngineTests
     WindowManagerTests.cpp
     RendererTests.cpp
     MeshTests.cpp
+    GLTFTests.cpp
 )
 target_link_libraries(LighthouseEngineTests PRIVATE
     Lighthouse::Engine

@@ -10,13 +10,13 @@
 #include <vector>
 
 #include <Lighthouse/Engine/Rendering/RenderView.hpp>
-#include <Lighthouse/Engine/Rendering/Mesh.hpp>
+#include <Lighthouse/Engine/Rendering/RenderMesh.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
 
 namespace Lighthouse {
 
 class IRenderDevice;
-class MeshManager;
+class RenderMeshManager;
 using OutputViewHandle = RenderViewHandle;
 
 class Renderer {
@@ -30,12 +30,12 @@ public:
     IRenderDevice* GetRenderDevice() noexcept { return m_device.get(); }
     const IRenderDevice* GetRenderDevice() const noexcept { return m_device.get(); }
 
-    MeshHandle CreateMesh(const MeshDesc& description);
-    MeshHandle CreateMesh(const MeshBuilder& builder) { return CreateMesh(builder.Build()); }
-    bool DestroyMesh(MeshHandle mesh);
-    const MeshDesc* GetMeshDesc(MeshHandle mesh) const noexcept;
-    bool IsValid(MeshHandle mesh) const noexcept;
-    MeshUploadStatus GetMeshUploadStatus(MeshHandle mesh) const noexcept;
+    RenderMeshHandle CreateRenderMesh(const RenderMesh& description);
+    RenderMeshHandle CreateRenderMesh(const RenderMeshBuilder& builder) { return CreateRenderMesh(builder.Build()); }
+    bool DestroyRenderMesh(RenderMeshHandle mesh);
+    const RenderMesh* GetRenderMesh(RenderMeshHandle mesh) const noexcept;
+    bool IsValid(RenderMeshHandle mesh) const noexcept;
+    RenderMeshUploadStatus GetRenderMeshUploadStatus(RenderMeshHandle mesh) const noexcept;
 
     template <typename T, typename... Args> RenderViewHandle CreateView(Args&&... args) {
         static_assert(std::is_base_of_v<IRenderView, T>);
@@ -69,7 +69,7 @@ private:
     std::uint64_t m_ownerId{};
     std::vector<Slot> m_views;
     std::unique_ptr<IRenderDevice> m_device;
-    std::unique_ptr<MeshManager> m_meshManager;
+    std::unique_ptr<RenderMeshManager> m_renderMeshManager;
 };
 
 } // namespace Lighthouse
