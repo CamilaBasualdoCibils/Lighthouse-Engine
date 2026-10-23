@@ -29,6 +29,24 @@ void main() { color = texture(inputTexture, vec2(0.5)); }
     EXPECT_NE(glsl.find("binding = 0"), std::string::npos);
 }
 
+TEST(OpenGLShaderTests, RemapsEqualBindingsFromDifferentDescriptorSets) {
+    constexpr std::string_view source = R"(#version 450
+layout(set = 0, binding = 0) uniform FrameData { mat4 view; } frameData;
+layout(set = 1, binding = 0) uniform ObjectData { mat4 model; } objectData;
+void main() { gl_Position = frameData.view * objectData.model * vec4(0.0, 0.0, 0.0, 1.0); }
+)";
+    const auto shader = ShaderCompiler::Compile(source,
+        {ShaderSourceLanguage::GLSL, ShaderStage::Vertex, "main"});
+    DescriptorBindingLocations locations{
+        {{0, 0}, {DescriptorType::UniformBuffer, 0, 1}},
+        {{1, 0}, {DescriptorType::UniformBuffer, 1, 1}}
+    };
+    const auto glsl = Detail::TranslateShaderToOpenGL(shader.GetSPIRV(), shader.GetStage(),
+        shader.GetEntryPoint(), {16, 16, 32, 8}, &locations);
+    EXPECT_NE(glsl.find("binding = 0"), std::string::npos);
+    EXPECT_NE(glsl.find("binding = 1"), std::string::npos);
+}
+
 TEST(OpenGLShaderTests, CreatesAndDestroysModulesAndLinksGraphicsPipeline) {
     WindowManager windows;
     WindowHandle windowHandle;

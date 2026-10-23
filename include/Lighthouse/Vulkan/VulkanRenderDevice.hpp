@@ -29,7 +29,16 @@ public:
     BufferHandle CreateBuffer(const BufferDesc&) override;
     std::optional<BufferMetadata> GetBufferDesc(BufferHandle) const noexcept override;
     bool IsValid(BufferHandle) const noexcept override;
+    bool IsValid(DescriptorSetLayoutHandle) const noexcept override;
+    bool IsValid(DescriptorSetHandle) const noexcept override;
+    bool IsValid(PipelineLayoutHandle) const noexcept override;
+    bool IsValid(SamplerHandle) const noexcept override;
     ShaderModuleHandle CreateShaderModule(const ShaderModuleDesc&) override;
+    DescriptorSetLayoutHandle CreateDescriptorSetLayout(const DescriptorSetLayoutDesc&) override;
+    DescriptorSetHandle CreateDescriptorSet(const DescriptorSetDesc&) override;
+    PipelineLayoutHandle CreatePipelineLayout(const PipelineLayoutDesc&) override;
+    SamplerHandle CreateSampler(const SamplerDesc&) override;
+    void UpdateDescriptorSet(DescriptorSetHandle, std::span<const DescriptorWrite>) override;
     GraphicsPipelineHandle CreatePipeline(const GraphicsPipelineDesc&) override;
     std::unique_ptr<IRenderCommandList> CreateCommandList(QueueType) override;
     void Destroy(ImageHandle) override;
@@ -37,6 +46,10 @@ public:
     void Destroy(BufferHandle) override;
     void Destroy(GraphicsPipelineHandle) override;
     void Destroy(ShaderModuleHandle) override;
+    void Destroy(DescriptorSetLayoutHandle) override;
+    void Destroy(DescriptorSetHandle) override;
+    void Destroy(PipelineLayoutHandle) override;
+    void Destroy(SamplerHandle) override;
     RenderCapabilities GetCapabilities() const override;
     SwapchainHandle CreateSwapchain(Window& window, const SwapchainConfig& config) override;
     ImageViewHandle AcquireSwapchainImage(SwapchainHandle) override;

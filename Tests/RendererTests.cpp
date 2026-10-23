@@ -117,7 +117,16 @@ public:
     BufferHandle CreateBuffer(const BufferDesc&) override { return {}; }
     std::optional<BufferMetadata> GetBufferDesc(BufferHandle) const noexcept override { return {}; }
     bool IsValid(BufferHandle) const noexcept override { return false; }
+    bool IsValid(DescriptorSetLayoutHandle) const noexcept override { return false; }
+    bool IsValid(DescriptorSetHandle) const noexcept override { return false; }
+    bool IsValid(PipelineLayoutHandle) const noexcept override { return false; }
+    bool IsValid(SamplerHandle) const noexcept override { return false; }
     ShaderModuleHandle CreateShaderModule(const ShaderModuleDesc&) override { return {}; }
+    DescriptorSetLayoutHandle CreateDescriptorSetLayout(const DescriptorSetLayoutDesc&) override { return {}; }
+    DescriptorSetHandle CreateDescriptorSet(const DescriptorSetDesc&) override { return {}; }
+    PipelineLayoutHandle CreatePipelineLayout(const PipelineLayoutDesc&) override { return {}; }
+    SamplerHandle CreateSampler(const SamplerDesc&) override { return {}; }
+    void UpdateDescriptorSet(DescriptorSetHandle, std::span<const DescriptorWrite>) override {}
     GraphicsPipelineHandle CreatePipeline(const GraphicsPipelineDesc&) override { return {}; }
     std::unique_ptr<IRenderCommandList> CreateCommandList(QueueType) override { return {}; }
     void Destroy(ImageHandle) override {}
@@ -125,6 +134,10 @@ public:
     void Destroy(BufferHandle) override {}
     void Destroy(GraphicsPipelineHandle) override {}
     void Destroy(ShaderModuleHandle) override {}
+    void Destroy(DescriptorSetLayoutHandle) override {}
+    void Destroy(DescriptorSetHandle) override {}
+    void Destroy(PipelineLayoutHandle) override {}
+    void Destroy(SamplerHandle) override {}
     RenderCapabilities GetCapabilities() const override { return {}; }
     void Submit(const IRenderCommandList&) override {}
     void Present(SwapchainHandle) override {}

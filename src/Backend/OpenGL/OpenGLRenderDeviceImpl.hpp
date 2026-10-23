@@ -10,6 +10,7 @@
 #include <optional>
 #include <unordered_map>
 #include <vector>
+#include <map>
 
 namespace Lighthouse {
 
@@ -28,6 +29,8 @@ struct OpenGLRenderDevice::Impl {
     };
     struct SwapchainSlot { std::uint32_t generation{1}; std::unique_ptr<Swapchain> value; };
     struct BufferResource { GLuint id{}; BufferMetadata metadata; };
+    struct ImageResource { GLuint id{}; ImageUsage usage{ImageUsage::None}; };
+    struct ImageViewResource { GLuint id{}; ImageHandle image; };
 
     const Swapchain* FindSwapchain(SwapchainHandle handle) const noexcept {
         if (!handle || handle.owner != owner || handle.index >= swapchains.size()) return nullptr;
@@ -54,16 +57,29 @@ struct OpenGLRenderDevice::Impl {
     std::optional<SwapchainHandle> acquired;
     bool frameReady{};
     std::uint32_t nextImage{1}, nextView{1}, nextBuffer{1}, nextShader{1}, nextPipeline{1};
-    std::unordered_map<ImageHandle, GLuint, OpenGLHandleHash<ImageHandle>> images;
-    std::unordered_map<ImageViewHandle, GLuint, OpenGLHandleHash<ImageViewHandle>> views;
+    std::uint32_t nextSetLayout{1}, nextSet{1}, nextPipelineLayout{1}, nextSampler{1};
+    std::unordered_map<ImageHandle, ImageResource, OpenGLHandleHash<ImageHandle>> images;
+    std::unordered_map<ImageViewHandle, ImageViewResource, OpenGLHandleHash<ImageViewHandle>> views;
     std::unordered_map<BufferHandle, BufferResource, OpenGLHandleHash<BufferHandle>> buffers;
-    std::unordered_map<ShaderModuleHandle, GLuint, OpenGLHandleHash<ShaderModuleHandle>> shaders;
+    struct Shader { ShaderStageFlags stage{}; std::string entryPoint; std::vector<std::uint32_t> words; };
+    std::unordered_map<ShaderModuleHandle, Shader, OpenGLHandleHash<ShaderModuleHandle>> shaders;
+    struct DescriptorSetLayout { std::map<std::uint32_t, DescriptorBindingDesc> bindings; };
+    std::unordered_map<DescriptorSetLayoutHandle, DescriptorSetLayout, OpenGLHandleHash<DescriptorSetLayoutHandle>> setLayouts;
+    using StoredResource = std::variant<std::monostate, DescriptorBufferInfo, DescriptorImageInfo>;
+    struct DescriptorSet { DescriptorSetLayoutHandle layout; std::map<std::uint32_t, std::vector<StoredResource>> resources; };
+    std::unordered_map<DescriptorSetHandle, DescriptorSet, OpenGLHandleHash<DescriptorSetHandle>> sets;
+    struct PipelineLayout { std::vector<DescriptorSetLayoutHandle> sets; DescriptorBindingLocations locations; };
+    std::unordered_map<PipelineLayoutHandle, PipelineLayout, OpenGLHandleHash<PipelineLayoutHandle>> pipelineLayouts;
+    std::unordered_map<SamplerHandle, GLuint, OpenGLHandleHash<SamplerHandle>> samplers;
     struct Pipeline {
         GLuint program{};
         VertexLayout layout;
+        PipelineLayoutHandle pipelineLayout;
         std::unordered_map<SwapchainHandle, GLuint, OpenGLHandleHash<SwapchainHandle>> vaos;
     };
     std::unordered_map<GraphicsPipelineHandle, Pipeline, OpenGLHandleHash<GraphicsPipelineHandle>> pipelines;
+    std::optional<GraphicsPipelineHandle> activePipeline;
+    std::map<std::uint32_t, DescriptorSetHandle> boundSets;
 };
 
 } // namespace Lighthouse

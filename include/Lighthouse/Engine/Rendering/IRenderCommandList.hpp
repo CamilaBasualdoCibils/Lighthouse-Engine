@@ -13,6 +13,8 @@ public:
     virtual void BeginRendering(const RenderPassDesc& description) = 0;
     virtual void EndRendering() = 0;
     virtual void BindPipeline(GraphicsPipelineHandle pipeline) = 0;
+    // Descriptor contents are resolved when the recorded command list is submitted.
+    virtual void BindDescriptorSet(std::uint32_t setIndex, DescriptorSetHandle set) = 0;
     virtual void BindVertexBuffer(BufferHandle buffer, std::uint32_t stride) = 0;
     virtual void BindIndexBuffer(BufferHandle buffer) = 0;
     virtual void BindTexture(std::uint32_t slot, ImageHandle image) = 0;

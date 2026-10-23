@@ -22,6 +22,11 @@ public:
         GraphicsPipelineHandle handle;
         void Execute(OpenGLRenderDevice* device) const;
     };
+    struct BindDescriptorSetCommand {
+        std::uint32_t setIndex;
+        DescriptorSetHandle handle;
+        void Execute(OpenGLRenderDevice* device) const;
+    };
     struct BindVertexBufferCommand {
         BufferHandle handle;
         std::uint32_t stride;
@@ -50,6 +55,7 @@ public:
         void Execute(OpenGLRenderDevice* device) const;
     };
     using Command = std::variant<BeginRenderCommand, EndRenderCommand, BindPipelineCommand,
+        BindDescriptorSetCommand,
         BindVertexBufferCommand, BindIndexBufferCommand, BindTextureCommand,
         DrawCommand, DrawIndexedCommand, DispatchCommand>;
 
@@ -57,6 +63,9 @@ public:
     void BeginRendering(const RenderPassDesc& desc) override { m_commands.emplace_back(BeginRenderCommand{desc}); }
     void EndRendering() override { m_commands.emplace_back(EndRenderCommand{}); }
     void BindPipeline(GraphicsPipelineHandle handle) override { m_commands.emplace_back(BindPipelineCommand{handle}); }
+    void BindDescriptorSet(std::uint32_t setIndex, DescriptorSetHandle handle) override {
+        m_commands.emplace_back(BindDescriptorSetCommand{setIndex, handle});
+    }
     void BindVertexBuffer(BufferHandle handle, std::uint32_t stride) override { m_commands.emplace_back(BindVertexBufferCommand{handle, stride}); }
     void BindIndexBuffer(BufferHandle handle) override { m_commands.emplace_back(BindIndexBufferCommand{handle}); }
     void BindTexture(std::uint32_t slot, ImageHandle handle) override { m_commands.emplace_back(BindTextureCommand{slot, handle}); }

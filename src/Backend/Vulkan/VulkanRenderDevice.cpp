@@ -443,6 +443,30 @@ std::optional<BufferMetadata> VulkanRenderDevice::GetBufferDesc(BufferHandle han
     return it->second.metadata;
 }
 bool VulkanRenderDevice::IsValid(BufferHandle handle) const noexcept { return m_impl->buffers.contains(handle); }
+bool VulkanRenderDevice::IsValid(DescriptorSetLayoutHandle) const noexcept { return false; }
+bool VulkanRenderDevice::IsValid(DescriptorSetHandle) const noexcept { return false; }
+bool VulkanRenderDevice::IsValid(PipelineLayoutHandle) const noexcept { return false; }
+bool VulkanRenderDevice::IsValid(SamplerHandle) const noexcept { return false; }
+
+DescriptorSetLayoutHandle VulkanRenderDevice::CreateDescriptorSetLayout(const DescriptorSetLayoutDesc&) {
+    throw std::logic_error("Vulkan descriptor set layouts are not implemented");
+}
+DescriptorSetHandle VulkanRenderDevice::CreateDescriptorSet(const DescriptorSetDesc&) {
+    throw std::logic_error("Vulkan descriptor sets are not implemented");
+}
+PipelineLayoutHandle VulkanRenderDevice::CreatePipelineLayout(const PipelineLayoutDesc&) {
+    throw std::logic_error("Vulkan pipeline layouts are not implemented");
+}
+SamplerHandle VulkanRenderDevice::CreateSampler(const SamplerDesc&) {
+    throw std::logic_error("Vulkan samplers are not implemented");
+}
+void VulkanRenderDevice::UpdateDescriptorSet(DescriptorSetHandle, std::span<const DescriptorWrite>) {
+    throw std::logic_error("Vulkan descriptor updates are not implemented");
+}
+void VulkanRenderDevice::Destroy(DescriptorSetLayoutHandle) {}
+void VulkanRenderDevice::Destroy(DescriptorSetHandle) {}
+void VulkanRenderDevice::Destroy(PipelineLayoutHandle) {}
+void VulkanRenderDevice::Destroy(SamplerHandle) {}
 
 ShaderModuleHandle VulkanRenderDevice::CreateShaderModule(const ShaderModuleDesc& desc) {
     if (desc.bytecode.empty() || desc.bytecode.size_bytes() % sizeof(std::uint32_t))
@@ -630,6 +654,8 @@ void VulkanRenderDevice::Submit(const IRenderCommandList& list) {
             if (rendering) { vkCmdEndRendering(d.commandBuffer); rendering = false; }
         } else if constexpr (std::is_same_v<T, VulkanCommandList::BindPipelineCmd>) {
             vkCmdBindPipeline(d.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, d.pipelines.at(c.handle).pipeline);
+        } else if constexpr (std::is_same_v<T, VulkanCommandList::BindDescriptorSetCmd>) {
+            throw std::logic_error("Vulkan descriptor set binding is not implemented");
         } else if constexpr (std::is_same_v<T, VulkanCommandList::BindVertexCmd>) {
             const VkBuffer buffer = d.buffers.at(c.handle).buffer;
             constexpr VkDeviceSize offset = 0;

@@ -2,7 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <map>
 #include <span>
+#include <utility>
+#include <variant>
 #include <string_view>
 #include <string>
 #include <vector>
@@ -28,7 +32,13 @@ enum class BufferUsage : std::uint32_t {
     None = 0, Vertex = 1 << 0, Index = 1 << 1, Uniform = 1 << 2, Storage = 1 << 3,
     TransferSrc = 1 << 4, TransferDst = 1 << 5, Indirect = 1 << 6
 };
-enum class ShaderStageFlags : std::uint32_t { Vertex, Fragment, Compute };
+enum class ShaderStageFlags : std::uint32_t { Vertex = 1u << 0, Fragment = 1u << 1, Compute = 1u << 2 };
+constexpr ShaderStageFlags operator|(ShaderStageFlags left, ShaderStageFlags right) noexcept {
+    return static_cast<ShaderStageFlags>(static_cast<std::uint32_t>(left) | static_cast<std::uint32_t>(right));
+}
+constexpr ShaderStageFlags operator&(ShaderStageFlags left, ShaderStageFlags right) noexcept {
+    return static_cast<ShaderStageFlags>(static_cast<std::uint32_t>(left) & static_cast<std::uint32_t>(right));
+}
 enum class PrimitiveTopology : std::uint32_t {
     PointList, LineList, LineStrip, TriangleList, TriangleStrip,
     Points = PointList, Lines = LineList, Triangles = TriangleList
@@ -79,6 +89,72 @@ using ImageViewHandle = Handle<ImageViewTag>;
 using BufferHandle = Handle<BufferTag>;
 using ShaderModuleHandle = Handle<ShaderModuleTag>;
 using GraphicsPipelineHandle = Handle<GraphicsPipelineTag>;
+
+enum class DescriptorType : std::uint32_t { UniformBuffer, StorageBuffer, CombinedImageSampler };
+
+struct DescriptorBindingDesc {
+    std::uint32_t binding{};
+    DescriptorType type{DescriptorType::UniformBuffer};
+    std::uint32_t count{1};
+    ShaderStageFlags stages{ShaderStageFlags::Vertex};
+};
+
+struct DescriptorSetLayoutDesc {
+    std::vector<DescriptorBindingDesc> bindings;
+};
+
+struct DescriptorSetDesc {
+    DescriptorSetLayoutHandle layout;
+};
+
+inline constexpr std::uint64_t WholeBuffer = std::numeric_limits<std::uint64_t>::max();
+
+struct DescriptorBufferInfo {
+    BufferHandle buffer;
+    std::uint64_t offset{};
+    std::uint64_t range{WholeBuffer};
+};
+
+struct DescriptorImageInfo {
+    ImageViewHandle image;
+    SamplerHandle sampler;
+};
+
+using DescriptorResource = std::variant<DescriptorBufferInfo, DescriptorImageInfo>;
+
+struct DescriptorWrite {
+    std::uint32_t binding{};
+    std::uint32_t arrayElement{};
+    DescriptorResource resource;
+};
+
+enum class SamplerFilter : std::uint32_t { Nearest, Linear };
+enum class SamplerMipmapFilter : std::uint32_t { None, Nearest, Linear };
+enum class SamplerAddressMode : std::uint32_t { Repeat, MirroredRepeat, ClampToEdge, ClampToBorder };
+
+struct SamplerDesc {
+    SamplerFilter minification{SamplerFilter::Linear};
+    SamplerFilter magnification{SamplerFilter::Linear};
+    SamplerMipmapFilter mipmap{SamplerMipmapFilter::None};
+    SamplerAddressMode addressU{SamplerAddressMode::Repeat};
+    SamplerAddressMode addressV{SamplerAddressMode::Repeat};
+    SamplerAddressMode addressW{SamplerAddressMode::Repeat};
+    bool anisotropy{};
+    float maxAnisotropy{1.0f};
+};
+
+struct PipelineLayoutDesc {
+    std::vector<DescriptorSetLayoutHandle> sets;
+};
+
+struct PipelineLayoutLocation {
+    DescriptorType type{};
+    std::uint32_t bindingPoint{};
+    std::uint32_t count{};
+    ShaderStageFlags stages{ShaderStageFlags::Vertex | ShaderStageFlags::Fragment | ShaderStageFlags::Compute};
+};
+
+using DescriptorBindingLocations = std::map<std::pair<std::uint32_t, std::uint32_t>, PipelineLayoutLocation>;
 
 struct ImageDesc {
     std::uint32_t width{1};
@@ -149,6 +225,7 @@ struct GraphicsPipelineDesc {
     std::vector<ImageFormat> colorFormats;
     ImageFormat depthFormat{ImageFormat::Undefined};
     std::uint32_t sampleCount{1};
+    PipelineLayoutHandle layout;
 };
 
 struct RenderPassDesc {
