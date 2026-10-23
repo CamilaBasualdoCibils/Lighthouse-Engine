@@ -1,7 +1,12 @@
 #pragma once
 
+#include <Lighthouse/Engine/Assets/Shader.hpp>
+
 namespace Lighthouse {
 
-class Material;
+struct Material {
+    Shader vertexShader;
+    Shader fragmentShader;
+};
 
 } // namespace Lighthouse

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <Lighthouse/Engine/Assets/Mesh.hpp>
+#include <Lighthouse/Engine/Assets/Material.hpp>
 #include <Lighthouse/Engine/Core/Types.hpp>
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 
@@ -66,5 +67,6 @@ struct ShaderLoadOptions {
 
 Shader LoadShader(const std::filesystem::path& path, const ShaderLoadOptions& options = {});
 Shader LoadShader(std::string_view source, const ShaderCompileOptions& options);
+Material LoadMaterial(const std::filesystem::path& path, std::string_view name);
 
 } // namespace Lighthouse::Assets

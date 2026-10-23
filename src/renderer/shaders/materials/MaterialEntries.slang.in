@@ -1,0 +1,57 @@
+import LighthouseMaterial;
+import @LIGHTHOUSE_WRAPPER_MODULE@;
+import @LIGHTHOUSE_USER_MODULE@;
+
+struct VertexInput
+{
+    float3 position : POSITION;
+};
+
+struct VertexOutput
+{
+    float4 position : SV_Position;
+    float3 worldPosition : TEXCOORD0;
+    float3 normal : TEXCOORD1;
+    float2 uv : TEXCOORD2;
+};
+
+struct FragmentOutput
+{
+    float4 color : SV_Target0;
+};
+
+typealias SelectedMaterial = @LIGHTHOUSE_SELECTED_WRAPPER@<@LIGHTHOUSE_SELECTED_TYPE@>;
+
+[shader("vertex")]
+VertexOutput LighthouseVertex(VertexInput input)
+{
+    SelectedMaterial material = SelectedMaterial();
+    VertexData vertex;
+    vertex.position = input.position;
+    vertex.normal = float3(0.0, 0.0, 1.0);
+    vertex.uv = float2(0.0, 0.0);
+    material.vertex(vertex);
+
+    VertexOutput output;
+    output.position = float4(vertex.position, 1.0);
+    output.worldPosition = vertex.position;
+    output.normal = vertex.normal;
+    output.uv = vertex.uv;
+    return output;
+}
+
+[shader("fragment")]
+FragmentOutput LighthouseFragment(VertexOutput input)
+{
+    SelectedMaterial material = SelectedMaterial();
+    FragmentData fragment;
+    fragment.position = input.worldPosition;
+    fragment.normal = input.normal;
+    fragment.uv = input.uv;
+    Surface surface = material.fragment(fragment);
+    FragmentOutput output;
+    float diffuse = 0.25 + 0.75 * max(dot(normalize(fragment.normal), normalize(float3(0.4, 0.8, 0.6))), 0.0);
+    float specular = (1.0 - surface.roughness) * surface.metallic * diffuse;
+    output.color = float4(surface.albedo * diffuse + specular.xxx, 1.0);
+    return output;
+}

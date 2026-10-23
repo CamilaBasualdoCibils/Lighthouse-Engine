@@ -1,0 +1,11 @@
+#pragma once
+
+#include <string_view>
+
+namespace Lighthouse::Detail {
+inline constexpr std::string_view MaterialContract = R"LMAT(@LIGHTHOUSE_MATERIAL_SOURCE@)LMAT";
+inline constexpr std::string_view LitMaterial = R"LLIT(@LIGHTHOUSE_LIT_SOURCE@)LLIT";
+inline constexpr std::string_view UnlitMaterial = R"LULIT(@LIGHTHOUSE_UNLIT_SOURCE@)LULIT";
+inline constexpr std::string_view LitEntryTemplate = R"LELIT(@LIGHTHOUSE_LIT_ENTRY_SOURCE@)LELIT";
+inline constexpr std::string_view UnlitEntryTemplate = R"LEULIT(@LIGHTHOUSE_UNLIT_ENTRY_SOURCE@)LEULIT";
+} // namespace Lighthouse::Detail
