@@ -47,8 +47,18 @@ public:
     virtual ~IRenderTechnique() = default;
     virtual void BuildGraph(TechniqueBuildContext& context) = 0;
 };
+template <typename Data>
+class TRenderTechnique :public IRenderTechnique
+{
+   Data& GetPassData() noexcept { return m_passData; }
+    const Data& GetPassData() const noexcept { return m_passData; }
 
-template <typename Data> class LambdaTechnique final : public IRenderTechnique {
+    protected:
+    void SetPassData(const Data& data) { m_passData = data; }
+    private:
+        Data m_passData{};
+};
+template <typename Data> class LambdaTechnique final : public TRenderTechnique<Data> {
 public:
     using Setup = std::function<void(Data&, TechniqueBuildContext&)>;
     using Execute = std::function<void(const Data&, TechniqueExecuteContext&)>;
@@ -56,8 +66,6 @@ public:
     LambdaTechnique(Setup setup, Execute execute)
         : m_setup(std::move(setup)), m_execute(std::move(execute)) {}
 
-    Data& GetPassData() noexcept { return m_passData; }
-    const Data& GetPassData() const noexcept { return m_passData; }
 
     void BuildGraph(TechniqueBuildContext& ctx) override {
         const auto& pass = ctx.graph.AddPass<Data>("lambda technique",
@@ -70,13 +78,12 @@ public:
                 TechniqueExecuteContext executeContext{resources, device};
                 execute(data, executeContext);
             });
-        m_passData = pass;
+        this->SetPassData(pass);
     }
 
 private:
     Setup m_setup;
     Execute m_execute;
-    Data m_passData{};
 };
 
 } // namespace Lighthouse

@@ -76,17 +76,20 @@ public:
 };
 
 // Adapter for attaching a renderer pipeline to an existing render view.
-class WorldRenderTechnique final : public IRenderTechnique {
+struct WorldRenderPassData {
+    RenderGraphResource output;
+};
+class WorldRenderTechnique final : public TRenderTechnique<WorldRenderPassData> {
 public:
-    WorldRenderTechnique(WorldRenderer& renderer, RenderScene scene,
+    WorldRenderTechnique(WorldRenderer& renderer, RenderScene* scene,
                          RenderGraphResource output)
-        : m_renderer(renderer), m_scene(std::move(scene)), m_output(output) {}
+        : m_renderer(renderer), m_scene(scene), m_output(output) {}
     void BuildGraph(TechniqueBuildContext& context) override {
-        m_renderer.BuildGraph(context.graph, m_scene, m_output);
+        m_renderer.BuildGraph(context.graph, *m_scene, m_output);
     }
 private:
     WorldRenderer& m_renderer;
-    RenderScene m_scene;
+    RenderScene* m_scene;
     RenderGraphResource m_output;
 };
 
