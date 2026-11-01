@@ -34,7 +34,7 @@ struct Consumer final : IRenderTechnique {
     PassData m_passData;
 };
 struct ImagePassTechnique final : IRenderTechnique {
-    struct PassData { GraphImageHandle image{InvalidGraphImage}; };
+    struct PassData { RenderGraphResource image{InvalidGraphImage}; };
     explicit ImagePassTechnique(int& builds, int& executions)
         : builds(builds), executions(executions) {}
     const PassData& GetPassData() const noexcept { return m_passData; }
@@ -59,13 +59,13 @@ struct ImagePassTechnique final : IRenderTechnique {
     PassData m_passData;
 };
 struct TypedImageConsumerTechnique final : IRenderTechnique {
-    TypedImageConsumerTechnique(TechniqueRef<ImagePassTechnique> source, GraphImageHandle& observed)
+    TypedImageConsumerTechnique(TechniqueRef<ImagePassTechnique> source, RenderGraphResource& observed)
         : source(source), observed(observed) {}
     void BuildGraph(TechniqueBuildContext& ctx) override {
         observed = ctx.GetTechnique(source).GetPassData().image;
     }
     TechniqueRef<ImagePassTechnique> source;
-    GraphImageHandle& observed;
+    RenderGraphResource& observed;
 };
 struct ViewBuildCounterTechnique final : IRenderTechnique {
     explicit ViewBuildCounterTechnique(int& builds) : builds(builds) {}
@@ -81,7 +81,7 @@ struct CountingTechnique final : IRenderTechnique {
 };
 struct ExportWriterTechnique final : IRenderTechnique {
     explicit ExportWriterTechnique(ImageViewHandle expected, int& writes) : expected(expected), writes(writes) {}
-    struct PassData { GraphImageHandle image; };
+    struct PassData { RenderGraphResource image; };
     void BuildGraph(TechniqueBuildContext& ctx) override {
         const auto& pass = ctx.graph.AddPass<PassData>("write export image",
             [target = ctx.GetParentViewAs<ExportView>()->GetExportImage()](RenderGraph::Builder& builder, PassData& data) {
@@ -254,7 +254,7 @@ TEST(RendererTests, LambdaTechniqueBuildsAndExecutesWithItsPassData) {
     auto handle = renderer.CreateView<ExportView>(ImageHandle{4, 1}, imageView,
         ImageDesc{}, MakeView(scene.Handle()));
     auto* view = renderer.GetView<ExportView>(handle);
-    struct Data { GraphImageHandle image{InvalidGraphImage}; };
+    struct Data { RenderGraphResource image{InvalidGraphImage}; };
     int executions{};
     Data& data = view->AddLambdaTechnique<Data>(
         [](Data& pass, TechniqueBuildContext& ctx) {
@@ -308,7 +308,7 @@ TEST(RendererTests, CompileResolvesTechniquePassDataBeforeConsumers) {
     auto* view = renderer.GetView(source);
     int builds{}, executions{};
     auto producer = view->AddTechnique<ImagePassTechnique>(builds, executions);
-    GraphImageHandle observed = InvalidGraphImage;
+    RenderGraphResource observed = InvalidGraphImage;
     view->AddTechnique<TypedImageConsumerTechnique>(producer, observed);
     auto output = renderer.CreateView<ExportView>(ImageHandle{1, 1}, ImageViewHandle{1, 1}, ImageDesc{}, desc);
     renderer.GetView(output)->AddViewDependency(source);

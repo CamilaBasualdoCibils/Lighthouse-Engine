@@ -19,7 +19,7 @@ class WindowManager;
 class IRenderDevice;
 struct ViewBuildContext {
     RenderGraph& graph;
-    IRenderDevice* device{};
+    IRenderDevice& device;
 };
 
 struct ExplicitCamera {
@@ -78,13 +78,11 @@ public:
         slot.value = std::move(value);
         return {{index, slot.generation, m_ownerId}};
     }
-    template <typename Data, typename Setup, typename Execute>
-    Data& AddLambdaTechnique(Setup&& setup, Execute&& execute) {
-        auto ref = AddTechnique<LambdaTechnique<Data>>(
-            typename LambdaTechnique<Data>::Setup(std::forward<Setup>(setup)),
-            typename LambdaTechnique<Data>::Execute(std::forward<Execute>(execute)));
-        return GetTechnique(ref)->GetPassData();
-    }
+   template <typename Build>
+    TechniqueRef<LambdaTechnique> AddLambdaTechnique(Build&& build) {
+        return AddTechnique<LambdaTechnique>(
+            std::forward<Build>(build));
+    } 
     template <typename T> T* GetTechnique(TechniqueRef<T> ref) noexcept {
         return dynamic_cast<T*>(GetTechnique(ref.handle));
     }
@@ -141,10 +139,10 @@ public:
     ImageHandle image;
     ImageViewHandle imageView;
     ImageDesc description;
-    GraphImageHandle GetExportImage() const noexcept { return m_exportImage; }
+    RenderGraphResource GetExportImage() const noexcept { return m_exportImage; }
     void BuildGraph(ViewBuildContext& ctx) override;
 private:
-    GraphImageHandle m_exportImage{InvalidGraphImage};
+    RenderGraphResource m_exportImage{InvalidGraphImage};
 };
 class RenderTextureView final : public IRenderView {
 public:

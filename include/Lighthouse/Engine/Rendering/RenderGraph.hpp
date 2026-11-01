@@ -1,5 +1,8 @@
 #pragma once
 
+#include "Lighthouse/Engine/Rendering/IRenderCommandList.hpp"
+#include "Lighthouse/Engine/Rendering/IRenderGraphAllocator"
+#include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
 #include <memory>
 #include <cstdint>
 #include <sstream>
@@ -17,22 +20,33 @@
 namespace Lighthouse {
 
 using RenderGraphResource = FrameGraphResource;
-using GraphImageHandle = RenderGraphResource;
-inline constexpr GraphImageHandle InvalidGraphImage = -1;
-using GraphTextureDesc = ImageDesc;
-using GraphBufferDesc = BufferDesc;
+
 
 struct RenderGraphTexture {
-    using Desc = GraphTextureDesc;
+    using Desc = IRenderGraphAllocator::RenderGraphImageDesc;
 
-    ImageHandle handle;
-    void create(const Desc& desc, void* allocator);
-    void destroy(const Desc& desc, void* allocator);
-    void preRead(const Desc&, std::uint32_t, void*) {}
-    void preWrite(const Desc&, std::uint32_t, void*) {}
+    ImageViewHandle handle;
+    //ImageViewHandle viewHandle;
+    void create(const Desc& desc, void* allocator)
+    {
+        IRenderGraphAllocator* alloc = static_cast<IRenderGraphAllocator*>(allocator);
+        handle = alloc->CreateImage(desc);
+    }
+    void destroy(const Desc& desc, void* allocator)
+    {
+        IRenderGraphAllocator* alloc = static_cast<IRenderGraphAllocator*>(allocator);
+        alloc->DestroyImage(handle);
+        handle = {};
+    }
+    void preRead(const Desc&, std::uint32_t, void*) {
+
+    }
+    void preWrite(const Desc&, std::uint32_t, void*) {
+        
+    }
 };
 
-struct RenderGraphBuffer {
+/* struct RenderGraphBuffer {
     using Desc = GraphBufferDesc;
 
     BufferHandle handle;
@@ -40,9 +54,9 @@ struct RenderGraphBuffer {
     void destroy(const Desc& desc, void* allocator);
     void preRead(const Desc&, std::uint32_t, void*) {}
     void preWrite(const Desc&, std::uint32_t, void*) {}
-};
+}; */
 
-struct ImportedRenderGraphImage {
+/* struct ImportedRenderGraphImage {
     using Desc = GraphTextureDesc;
 
     ImageHandle handle;
@@ -52,8 +66,8 @@ struct ImportedRenderGraphImage {
     void preRead(const Desc&, std::uint32_t, void*) {}
     void preWrite(const Desc&, std::uint32_t, void*) {}
 };
-
-struct ImportedRenderGraphBuffer {
+ */
+/* struct ImportedRenderGraphBuffer {
     using Desc = GraphBufferDesc;
 
     BufferHandle handle;
@@ -61,7 +75,7 @@ struct ImportedRenderGraphBuffer {
     void destroy(const Desc&, void*) {}
     void preRead(const Desc&, std::uint32_t, void*) {}
     void preWrite(const Desc&, std::uint32_t, void*) {}
-};
+}; */
 
 class RenderGraph final {
 public:
@@ -75,7 +89,7 @@ public:
             return m_builder.create<ResourceType>(m_graph.KeepName(name), desc);
         }
 
-        [[nodiscard]] RenderGraphResource Read(RenderGraphResource resource) {
+         RenderGraphResource Read(RenderGraphResource resource) {
             return m_builder.read(resource);
         }
 
@@ -112,7 +126,7 @@ public:
             },
             [execute = std::forward<Execute>(execute)](
                 const Data& data, FrameGraphPassResources& resources, void* context) mutable {
-                execute(data, resources, *static_cast<IRenderDevice*>(context));
+                execute(data, resources, *static_cast<IRenderCommandList*>(context));
             });
     }
 

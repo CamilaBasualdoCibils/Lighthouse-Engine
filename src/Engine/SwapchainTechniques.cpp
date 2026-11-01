@@ -1,3 +1,4 @@
+#include "Lighthouse/Engine/Rendering/IRenderCommandList.hpp"
 #include <Lighthouse/Engine/Rendering/SwapchainTechniques.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
 
@@ -18,9 +19,9 @@ void AcquireSwapchainImageTechnique::BuildGraph(TechniqueBuildContext& ctx) {
         [image](RenderGraph::Builder& builder, PassData& data) {
             data.image = builder.Write(image);
         },
-        [swapchain = view->swapchain](const PassData& data, FrameGraphPassResources& resources,
-                                      IRenderDevice& device) {
-            resources.get<ImportedRenderGraphImage>(data.image).view = device.AcquireSwapchainImage(swapchain);
+        [swapchain = view->swapchain,ctx](const PassData& data, FrameGraphPassResources& resources,
+                                      IRenderCommandList& device) {
+            resources.get<ImportedRenderGraphImage>(data.image).view = ctx.device.AcquireSwapchainImage(swapchain);
         });
     m_passData = pass;
 }
@@ -37,8 +38,8 @@ void PresentSwapchainImageTechnique::BuildGraph(TechniqueBuildContext& ctx) {
             data.image = builder.Read(image);
             builder.SetSideEffect();
         },
-        [swapchain = view->swapchain](const PassData&, FrameGraphPassResources&, IRenderDevice& device) {
-            device.Present(swapchain);
+        [swapchain = view->swapchain,ctx](const PassData&, FrameGraphPassResources&, IRenderCommandList& device) {
+            ctx.device.Present(swapchain);
         });
     m_passData = pass;
 }

@@ -12,7 +12,7 @@
 
 class GreenClearTechnique final : public Lighthouse::IRenderTechnique {
 public:
-    struct PassData { Lighthouse::GraphImageHandle image{Lighthouse::InvalidGraphImage}; };
+    struct PassData { Lighthouse::RenderGraphResource image{Lighthouse::InvalidGraphImage}; };
     explicit GreenClearTechnique(Lighthouse::TechniqueRef<Lighthouse::AcquireSwapchainImageTechnique> source)
         : m_source(source) {}
     const PassData& GetPassData() const noexcept { return m_passData; }

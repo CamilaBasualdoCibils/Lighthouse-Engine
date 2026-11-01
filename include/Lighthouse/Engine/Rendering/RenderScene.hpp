@@ -21,7 +21,12 @@ struct MeshInstance {
 struct LightInstance {};
 
 // Placeholder for future camera extraction.
-struct CameraInstance {};
+struct CameraInstance {
+    glm::mat4 view{1.0f};
+    glm::mat4 projection{1.0f};
+    glm::mat4 inverseView{1.0f};
+    glm::mat4 viewProjection{1.0f};
+};
 
 class RenderScene {
 public:

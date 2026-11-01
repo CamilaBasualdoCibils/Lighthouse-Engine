@@ -68,7 +68,7 @@ RenderGraph Renderer::Compile(std::span<const OutputViewHandle> roots) {
         state[handle.index] = 1;
         for (auto dependency : view->ViewDependencies()) build(dependency);
 
-        ViewBuildContext context{graph, m_device.get()};
+        ViewBuildContext context{graph, *m_device.get()};
         view->BuildGraph(context);
         state[handle.index] = 2;
     };

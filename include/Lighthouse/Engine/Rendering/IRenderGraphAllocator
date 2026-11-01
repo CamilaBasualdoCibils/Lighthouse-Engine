@@ -1,0 +1,22 @@
+#pragma once
+
+#include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
+#include <cstdint>
+namespace Lighthouse {
+class IRenderGraphAllocator {
+public:
+    virtual ~IRenderGraphAllocator() = default;
+
+    struct RenderGraphImageDesc
+    {
+        uint32_t width;
+        uint32_t height;
+        ImageFormat format;
+    };
+    virtual ImageViewHandle CreateImage(const RenderGraphImageDesc& desc) = 0;
+    virtual void DestroyImage(ImageViewHandle image) = 0;
+
+    /* virtual BufferHandle CreateBuffer(const BufferDesc& desc) = 0;
+    virtual void DestroyBuffer(BufferHandle buffer) = 0; */
+};
+} // namespace Lighthouse

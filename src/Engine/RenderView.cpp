@@ -58,7 +58,7 @@ void IRenderView::BuildGraph(ViewBuildContext& ctx) { BuildTechniques(ctx); }
 
 void IRenderView::BuildTechniques(ViewBuildContext& ctx) {
     for (auto handle : Techniques()) {
-        TechniqueBuildContext techniqueContext(ctx.graph, *this);
+        TechniqueBuildContext techniqueContext(ctx.graph, *this,ctx.device);
         GetTechnique(handle)->BuildGraph(techniqueContext);
     }
 }
@@ -70,9 +70,9 @@ Window* WindowView::GetWindow() const noexcept {
 void WindowView::BuildGraph(ViewBuildContext& ctx) {
     auto* targetWindow = GetWindow();
     if (!targetWindow) throw std::logic_error("Window view targets an invalid window");
-    if (!ctx.device) throw std::logic_error("Window view requires a render device");
-    if (!swapchain || !ctx.device->IsValid(swapchain))
-        swapchain = ctx.device->CreateSwapchain(*targetWindow, presentation);
+    //if (!ctx.device) throw std::logic_error("Window view requires a render device");
+    if (!swapchain || !ctx.device.IsValid(swapchain))
+        swapchain = ctx.device.CreateSwapchain(*targetWindow, presentation);
     BuildTechniques(ctx);
 }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Lighthouse/Engine/Rendering/IRenderDevice.hpp"
 #include <cstdint>
 #include <functional>
 #include <utility>
@@ -20,11 +21,12 @@ template <typename T> struct TechniqueRef {
 
 class TechniqueBuildContext {
 public:
-    TechniqueBuildContext(RenderGraph& graph, IRenderView& view, RenderGraph::Builder* builder = nullptr)
-        : graph(graph), view(view), m_builder(builder) {}
+    TechniqueBuildContext(RenderGraph& graph, IRenderView& view, IRenderDevice& device, RenderGraph::Builder* builder = nullptr)
+        : graph(graph), view(view), device(device), m_builder(builder) {}
 
     RenderGraph& graph;
     IRenderView& view;
+    IRenderDevice& device;
     template <typename T> T* GetParentViewAs() noexcept;
     template <typename T> const T* GetParentViewAs() const noexcept;
     template <typename T> const T& GetTechnique(TechniqueRef<T> ref) const;
@@ -47,7 +49,7 @@ public:
     virtual ~IRenderTechnique() = default;
     virtual void BuildGraph(TechniqueBuildContext& context) = 0;
 };
-template <typename Data>
+/* template <typename Data>
 class TRenderTechnique :public IRenderTechnique
 {
    Data& GetPassData() noexcept { return m_passData; }
@@ -57,33 +59,24 @@ class TRenderTechnique :public IRenderTechnique
     void SetPassData(const Data& data) { m_passData = data; }
     private:
         Data m_passData{};
-};
-template <typename Data> class LambdaTechnique final : public TRenderTechnique<Data> {
+};*/
+ class LambdaTechnique final : public IRenderTechnique {
 public:
-    using Setup = std::function<void(Data&, TechniqueBuildContext&)>;
-    using Execute = std::function<void(const Data&, TechniqueExecuteContext&)>;
+using Build = std::function<void(TechniqueBuildContext&)>;
+    /* using Setup = std::function<void(Data&, TechniqueBuildContext&)>;
+    using Execute = std::function<void(const Data&, TechniqueExecuteContext&)>; */
 
-    LambdaTechnique(Setup setup, Execute execute)
-        : m_setup(std::move(setup)), m_execute(std::move(execute)) {}
+    LambdaTechnique(Build build)
+        : m_build(std::move(build)) {}
 
 
     void BuildGraph(TechniqueBuildContext& ctx) override {
-        const auto& pass = ctx.graph.AddPass<Data>("lambda technique",
-            [this, &ctx](RenderGraph::Builder& builder, Data& data) {
-                TechniqueBuildContext setupContext(ctx.graph, ctx.view, &builder);
-                m_setup(data, setupContext);
-            },
-            [execute = m_execute](const Data& data, FrameGraphPassResources& resources,
-                                  IRenderDevice& device) {
-                TechniqueExecuteContext executeContext{resources, device};
-                execute(data, executeContext);
-            });
-        this->SetPassData(pass);
+        m_build(ctx);
+
     }
 
 private:
-    Setup m_setup;
-    Execute m_execute;
-};
+    Build m_build;
+}; 
 
 } // namespace Lighthouse
