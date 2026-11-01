@@ -430,10 +430,10 @@ GraphicsPipelineHandle OpenGLRenderDevice::CreatePipeline(const GraphicsPipeline
 }
 
 std::unique_ptr<IRenderCommandList> OpenGLRenderDevice::CreateCommandList(QueueType) { return std::make_unique<OpenGLCommandList>(); }
-void OpenGLRenderDevice::Destroy(ImageHandle h) { m_impl->ActivateContext(); auto i=m_impl->images.find(h); if(i!=m_impl->images.end()){glDeleteTextures(1,&i->second.id);m_impl->images.erase(i); for(auto view=m_impl->views.begin();view!=m_impl->views.end();) if(view->second.image==h) { const auto viewHandle=view->first; glDeleteTextures(1,&view->second.id); view=m_impl->views.erase(view); for(auto& [_,set] : m_impl->sets) for(auto& [__,values] : set.resources) for(auto& value:values) if(auto info=std::get_if<DescriptorImageInfo>(&value); info && info->image==viewHandle) value=std::monostate{}; } else ++view;} }
-void OpenGLRenderDevice::Destroy(ImageViewHandle h) { m_impl->ActivateContext(); auto i=m_impl->views.find(h); if(i!=m_impl->views.end()){glDeleteTextures(1,&i->second.id);m_impl->views.erase(i); for(auto& [_,set] : m_impl->sets) for(auto& [__,values] : set.resources) for(auto& value:values) if(auto info=std::get_if<DescriptorImageInfo>(&value); info && info->image==h) value=std::monostate{};} }
-void OpenGLRenderDevice::Destroy(BufferHandle h) { m_impl->ActivateContext(); auto i=m_impl->buffers.find(h); if(i!=m_impl->buffers.end()){glDeleteBuffers(1,&i->second.id);m_impl->buffers.erase(i); for(auto& [_,set] : m_impl->sets) for(auto& [__,values] : set.resources) for(auto& value:values) if(auto info=std::get_if<DescriptorBufferInfo>(&value); info && info->buffer==h) value=std::monostate{};} }
-void OpenGLRenderDevice::Destroy(GraphicsPipelineHandle h) {
+void OpenGLRenderDevice::DestroyImage(ImageHandle h) { m_impl->ActivateContext(); auto i=m_impl->images.find(h); if(i!=m_impl->images.end()){glDeleteTextures(1,&i->second.id);m_impl->images.erase(i); for(auto view=m_impl->views.begin();view!=m_impl->views.end();) if(view->second.image==h) { const auto viewHandle=view->first; glDeleteTextures(1,&view->second.id); view=m_impl->views.erase(view); for(auto& [_,set] : m_impl->sets) for(auto& [__,values] : set.resources) for(auto& value:values) if(auto info=std::get_if<DescriptorImageInfo>(&value); info && info->image==viewHandle) value=std::monostate{}; } else ++view;} }
+void OpenGLRenderDevice::DestroyImageView(ImageViewHandle h) { m_impl->ActivateContext(); auto i=m_impl->views.find(h); if(i!=m_impl->views.end()){glDeleteTextures(1,&i->second.id);m_impl->views.erase(i); for(auto& [_,set] : m_impl->sets) for(auto& [__,values] : set.resources) for(auto& value:values) if(auto info=std::get_if<DescriptorImageInfo>(&value); info && info->image==h) value=std::monostate{};} }
+void OpenGLRenderDevice::DestroyBuffer(BufferHandle h) { m_impl->ActivateContext(); auto i=m_impl->buffers.find(h); if(i!=m_impl->buffers.end()){glDeleteBuffers(1,&i->second.id);m_impl->buffers.erase(i); for(auto& [_,set] : m_impl->sets) for(auto& [__,values] : set.resources) for(auto& value:values) if(auto info=std::get_if<DescriptorBufferInfo>(&value); info && info->buffer==h) value=std::monostate{};} }
+void OpenGLRenderDevice::DestroyPipeline(GraphicsPipelineHandle h) {
     auto i = m_impl->pipelines.find(h);
     if (i == m_impl->pipelines.end()) return;
     m_impl->ActivateContext();
@@ -451,26 +451,26 @@ void OpenGLRenderDevice::Destroy(GraphicsPipelineHandle h) {
     m_impl->ActivateContext();
     m_impl->pipelines.erase(i);
 }
-void OpenGLRenderDevice::Destroy(ShaderModuleHandle h) { m_impl->shaders.erase(h); }
-void OpenGLRenderDevice::Destroy(DescriptorSetHandle h) { m_impl->sets.erase(h); for(auto it=m_impl->boundSets.begin();it!=m_impl->boundSets.end();) if(it->second==h) it=m_impl->boundSets.erase(it); else ++it; }
-void OpenGLRenderDevice::Destroy(DescriptorSetLayoutHandle h) {
+void OpenGLRenderDevice::DestroyModule(ShaderModuleHandle h) { m_impl->shaders.erase(h); }
+void OpenGLRenderDevice::DestroyDescriptorSet(DescriptorSetHandle h) { m_impl->sets.erase(h); for(auto it=m_impl->boundSets.begin();it!=m_impl->boundSets.end();) if(it->second==h) it=m_impl->boundSets.erase(it); else ++it; }
+void OpenGLRenderDevice::DestroyDescriptorSetLayout(DescriptorSetLayoutHandle h) {
     if (!m_impl->setLayouts.contains(h)) return;
     for (auto it=m_impl->sets.begin();it!=m_impl->sets.end();) if(it->second.layout==h) it=m_impl->sets.erase(it); else ++it;
     for (auto it=m_impl->pipelineLayouts.begin();it!=m_impl->pipelineLayouts.end();) {
         if (std::find(it->second.sets.begin(),it->second.sets.end(),h)!=it->second.sets.end()) {
             const auto dead=it->first;
-            for(auto p=m_impl->pipelines.begin();p!=m_impl->pipelines.end();) if(p->second.pipelineLayout==dead) { Destroy(p->first); p=m_impl->pipelines.begin(); } else ++p;
+            for(auto p=m_impl->pipelines.begin();p!=m_impl->pipelines.end();) if(p->second.pipelineLayout==dead) { DestroyPipeline(p->first); p=m_impl->pipelines.begin(); } else ++p;
             it=m_impl->pipelineLayouts.erase(it);
         } else ++it;
     }
     m_impl->setLayouts.erase(h);
 }
-void OpenGLRenderDevice::Destroy(PipelineLayoutHandle h) {
+void OpenGLRenderDevice::DestroyPipelineLayout(PipelineLayoutHandle h) {
     if (!m_impl->pipelineLayouts.contains(h)) return;
-    for(auto p=m_impl->pipelines.begin();p!=m_impl->pipelines.end();) if(p->second.pipelineLayout==h) { const auto pipeline=p->first; ++p; Destroy(pipeline); } else ++p;
+    for(auto p=m_impl->pipelines.begin();p!=m_impl->pipelines.end();) if(p->second.pipelineLayout==h) { const auto pipeline=p->first; ++p; DestroyPipeline(pipeline); } else ++p;
     m_impl->pipelineLayouts.erase(h);
 }
-void OpenGLRenderDevice::Destroy(SamplerHandle h) {
+void OpenGLRenderDevice::DestroySampler(SamplerHandle h) {
     const auto i=m_impl->samplers.find(h); if(i==m_impl->samplers.end()) return; m_impl->ActivateContext(); glDeleteSamplers(1,&i->second); m_impl->samplers.erase(i);
     for(auto& [_,set]:m_impl->sets) for(auto& [__,values]:set.resources) for(auto& value:values) if(auto info=std::get_if<DescriptorImageInfo>(&value); info && info->sampler==h) value=std::monostate{};
 }

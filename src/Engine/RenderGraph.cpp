@@ -1,4 +1,4 @@
-#include <Lighthouse/Engine/Rendering/RenderGraph.hpp>
+#include <Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp>
 
 #include <stdexcept>
 
@@ -15,9 +15,9 @@ void RenderGraph::Compile() {
     m_compiled = true;
 }
 
-void RenderGraph::Execute(IRenderDevice& device) {
+void RenderGraph::Execute(IRenderGraphAllocator& allocator) {
     if (!m_compiled) throw std::logic_error("Compile the render graph before executing it");
-    m_graph->execute(&device, &device);
+    m_graph->execute(&allocator, &allocator); 
 }
 
 void RenderGraph::Clear() {

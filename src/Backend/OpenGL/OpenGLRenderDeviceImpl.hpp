@@ -29,7 +29,7 @@ struct OpenGLRenderDevice::Impl {
     };
     struct SwapchainSlot { std::uint32_t generation{1}; std::unique_ptr<Swapchain> value; };
     struct BufferResource { GLuint id{}; BufferMetadata metadata; };
-    struct ImageResource { GLuint id{}; ImageUsage usage{ImageUsage::None}; };
+    struct ImageResource { GLuint id{}; Flags<ImageUsage> usage{ImageUsage::None}; };
     struct ImageViewResource { GLuint id{}; ImageHandle image; };
 
     const Swapchain* FindSwapchain(SwapchainHandle handle) const noexcept {

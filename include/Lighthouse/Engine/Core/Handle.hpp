@@ -32,11 +32,7 @@ struct SamplerTag;
 using WindowHandle = Handle<WindowHandleTag>;
 using RenderViewHandle = Handle<RenderViewHandleTag>;
 using RenderTechniqueHandle = Handle<RenderTechniqueHandleTag>;
-using SwapchainHandle = Handle<SwapchainHandleTag>;
-using DescriptorSetLayoutHandle = Handle<DescriptorSetLayoutTag>;
-using DescriptorSetHandle = Handle<DescriptorSetTag>;
-using PipelineLayoutHandle = Handle<PipelineLayoutTag>;
-using SamplerHandle = Handle<SamplerTag>;
+
 
 class Scene;
 class SceneHandle {

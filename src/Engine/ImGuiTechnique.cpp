@@ -1,5 +1,5 @@
+#include "Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp"
 #include "Lighthouse/Engine/Rendering/IRenderCommandList.hpp"
-#include "Lighthouse/Engine/Rendering/RenderGraph.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
 #include <Lighthouse/Engine/Rendering/ImGuiTechnique.hpp>
 
@@ -80,24 +80,23 @@ void ImGuiTechnique::BuildGraph(TechniqueBuildContext &ctx) {
   const auto &pass = ctx.graph.AddPass<PassData>(
       "render ImGui",
       [](RenderGraph::Builder &builder, PassData &data) {
-        data.image = builder.Create<RenderGraphTexture>(
-            "ImguiDraw", RenderGraphTexture::Desc{
-                                                  .width = 1280,
-                                                  .height = 720,
+        data.image = builder.Create<RenderGraphImage>(
+            "ImguiDraw", RenderGraphImage::Desc{.width = 1280,
+                                                .height = 720,
                                                 .format = ImageFormat::RGBA8});
         data.image = builder.Write(data.image);
       },
       [session = m_session, swapchain, draw = m_draw,
-       &ctx = ctx](const PassData &data, FrameGraphPassResources &resources,
-                   IRenderCommandList &device) {
+       ctx](const PassData &data, FrameGraphPassResources &resources,
+            IRenderCommandList &device) {
         auto active = session.lock();
         if (!active)
           throw std::logic_error(
               "ImGui session was destroyed before rendering");
-        //const auto &image = resources.get<RenderGraphTexture>(data.image);
-        //active->Begin(ctx.device, swapchain);
-        //draw();
-        //active->End(ctx.device, swapchain, image.viewHandle);
+        const auto &image = resources.get<RenderGraphImage>(data.image);
+        active->Begin(ctx.device, swapchain);
+        draw();
+        active->End(ctx.device, swapchain, image.viewHandle);
       });
   m_passData = pass;
 }

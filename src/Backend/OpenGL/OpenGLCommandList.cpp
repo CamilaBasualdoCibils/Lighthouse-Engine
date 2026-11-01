@@ -194,5 +194,48 @@ void OpenGLCommandList::DrawIndexedCommand::Execute(OpenGLRenderDevice*) const {
 void OpenGLCommandList::DispatchCommand::Execute(OpenGLRenderDevice*) const {
     glDispatchCompute(x, y, z);
 }
+void OpenGLCommandList::BlitImageCommand::Execute(OpenGLRenderDevice* device) const {
+    auto& state = *device->m_impl;
+    const auto srcImage = state.images.find(src);
+    const auto dstImage = state.images.find(dst);
+    if (srcImage == state.images.end() || dstImage == state.images.end())
+        throw std::invalid_argument("Invalid image handle in blit command");
+
+    GLuint framebuffers[2]{};
+    glCreateFramebuffers(2, framebuffers);
+    const auto srcLayer = static_cast<GLint>(region.srcSubresource.baseArrayLayer);
+    const auto dstLayer = static_cast<GLint>(region.dstSubresource.baseArrayLayer);
+    glNamedFramebufferTextureLayer(framebuffers[0], GL_COLOR_ATTACHMENT0, srcImage->second.id,
+                                   static_cast<GLint>(region.srcSubresource.mipLevel), srcLayer);
+    glNamedFramebufferTextureLayer(framebuffers[1], GL_COLOR_ATTACHMENT0, dstImage->second.id,
+                                   static_cast<GLint>(region.dstSubresource.mipLevel), dstLayer);
+    constexpr GLenum attachment = GL_COLOR_ATTACHMENT0;
+    glNamedFramebufferReadBuffer(framebuffers[0], attachment);
+    glNamedFramebufferDrawBuffers(framebuffers[1], 1, &attachment);
+    if (glCheckNamedFramebufferStatus(framebuffers[0], GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE ||
+        glCheckNamedFramebufferStatus(framebuffers[1], GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        glDeleteFramebuffers(2, framebuffers);
+        throw std::runtime_error("OpenGL image blit framebuffer is incomplete");
+    }
+
+    const auto& src0 = region.srcOffsets[0];
+    const auto& src1 = region.srcOffsets[1];
+    const auto& dst0 = region.dstOffsets[0];
+    const auto& dst1 = region.dstOffsets[1];
+    GLbitfield mask = 0;
+    if (srcImage->second.usage.Contains(ImageUsage::ColorAttachment) &&
+        dstImage->second.usage.Contains(ImageUsage::ColorAttachment))
+        mask |= GL_COLOR_BUFFER_BIT;
+    if (srcImage->second.usage.Contains(ImageUsage::DepthStencilAttachment) &&
+        dstImage->second.usage.Contains(ImageUsage::DepthStencilAttachment))
+        mask |= GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
+    glBlitNamedFramebuffer(framebuffers[0], framebuffers[1],
+                           static_cast<GLint>(src0.x), static_cast<GLint>(src0.y),
+                           static_cast<GLint>(src1.x), static_cast<GLint>(src1.y),
+                           static_cast<GLint>(dst0.x), static_cast<GLint>(dst0.y),
+                           static_cast<GLint>(dst1.x), static_cast<GLint>(dst1.y), mask,
+                           filter == ImageFilter::Linear ? GL_LINEAR : GL_NEAREST);
+    glDeleteFramebuffers(2, framebuffers);
+}
 
 } // namespace Lighthouse

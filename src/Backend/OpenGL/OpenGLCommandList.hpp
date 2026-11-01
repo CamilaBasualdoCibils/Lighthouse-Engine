@@ -11,6 +11,8 @@ class OpenGLRenderDevice;
 
 class OpenGLCommandList final : public IRenderCommandList {
 public:
+
+
     struct BeginRenderCommand {
         RenderPassDesc desc;
         void Execute(OpenGLRenderDevice* device) const;
@@ -54,10 +56,17 @@ public:
         std::uint32_t x, y, z;
         void Execute(OpenGLRenderDevice* device) const;
     };
+    struct BlitImageCommand {
+        ImageHandle src;
+        ImageHandle dst;
+        BlitRegion region;
+        ImageFilter filter;
+        void Execute(OpenGLRenderDevice *device) const;
+    };
     using Command = std::variant<BeginRenderCommand, EndRenderCommand, BindPipelineCommand,
         BindDescriptorSetCommand,
         BindVertexBufferCommand, BindIndexBufferCommand, BindTextureCommand,
-        DrawCommand, DrawIndexedCommand, DispatchCommand>;
+        DrawCommand, DrawIndexedCommand, DispatchCommand, BlitImageCommand>;
 
     const std::vector<Command>& Commands() const noexcept { return m_commands; }
     void BeginRendering(const RenderPassDesc& desc) override { m_commands.emplace_back(BeginRenderCommand{desc}); }
@@ -75,7 +84,10 @@ public:
     }
     void DrawIndexed(std::uint32_t count) override { m_commands.emplace_back(DrawIndexedCommand{count}); }
     void Dispatch(std::uint32_t x, std::uint32_t y, std::uint32_t z) override { m_commands.emplace_back(DispatchCommand{x, y, z}); }
-
+  void BlitImage(ImageHandle src, ImageHandle dst, const BlitRegion &region,
+                 ImageFilter filter) override {
+      m_commands.emplace_back(BlitImageCommand{src, dst, region, filter});
+  }
 private:
     std::vector<Command> m_commands;
 };

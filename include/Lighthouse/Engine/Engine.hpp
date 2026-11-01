@@ -25,7 +25,7 @@
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
 #include <Lighthouse/Engine/Rendering/RenderTechnique.hpp>
 #include <Lighthouse/Engine/Rendering/RenderView.hpp>
-#include <Lighthouse/Engine/Rendering/RenderGraph.hpp>
+#include <Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp>
 #include <Lighthouse/Engine/Rendering/RenderMesh.hpp>
 #include <Lighthouse/Engine/Rendering/RenderScene.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderCommandList.hpp>

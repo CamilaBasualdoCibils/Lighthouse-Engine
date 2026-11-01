@@ -1,3 +1,4 @@
+#include "Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp"
 #include "Lighthouse/Engine/Rendering/IRenderCommandList.hpp"
 #include <Lighthouse/Engine/Rendering/SwapchainTechniques.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
@@ -9,7 +10,7 @@ void AcquireSwapchainImageTechnique::BuildGraph(TechniqueBuildContext& ctx) {
     if (!view || !view->swapchain || !view->GetWindow())
         throw std::logic_error("Swapchain acquire technique requires a WindowView with a swapchain");
     const auto* window = view->GetWindow();
-    ImageDesc desc;
+    ImportedRenderGraphImage::Desc desc;
     desc.width = window->FramebufferWidth();
     desc.height = window->FramebufferHeight();
     desc.format = ImageFormat::RGBA8;
@@ -21,7 +22,7 @@ void AcquireSwapchainImageTechnique::BuildGraph(TechniqueBuildContext& ctx) {
         },
         [swapchain = view->swapchain,ctx](const PassData& data, FrameGraphPassResources& resources,
                                       IRenderCommandList& device) {
-            resources.get<ImportedRenderGraphImage>(data.image).view = ctx.device.AcquireSwapchainImage(swapchain);
+            resources.get<ImportedRenderGraphImage>(data.image).viewHandle = ctx.device.AcquireSwapchainImage(swapchain);
         });
     m_passData = pass;
 }
@@ -31,7 +32,7 @@ void PresentSwapchainImageTechnique::BuildGraph(TechniqueBuildContext& ctx) {
     if (!view || !view->swapchain)
         throw std::logic_error("Swapchain present technique requires a WindowView with a swapchain");
     const auto image = m_sourceImage(ctx);
-    if (image == InvalidGraphImage)
+    if (image == kInvalidGraphResource)
         throw std::logic_error("Swapchain present technique requires a built source image");
     const auto& pass = ctx.graph.AddPass<PassData>("present window image",
         [image](RenderGraph::Builder& builder, PassData& data) {

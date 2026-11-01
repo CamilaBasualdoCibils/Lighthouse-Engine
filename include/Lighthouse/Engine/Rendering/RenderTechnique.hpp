@@ -8,7 +8,7 @@
 #include <type_traits>
 
 #include <Lighthouse/Engine/Core/Handle.hpp>
-#include <Lighthouse/Engine/Rendering/RenderGraph.hpp>
+#include <Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp>
 
 namespace Lighthouse {
 

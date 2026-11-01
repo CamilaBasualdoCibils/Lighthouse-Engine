@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Lighthouse/Engine/Rendering/RenderGraph.hpp"
+#include "Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTechnique.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
 namespace Lighthouse {
@@ -24,25 +24,25 @@ public:
         "WorldRenderGbuffer",
         [](Lighthouse::RenderGraph::Builder &builder,
            WorldRenderGbufferPassData &data) {
-          data.albedo = builder.Create<RenderGraphTexture>(
+          data.albedo = builder.Create<RenderGraphImage>(
               std::string_view("Albedo"),
-              RenderGraphTexture::Desc{.format = ImageFormat::RGBA8});
+              RenderGraphImage::Desc{.format = ImageFormat::RGBA8});
           data.albedo = builder.Write(data.albedo);
-          data.normal = builder.Create<RenderGraphTexture>(
+          data.normal = builder.Create<RenderGraphImage>(
               std::string_view("Normal"),
-              RenderGraphTexture::Desc{.format = ImageFormat::RGBA8});
+              RenderGraphImage::Desc{.format = ImageFormat::RGBA8});
           data.normal = builder.Write(data.normal);
-          data.depth = builder.Create<RenderGraphTexture>(
+          data.depth = builder.Create<RenderGraphImage>(
               std::string_view("Depth"),
-              RenderGraphTexture::Desc{.format = ImageFormat::Depth32});
+              RenderGraphImage::Desc{.format = ImageFormat::Depth32});
           data.depth = builder.Write(data.depth);
-          data.roughness = builder.Create<RenderGraphTexture>(
+          data.roughness = builder.Create<RenderGraphImage>(
               std::string_view("Roughness"),
-              RenderGraphTexture::Desc{.format = ImageFormat::R8});
+              RenderGraphImage::Desc{.format = ImageFormat::R8});
           data.roughness = builder.Write(data.roughness);
-          data.metallic = builder.Create<RenderGraphTexture>(
+          data.metallic = builder.Create<RenderGraphImage>(
               std::string_view("Metallic"),
-              RenderGraphTexture::Desc{.format = ImageFormat::R8});
+              RenderGraphImage::Desc{.format = ImageFormat::R8});
           data.metallic = builder.Write(data.metallic);
         },
         [](const WorldRenderGbufferPassData &data,
@@ -58,9 +58,9 @@ public:
               builder.Read(m_gbufferPassData.depth);
               builder.Read(m_gbufferPassData.roughness);
               builder.Read(m_gbufferPassData.metallic);
-              data.color = builder.Create<RenderGraphTexture>(
+              data.color = builder.Create<RenderGraphImage>(
                   std::string_view("Color"),
-                  RenderGraphTexture::Desc{.format = ImageFormat::RGBA8});
+                  RenderGraphImage::Desc{.format = ImageFormat::RGBA8});
               data.color = builder.Write(data.color);
            },
         [](const WorldRenderPassData &data,

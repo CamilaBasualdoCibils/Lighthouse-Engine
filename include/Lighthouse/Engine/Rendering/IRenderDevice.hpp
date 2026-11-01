@@ -52,15 +52,15 @@ public:
     virtual GraphicsPipelineHandle CreatePipeline(const GraphicsPipelineDesc& description) = 0;
     virtual std::unique_ptr<IRenderCommandList> CreateCommandList(QueueType type) = 0;
 
-    virtual void Destroy(ImageHandle handle) = 0;
-    virtual void Destroy(ImageViewHandle handle) = 0;
-    virtual void Destroy(BufferHandle handle) = 0;
-    virtual void Destroy(GraphicsPipelineHandle handle) = 0;
-    virtual void Destroy(ShaderModuleHandle handle) = 0;
-    virtual void Destroy(DescriptorSetLayoutHandle) = 0;
-    virtual void Destroy(DescriptorSetHandle) = 0;
-    virtual void Destroy(PipelineLayoutHandle) = 0;
-    virtual void Destroy(SamplerHandle) = 0;
+    virtual void DestroyImage(ImageHandle handle) = 0;
+    virtual void DestroyImageView(ImageViewHandle handle) = 0;
+    virtual void DestroyBuffer(BufferHandle handle) = 0;
+    virtual void DestroyPipeline(GraphicsPipelineHandle handle) = 0;
+    virtual void DestroyModule(ShaderModuleHandle handle) = 0;
+    virtual void DestroyDescriptorSetLayout(DescriptorSetLayoutHandle) = 0;
+    virtual void DestroyDescriptorSet(DescriptorSetHandle) = 0;
+    virtual void DestroyPipelineLayout(PipelineLayoutHandle) = 0;
+    virtual void DestroySampler(SamplerHandle) = 0;
 
     virtual RenderCapabilities GetCapabilities() const = 0;
     // Execute commands against their declared attachments.

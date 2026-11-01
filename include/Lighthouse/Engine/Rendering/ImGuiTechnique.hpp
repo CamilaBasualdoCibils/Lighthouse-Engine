@@ -37,7 +37,7 @@ private:
 
 class ImGuiTechnique final : public IRenderTechnique {
 public:
-    struct PassData { RenderGraphResource image{InvalidGraphImage}; };
+    struct PassData { RenderGraphResource image{kInvalidGraphResource}; };
     ImGuiTechnique(std::shared_ptr<ImGuiSession> session,
                    std::function<void()> draw)
         : m_session(std::move(session)),

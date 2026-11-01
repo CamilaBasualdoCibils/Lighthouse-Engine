@@ -1,3 +1,4 @@
+#include "Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp"
 #include <Lighthouse/Engine/Rendering/RenderView.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
@@ -77,10 +78,9 @@ void WindowView::BuildGraph(ViewBuildContext& ctx) {
 }
 
 void ExportView::BuildGraph(ViewBuildContext& ctx) {
-    m_exportImage = InvalidGraphImage;
-    if (!image || !imageView)
+    if ( !imageView)
         throw std::logic_error("Export view targets an invalid external image");
-    m_exportImage = ctx.graph.Import<ImportedRenderGraphImage>("export image", description, {image, imageView});
+    m_exportImage = ctx.graph.Import<ImportedRenderGraphImage>("export image", description, { imageView});
     BuildTechniques(ctx);
 }
 

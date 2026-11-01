@@ -7,7 +7,7 @@ namespace Lighthouse {
 
 class AcquireSwapchainImageTechnique final : public IRenderTechnique {
 public:
-    struct PassData { RenderGraphResource image{InvalidGraphImage}; };
+    struct PassData { RenderGraphResource image{kInvalidGraphResource}; };
     void BuildGraph(TechniqueBuildContext& ctx) override;
     const PassData& GetPassData() const noexcept { return m_passData; }
 private:
@@ -16,7 +16,7 @@ private:
 
 class PresentSwapchainImageTechnique final : public IRenderTechnique {
 public:
-    struct PassData { RenderGraphResource image{InvalidGraphImage}; };
+    struct PassData { RenderGraphResource image{kInvalidGraphResource}; };
     template <typename Source>
     explicit PresentSwapchainImageTechnique(TechniqueRef<Source> source)
         : m_sourceImage([source](TechniqueBuildContext& ctx) {

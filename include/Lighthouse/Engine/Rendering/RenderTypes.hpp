@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Lighthouse/Engine/Core/Flags.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -25,9 +26,18 @@ enum class ImageUsage : std::uint32_t {
     Storage = 1 << 1,
     ColorAttachment = 1 << 2,
     DepthAttachment = 1 << 3,
-    TransferSource = 1 << 4,
-    TransferDestination = 1 << 5
+    DepthStencilAttachment = 1 << 4,
+    TransferSource = 1 << 5,
+    TransferDestination = 1 << 6
 };
+enum class ImageAspect : std::uint32_t {
+    Color = 1 << 0,
+    Depth = 1 << 1,
+    Stencil = 1 << 2
+};
+enum class ImageFilter : std::uint32_t { Nearest, Linear };
+
+
 enum class BufferUsage : std::uint32_t {
     None = 0, Vertex = 1 << 0, Index = 1 << 1, Uniform = 1 << 2, Storage = 1 << 3,
     TransferSrc = 1 << 4, TransferDst = 1 << 5, Indirect = 1 << 6
@@ -89,6 +99,11 @@ using ImageViewHandle = Handle<ImageViewTag>;
 using BufferHandle = Handle<BufferTag>;
 using ShaderModuleHandle = Handle<ShaderModuleTag>;
 using GraphicsPipelineHandle = Handle<GraphicsPipelineTag>;
+using SwapchainHandle = Handle<SwapchainHandleTag>;
+using DescriptorSetLayoutHandle = Handle<DescriptorSetLayoutTag>;
+using DescriptorSetHandle = Handle<DescriptorSetTag>;
+using PipelineLayoutHandle = Handle<PipelineLayoutTag>;
+using SamplerHandle = Handle<SamplerTag>;
 
 enum class DescriptorType : std::uint32_t { UniformBuffer, StorageBuffer, CombinedImageSampler };
 
@@ -164,7 +179,7 @@ struct ImageDesc {
     std::uint32_t mipLevels{1};
     std::uint32_t arrayLayers{1};
     std::uint32_t sampleCount{1};
-    ImageUsage usage{ImageUsage::Sampled};
+    Flags<ImageUsage> usage{ImageUsage::Sampled};
     std::span<const std::byte> initialData{};
     ImageType type{ImageType::Image2D};
 };
@@ -178,7 +193,27 @@ struct ImageViewDesc {
     std::uint32_t baseArrayLayer{};
     std::uint32_t arrayLayerCount{1};
 };
+struct ImageSubresourceRange {
+    Flags<ImageAspect> aspectMask{ImageAspect::Color};
+    uint32_t baseMipLevel{0};
+    uint32_t mipLevelCount{1};
+    uint32_t baseArrayLayer{0};
+    uint32_t layerCount{1};
+};
+struct ImageSubresourceLayers {
+    Flags<ImageAspect> aspectMask{ImageAspect::Color};
+    uint32_t mipLevel{0};
+    uint32_t baseArrayLayer{0};
+    uint32_t layerCount{1};
+};
 
+   struct BlitRegion {
+    ImageSubresourceLayers srcSubresource;
+    std::array<UVec3, 2> srcOffsets;
+
+    ImageSubresourceLayers dstSubresource;
+    std::array<UVec3, 2> dstOffsets;
+};
 struct BufferDesc {
     std::uint64_t size{};
     BufferUsage usage{BufferUsage::None};

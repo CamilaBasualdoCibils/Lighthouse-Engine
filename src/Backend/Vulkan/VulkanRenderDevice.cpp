@@ -1,6 +1,7 @@
 #include <Lighthouse/Vulkan/VulkanRenderDevice.hpp>
 #include <Lighthouse/Vulkan/VulkanCommandList.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
+#include <vulkan/vulkan_core.h>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -463,10 +464,10 @@ SamplerHandle VulkanRenderDevice::CreateSampler(const SamplerDesc&) {
 void VulkanRenderDevice::UpdateDescriptorSet(DescriptorSetHandle, std::span<const DescriptorWrite>) {
     throw std::logic_error("Vulkan descriptor updates are not implemented");
 }
-void VulkanRenderDevice::Destroy(DescriptorSetLayoutHandle) {}
-void VulkanRenderDevice::Destroy(DescriptorSetHandle) {}
-void VulkanRenderDevice::Destroy(PipelineLayoutHandle) {}
-void VulkanRenderDevice::Destroy(SamplerHandle) {}
+void VulkanRenderDevice::DestroyDescriptorSetLayout(DescriptorSetLayoutHandle) {}
+void VulkanRenderDevice::DestroyDescriptorSet(DescriptorSetHandle) {}
+void VulkanRenderDevice::DestroyPipelineLayout(PipelineLayoutHandle) {}
+void VulkanRenderDevice::DestroySampler(SamplerHandle) {}
 
 ShaderModuleHandle VulkanRenderDevice::CreateShaderModule(const ShaderModuleDesc& desc) {
     if (desc.bytecode.empty() || desc.bytecode.size_bytes() % sizeof(std::uint32_t))
@@ -551,9 +552,9 @@ GraphicsPipelineHandle VulkanRenderDevice::CreatePipeline(const GraphicsPipeline
 }
 
 std::unique_ptr<IRenderCommandList> VulkanRenderDevice::CreateCommandList(QueueType) { return std::make_unique<VulkanCommandList>(); }
-void VulkanRenderDevice::Destroy(ImageHandle) { }
-void VulkanRenderDevice::Destroy(ImageViewHandle) { }
-void VulkanRenderDevice::Destroy(BufferHandle handle) {
+void VulkanRenderDevice::DestroyImage(ImageHandle) { }
+void VulkanRenderDevice::DestroyImageView(ImageViewHandle) { }
+void VulkanRenderDevice::DestroyBuffer(BufferHandle handle) {
     auto& d = *m_impl;
     const auto it = d.buffers.find(handle);
     if (it == d.buffers.end()) return;
@@ -561,7 +562,7 @@ void VulkanRenderDevice::Destroy(BufferHandle handle) {
     vkFreeMemory(d.device, it->second.memory, nullptr);
     d.buffers.erase(it);
 }
-void VulkanRenderDevice::Destroy(GraphicsPipelineHandle handle) {
+void VulkanRenderDevice::DestroyPipeline(GraphicsPipelineHandle handle) {
     auto& d = *m_impl;
     const auto it = d.pipelines.find(handle);
     if (it == d.pipelines.end()) return;
@@ -569,7 +570,7 @@ void VulkanRenderDevice::Destroy(GraphicsPipelineHandle handle) {
     vkDestroyPipelineLayout(d.device, it->second.layout, nullptr);
     d.pipelines.erase(it);
 }
-void VulkanRenderDevice::Destroy(ShaderModuleHandle handle) {
+void VulkanRenderDevice::DestroyModule(ShaderModuleHandle handle) {
     auto& d = *m_impl;
     const auto it = d.shaders.find(handle);
     if (it == d.shaders.end()) return;
@@ -597,7 +598,7 @@ ImageViewHandle VulkanRenderDevice::AcquireSwapchainImage(SwapchainHandle handle
 }
 
 void VulkanRenderDevice::Submit(const IRenderCommandList& list) {
-    auto& d = *m_impl;
+  /*   auto& d = *m_impl;
     const auto* commands = dynamic_cast<const VulkanCommandList*>(&list);
     if (!commands) throw std::invalid_argument("VulkanRenderDevice received a command list from another backend");
     const auto handle = d.acquiredSwapchain;
@@ -696,7 +697,7 @@ void VulkanRenderDevice::Submit(const IRenderCommandList& list) {
     submit.pSignalSemaphores = &d.renderFinished;
     Check(vkResetFences(d.device, 1, &d.inFlight), "vkResetFences");
     Check(vkQueueSubmit(d.queue, 1, &submit, d.inFlight), "vkQueueSubmit");
-    d.submitted = true;
+    d.submitted = true; */
 }
 
 void VulkanRenderDevice::Present(SwapchainHandle handle) {

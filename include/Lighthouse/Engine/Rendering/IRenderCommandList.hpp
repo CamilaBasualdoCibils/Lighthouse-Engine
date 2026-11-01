@@ -1,8 +1,11 @@
 #pragma once
 
+#include "Lighthouse/Engine/Core/Types.hpp"
+#include "vulkan/vulkan.hpp"
 #include <cstdint>
 
 #include <Lighthouse/Engine/Rendering/RenderTypes.hpp>
+#include <vulkan/vulkan_core.h>
 
 namespace Lighthouse {
 
@@ -23,6 +26,9 @@ public:
                       std::uint32_t firstInstance = 0) = 0;
     virtual void DrawIndexed(std::uint32_t indexCount) = 0;
     virtual void Dispatch(std::uint32_t x, std::uint32_t y, std::uint32_t z) = 0;
+
+
+   virtual void BlitImage(ImageHandle src, ImageHandle dst, const BlitRegion& region, ImageFilter filter) = 0;
 };
 
 } // namespace Lighthouse

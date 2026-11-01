@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp"
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -134,15 +135,14 @@ private:
 };
 class ExportView final : public IOutputView {
 public:
-    ExportView(ImageHandle image, ImageViewHandle imageView, ImageDesc description, RenderViewDesc desc = {})
-        : IOutputView(std::move(desc)), image(image), imageView(imageView), description(description) {}
-    ImageHandle image;
+    ExportView(ImageViewHandle imageView, ImportedRenderGraphImage::Desc description, RenderViewDesc desc = {})
+        : IOutputView(std::move(desc)), imageView(imageView), description(description) {}
     ImageViewHandle imageView;
-    ImageDesc description;
+    ImportedRenderGraphImage::Desc description;
     RenderGraphResource GetExportImage() const noexcept { return m_exportImage; }
     void BuildGraph(ViewBuildContext& ctx) override;
 private:
-    RenderGraphResource m_exportImage{InvalidGraphImage};
+    RenderGraphResource m_exportImage{kInvalidGraphResource};
 };
 class RenderTextureView final : public IRenderView {
 public:
