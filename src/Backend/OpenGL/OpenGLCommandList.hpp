@@ -11,7 +11,9 @@ class OpenGLRenderDevice;
 
 class OpenGLCommandList final : public IRenderCommandList {
 public:
-
+  void Clear() override {
+    m_commands.clear();
+  }
 
     struct BeginRenderCommand {
         RenderPassDesc desc;

@@ -15,9 +15,9 @@ void RenderGraph::Compile() {
     m_compiled = true;
 }
 
-void RenderGraph::Execute(IRenderGraphAllocator& allocator) {
+void RenderGraph::Execute(RenderGraphExecuteContext* context) {
     if (!m_compiled) throw std::logic_error("Compile the render graph before executing it");
-    m_graph->execute(&allocator, &allocator); 
+    m_graph->execute(context, context->allocator); 
 }
 
 void RenderGraph::Clear() {

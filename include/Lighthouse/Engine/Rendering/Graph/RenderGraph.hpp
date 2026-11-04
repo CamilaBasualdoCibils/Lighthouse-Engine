@@ -83,7 +83,10 @@ struct ImportedRenderGraphImage {
     void preRead(const Desc&, std::uint32_t, void*) {}
     void preWrite(const Desc&, std::uint32_t, void*) {}
 }; */
-
+struct RenderGraphExecuteContext {
+  IRenderGraphAllocator *allocator;
+  IRenderCommandList *commandList;
+};
 class RenderGraph final {
 public:
   class Builder final {
@@ -138,7 +141,12 @@ public:
         [execute = std::forward<Execute>(execute)](
             const Data &data, FrameGraphPassResources &resources,
             void *context) mutable {
-          execute(data, resources, *static_cast<IRenderCommandList *>(context));
+          RenderGraphExecuteContext *executeContext =
+              static_cast<RenderGraphExecuteContext *>(context);
+          assert(executeContext);
+          assert(executeContext->commandList);
+          assert(executeContext->allocator);
+          execute(data, resources, *executeContext->commandList);
         });
   }
 
@@ -154,12 +162,11 @@ public:
   }
 
   void Compile();
-  void Execute(IRenderGraphAllocator &allocator);
+  void Execute(RenderGraphExecuteContext* context);
   void Clear();
   template <typename T>
   [[nodiscard]] const typename T::Desc &
-  getDescriptor(RenderGraphResource id) const
-  {
+  getDescriptor(RenderGraphResource id) const {
     return m_graph->getDescriptor<T>(id);
   }
   std::string Dot() const {

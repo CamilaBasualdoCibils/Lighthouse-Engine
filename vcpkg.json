@@ -62,6 +62,8 @@
     "tinygltf",
     "shader-slang",
     "glslang",
-    "spirv-cross"
+    "spirv-cross",
+    "mimalloc",
+    "tracy"
   ]
 }

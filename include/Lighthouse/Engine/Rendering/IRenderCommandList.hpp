@@ -29,6 +29,7 @@ public:
 
 
    virtual void BlitImage(ImageHandle src, ImageHandle dst, const BlitRegion& region, ImageFilter filter) = 0;
+   virtual void Clear() = 0;
 };
 
 } // namespace Lighthouse

@@ -9,6 +9,9 @@ namespace Lighthouse {
 
 class VulkanCommandList final : public IRenderCommandList {
 public:
+  void Clear() override {
+    throw std::logic_error("Vulkan Clear is not implemented");
+  }
   void BlitImage(ImageHandle src, ImageHandle dst, const BlitRegion &region,
                  ImageFilter filter) override {
     throw std::logic_error("Vulkan BlitImage is not implemented");

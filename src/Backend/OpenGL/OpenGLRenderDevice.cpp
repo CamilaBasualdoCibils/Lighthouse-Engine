@@ -527,7 +527,7 @@ void OpenGLRenderDevice::ShutdownImGui() noexcept {
 void OpenGLRenderDevice::NewImGuiFrame() { ImGui_ImplOpenGL3_NewFrame(); }
 
 void OpenGLRenderDevice::RenderImGui(SwapchainHandle swapchain, ImageViewHandle image, ImDrawData* drawData) {
-    if (m_impl->acquired != swapchain || image != AcquiredImageView())
+    if (m_impl->acquired != swapchain)
         throw std::logic_error("ImGui must render to the acquired OpenGL image");
     m_impl->ActivateContext(m_impl->FindSwapchain(swapchain));
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
