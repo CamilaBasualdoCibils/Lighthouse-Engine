@@ -16,7 +16,6 @@
     "boost-static-string",
     "boost-program-options",
     "boost-lockfree",
-    "entt",
     {
       "name": "spdlog",
       "features": [

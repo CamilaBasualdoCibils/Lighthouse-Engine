@@ -7,34 +7,34 @@
 
 namespace Lighthouse {
 
-struct Application::Storage {
+struct IApplication::Storage {
     EngineRuntime* runtime{};
     const Config* config{};
 };
 
-Application::Application() : m_storage(std::make_shared<Storage>()) {}
-Application::~Application() = default;
+IApplication::IApplication() : m_storage(std::make_shared<Storage>()) {}
+IApplication::~IApplication() = default;
 
-void Application::AttachRuntime(EngineRuntime& runtime, const Config& config) {
+void IApplication::AttachRuntime(EngineRuntime& runtime, const Config& config) {
     m_storage->runtime = &runtime;
     m_storage->config = &config;
 }
 
-EngineRuntime& Application::GetRuntime() {
+EngineRuntime& IApplication::GetRuntime() {
     if (!m_storage->runtime) throw std::logic_error("Application runtime is only available during Run<T>");
     return *m_storage->runtime;
 }
 
-WindowManager& Application::GetWindowManager() { return GetRuntime().GetWindowManager(); }
-Renderer& Application::GetRenderer() { return GetRuntime().GetRenderer(); }
-IGraphicsBackend* Application::GetGraphicsBackend() { return GetRuntime().GetGraphicsBackend(); }
+WindowManager& IApplication::GetWindowManager() { return GetRuntime().GetWindowManager(); }
+Renderer& IApplication::GetRenderer() { return GetRuntime().GetRenderer(); }
+IGraphicsBackend* IApplication::GetGraphicsBackend() { return GetRuntime().GetGraphicsBackend(); }
 
-const Config& Application::GetConfig() const {
+const Config& IApplication::GetConfig() const {
     if (!m_storage->config) throw std::logic_error("Application config is only available during Run<T>");
     return *m_storage->config;
 }
 
-bool Application::ShouldClose() const {
+bool IApplication::ShouldClose() const {
     if (!m_storage->runtime) return true;
     const auto& windows = m_storage->runtime->GetWindowManager();
     if (windows.ShouldClose()) return true;

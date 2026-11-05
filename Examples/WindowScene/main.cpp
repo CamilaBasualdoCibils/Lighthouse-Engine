@@ -6,7 +6,7 @@
 #include <imgui.h>
 #endif
 
-class WindowSceneExample : public Lighthouse::Application {
+class WindowSceneExample : public Lighthouse::IApplication {
 public:
     void OnStart() override {
         using namespace Lighthouse;

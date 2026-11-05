@@ -12,10 +12,10 @@
 
 namespace Lighthouse {
 
-class Application {
+class IApplication {
 public:
-    Application();
-    virtual ~Application();
+    IApplication();
+    virtual ~IApplication();
 
     virtual void OnStart() = 0;
     virtual void OnUpdate(float deltaTime) = 0;
@@ -23,7 +23,7 @@ public:
     virtual bool ShouldClose() const;
 
 protected:
-    Scene& CreateScene(std::string name);
+    
     EngineRuntime& GetRuntime();
     WindowManager& GetWindowManager();
     Renderer& GetRenderer();
@@ -41,8 +41,8 @@ private:
 
 template <typename ApplicationType>
 int Run(const Config& config) {
-    static_assert(std::is_base_of_v<Application, ApplicationType>,
-                  "Run<T> requires T to derive from Lighthouse::Application");
+    static_assert(std::is_base_of_v<IApplication, ApplicationType>,
+                  "Run<T> requires T to derive from Lighthouse::IApplication");
 
     EngineRuntime runtime;
     if (!runtime.Initialize(config)) return 1;
