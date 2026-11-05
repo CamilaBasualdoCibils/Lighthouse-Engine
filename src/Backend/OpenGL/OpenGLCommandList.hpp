@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Lighthouse/Engine/Rendering/IRenderCommandList.hpp>
+#include <stdexcept>
 
 #include <variant>
 #include <vector>
@@ -11,6 +12,16 @@ class OpenGLRenderDevice;
 
 class OpenGLCommandList final : public IRenderCommandList {
 public:
+  void Begin() override {
+    if (Begun) throw std::logic_error("Command list has already begun");
+    Begun = true;
+  }
+
+  void End() override {
+    if (!Begun) throw std::logic_error("Command list has not begun");
+    Begun = false;
+  }
+
   void Clear() override {
     m_commands.clear();
   }
@@ -92,6 +103,7 @@ public:
   }
 private:
     std::vector<Command> m_commands;
+    bool Begun = false;
 };
 
 } // namespace Lighthouse

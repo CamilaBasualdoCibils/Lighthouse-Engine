@@ -18,7 +18,7 @@ using namespace Lighthouse;
 class TestDevice final : public IRenderDevice {
 public:
     SwapchainHandle CreateSwapchain(Window&, const SwapchainConfig&) override { return {0, 1, DeviceId()}; }
-    ImageViewHandle AcquireSwapchainImage(SwapchainHandle) override { return {}; }
+    AcquiredSwapchainImage AcquireSwapchainImage(SwapchainHandle) override { return {}; }
     bool DestroySwapchain(SwapchainHandle) override { return true; }
     bool IsValid(SwapchainHandle handle) const noexcept override { return handle.owner == DeviceId() && handle.index == 0 && handle.generation == 1; }
     ImageHandle CreateImage(const ImageDesc&) override { return {}; }

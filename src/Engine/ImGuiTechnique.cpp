@@ -88,7 +88,7 @@ void ImGuiTechnique::BuildGraph(TechniqueBuildContext &ctx) {
       },
       [session = m_session, swapchain, draw = m_draw,
        ctx](const PassData &data, FrameGraphPassResources &resources,
-            IRenderCommandList &device) {
+            RenderGraphExecutePassContext &context) {
         auto active = session.lock();
         if (!active)
           throw std::logic_error(

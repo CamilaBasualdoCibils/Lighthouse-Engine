@@ -1,15 +1,19 @@
 #pragma once
 
 #include "IRenderGraphAllocator.hpp"
+#include "Lighthouse/Engine/Core/Handle.hpp"
 #include "Lighthouse/Engine/Rendering/Graph/IRenderGraphAllocator.hpp"
 #include "Lighthouse/Engine/Rendering/IRenderCommandList.hpp"
+#include "Lighthouse/Engine/Rendering/IRenderDevice.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -18,9 +22,24 @@
 #include <fg/FrameGraphResource.hpp>
 
 namespace Lighthouse {
+class Renderer;
 
 using RenderGraphResource = FrameGraphResource;
 constexpr RenderGraphResource kInvalidGraphResource = -1;
+
+struct RenderGraphExecutePassContext {
+  IRenderCommandList *commandList;
+};
+struct RenderGraphExecuteContext {
+public:
+  RenderGraphExecuteContext(Renderer *renderer, IRenderDevice *device)
+      : renderer(renderer), device(device) {}
+  Renderer *renderer;
+  IRenderDevice *device;
+  std::vector<std::unique_ptr<IRenderCommandList>> commandLists;
+
+  IRenderCommandList *MakeCommandList();
+};
 
 struct RenderGraphImage {
   using Desc = RenderGraphImageDesc;
@@ -73,7 +92,27 @@ struct ImportedRenderGraphImage {
   void preRead(const Desc &, std::uint32_t, void *) {}
   void preWrite(const Desc &, std::uint32_t, void *) {}
 };
+class WindowView;
+struct ImportedWindowView {
+  struct Desc {};
+  ImportedWindowView() = default;
+  ImportedWindowView(WindowView *handle) : handle(handle) {}
 
+  WindowView *handle{};
+  ImageHandle currentImage;
+  ImageViewHandle currentImageView;
+  void create(const Desc & desc, void *context) { Resolve(desc, context); }
+  void destroy(const Desc &, void *context) {}
+  void preRead(const Desc &desc, uint32_t, void *context) {
+    Resolve(desc, context);
+  }
+
+  void preWrite(const Desc &desc, uint32_t, void *context) {
+    Resolve(desc, context);
+  }
+
+  void Resolve(const Desc &desc, void *context);
+};
 /* struct ImportedRenderGraphBuffer {
     using Desc = GraphBufferDesc;
 
@@ -83,10 +122,7 @@ struct ImportedRenderGraphImage {
     void preRead(const Desc&, std::uint32_t, void*) {}
     void preWrite(const Desc&, std::uint32_t, void*) {}
 }; */
-struct RenderGraphExecuteContext {
-  IRenderGraphAllocator *allocator;
-  IRenderCommandList *commandList;
-};
+
 class RenderGraph final {
 public:
   class Builder final {
@@ -99,12 +135,12 @@ public:
       return m_builder.create<ResourceType>(m_graph.KeepName(name), desc);
     }
 
-    RenderGraphResource Read(RenderGraphResource resource) {
-      return m_builder.read(resource);
+    RenderGraphResource Read(RenderGraphResource resource,uint32_t flags = 0) {
+      return m_builder.read(resource, flags);
     }
 
-    [[nodiscard]] RenderGraphResource Write(RenderGraphResource resource) {
-      return m_builder.write(resource);
+    [[nodiscard]] RenderGraphResource Write(RenderGraphResource resource, uint32_t flags = 0) {
+      return m_builder.write(resource, flags);
     }
 
     Builder &SetSideEffect() {
@@ -128,6 +164,10 @@ public:
 
   template <typename Data = FrameGraph::NoData, typename Setup,
             typename Execute>
+    requires(
+        std::is_invocable_v<Setup, Builder &, Data &> &&
+        std::is_invocable_v<Execute, const Data &, FrameGraphPassResources &,
+                            RenderGraphExecutePassContext &>)
   const Data &AddPass(std::string_view name, Setup &&setup, Execute &&execute) {
     if (m_compiled)
       throw std::logic_error("Cannot add render passes after compilation");
@@ -144,9 +184,12 @@ public:
           RenderGraphExecuteContext *executeContext =
               static_cast<RenderGraphExecuteContext *>(context);
           assert(executeContext);
-          assert(executeContext->commandList);
-          assert(executeContext->allocator);
-          execute(data, resources, *executeContext->commandList);
+          RenderGraphExecutePassContext executePassContext{
+              .commandList = executeContext->MakeCommandList()};
+
+          execute(data, resources, executePassContext);
+
+          executeContext->device->Submit(*executePassContext.commandList);
         });
   }
 
@@ -162,7 +205,7 @@ public:
   }
 
   void Compile();
-  void Execute(RenderGraphExecuteContext* context);
+  void Execute(Renderer *device, IRenderGraphAllocator *allocator);
   void Clear();
   template <typename T>
   [[nodiscard]] const typename T::Desc &

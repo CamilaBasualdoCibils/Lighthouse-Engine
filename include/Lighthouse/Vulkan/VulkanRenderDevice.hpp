@@ -52,11 +52,12 @@ public:
     void DestroySampler(SamplerHandle) override;
     RenderCapabilities GetCapabilities() const override;
     SwapchainHandle CreateSwapchain(Window& window, const SwapchainConfig& config) override;
-    ImageViewHandle AcquireSwapchainImage(SwapchainHandle) override;
+    AcquiredSwapchainImage AcquireSwapchainImage(SwapchainHandle) override;
     bool DestroySwapchain(SwapchainHandle) override;
     bool IsValid(SwapchainHandle) const noexcept override;
     void Submit(const IRenderCommandList&) override;
     void Present(SwapchainHandle swapchain) override;
+    void WaitIdle() override;
 #ifdef LIGHTHOUSE_IMGUI
     ImGuiPlatformBackend PlatformBackend() const noexcept override { return ImGuiPlatformBackend::Vulkan; }
     void InitializeImGui(SwapchainHandle swapchain) override;

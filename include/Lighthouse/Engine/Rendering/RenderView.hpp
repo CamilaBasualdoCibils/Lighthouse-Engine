@@ -1,9 +1,12 @@
 #pragma once
 
 #include "Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp"
+#include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <spdlog/logger.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -118,6 +121,9 @@ private:
 class IOutputView : public IRenderView {
 public:
     using IRenderView::IRenderView;
+
+    virtual void Begin(Renderer* renderer)=0;
+    virtual void End(Renderer* renderer)=0;
 };
 
 class WindowView final : public IOutputView {
@@ -129,12 +135,30 @@ public:
     SwapchainHandle swapchain;
     Window* GetWindow() const noexcept;
     void BuildGraph(ViewBuildContext& ctx) override;
-private:
+
+    void Begin(Renderer *renderer) override;
+
+    void End(Renderer *renderer) override;
+
+    std::optional<AcquiredSwapchainImage> GetAcquiredImage() const noexcept { return m_acquiredImage; }
+    RenderGraphResource GetAcquiredImageAsRGResource() const noexcept { return m_acquiredImageAsRGResource.value_or(kInvalidGraphResource); }
+  private:
     friend class Renderer;
     WindowManager* m_windows{};
+    std::optional<AcquiredSwapchainImage> m_acquiredImage;
+    std::optional<RenderGraphResource> m_acquiredImageAsRGResource;
+    std::shared_ptr<spdlog::logger> m_logger = spdlog::stdout_color_mt("WindowView");
 };
 class ExportView final : public IOutputView {
 public:
+  void Begin(Renderer *renderer) override {
+
+  }
+
+  void End(Renderer *renderer) override {
+
+  }
+
     ExportView(ImageViewHandle imageView, ImportedRenderGraphImage::Desc description, RenderViewDesc desc = {})
         : IOutputView(std::move(desc)), imageView(imageView), description(description) {}
     ImageViewHandle imageView;

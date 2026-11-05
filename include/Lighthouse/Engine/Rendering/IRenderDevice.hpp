@@ -22,7 +22,7 @@ public:
 
     virtual SwapchainHandle CreateSwapchain(Window&, const SwapchainConfig&) = 0;
     // Returns an attachment handle for the currently acquired swapchain image.
-    virtual ImageViewHandle AcquireSwapchainImage(SwapchainHandle) = 0;
+    virtual AcquiredSwapchainImage AcquireSwapchainImage(SwapchainHandle) = 0;
     virtual bool DestroySwapchain(SwapchainHandle) = 0;
     virtual bool IsValid(SwapchainHandle) const noexcept = 0;
 
@@ -52,6 +52,7 @@ public:
     virtual GraphicsPipelineHandle CreatePipeline(const GraphicsPipelineDesc& description) = 0;
     virtual std::unique_ptr<IRenderCommandList> CreateCommandList(QueueType type) = 0;
 
+
     virtual void DestroyImage(ImageHandle handle) = 0;
     virtual void DestroyImageView(ImageViewHandle handle) = 0;
     virtual void DestroyBuffer(BufferHandle handle) = 0;
@@ -67,6 +68,7 @@ public:
     virtual void Submit(const IRenderCommandList& commandList) = 0;
     // Display the acquired swapchain image after its submitted work completes.
     virtual void Present(SwapchainHandle swapchain) = 0;
+    virtual void WaitIdle() = 0;
 
 private:
     static std::uint64_t NextDeviceId() noexcept {

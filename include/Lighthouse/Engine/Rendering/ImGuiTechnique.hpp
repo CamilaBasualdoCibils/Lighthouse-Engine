@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Lighthouse/Engine/Rendering/IRenderDevice.hpp"
 #ifdef LIGHTHOUSE_IMGUI
 
 #include <memory>

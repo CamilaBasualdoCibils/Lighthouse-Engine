@@ -113,14 +113,91 @@ HandleType MakeHandle(std::uint32_t index, std::uint64_t owner) { return HandleT
 
 
 
-ImageViewHandle OpenGLRenderDevice::AcquireSwapchainImage(SwapchainHandle swapchain) {
-    const auto* target = m_impl->FindSwapchain(swapchain);
+void OpenGLRenderDevice::Impl::DestroySwapchainImages(Swapchain& swapchain) {
+    ActivateContext(&swapchain);
+    for (const auto& image : swapchain.images) {
+        glDeleteFramebuffers(1, &image.framebuffer);
+        if (const auto view = views.find(image.view); view != views.end()) {
+            glDeleteTextures(1, &view->second.id);
+            views.erase(view);
+        }
+        if (const auto texture = images.find(image.image); texture != images.end()) {
+            glDeleteTextures(1, &texture->second.id);
+            images.erase(texture);
+        }
+        for (auto& [_, set] : sets)
+            for (auto& [__, values] : set.resources)
+                for (auto& value : values)
+                    if (auto info = std::get_if<DescriptorImageInfo>(&value); info && info->image == image.view)
+                        value = std::monostate{};
+    }
+    swapchain.images.clear();
+}
+
+void OpenGLRenderDevice::Impl::CreateSwapchainImages(Swapchain& swapchain, std::uint32_t count) {
+    ActivateContext(&swapchain);
+    EGLint width{}, height{};
+    if (!eglQuerySurface(group->display, swapchain.surface, EGL_WIDTH, &width) ||
+        !eglQuerySurface(group->display, swapchain.surface, EGL_HEIGHT, &height))
+        throw std::runtime_error("Failed to query the OpenGL swapchain extent");
+    swapchain.width = std::max(width, 1);
+    swapchain.height = std::max(height, 1);
+    swapchain.images.reserve(count);
+    try {
+        for (std::uint32_t i = 0; i < count; ++i) {
+            auto& image = swapchain.images.emplace_back();
+            GLuint texture{}, view{};
+            glCreateTextures(GL_TEXTURE_2D, 1, &texture);
+            image.image = MakeHandle<ImageHandle>(nextImage++, owner);
+            images.emplace(image.image, ImageResource{texture,
+                ImageUsage::ColorAttachment | ImageUsage::TransferSource | ImageUsage::TransferDestination | ImageUsage::Sampled});
+            glTextureStorage2D(texture, 1, GL_RGBA8, swapchain.width, swapchain.height);
+            glGenTextures(1, &view);
+            image.view = MakeHandle<ImageViewHandle>(nextView++, owner);
+            views.emplace(image.view, ImageViewResource{view, image.image});
+            glTextureView(view, GL_TEXTURE_2D, texture, GL_RGBA8, 0, 1, 0, 1);
+            glCreateFramebuffers(1, &image.framebuffer);
+            glNamedFramebufferTexture(image.framebuffer, GL_COLOR_ATTACHMENT0, view, 0);
+            glNamedFramebufferReadBuffer(image.framebuffer, GL_COLOR_ATTACHMENT0);
+            constexpr GLenum attachment = GL_COLOR_ATTACHMENT0;
+            glNamedFramebufferDrawBuffers(image.framebuffer, 1, &attachment);
+            if (glCheckNamedFramebufferStatus(image.framebuffer, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+                throw std::runtime_error("OpenGL swapchain image framebuffer is incomplete");
+        }
+    } catch (...) {
+        DestroySwapchainImages(swapchain);
+        throw;
+    }
+    swapchain.imageIndex = 0;
+}
+
+AcquiredSwapchainImage OpenGLRenderDevice::AcquireSwapchainImage(SwapchainHandle swapchain) {
+    auto* target = m_impl->FindSwapchain(swapchain);
     if (!target) throw std::invalid_argument("OpenGL acquire received an invalid swapchain handle");
     if (m_impl->acquired) throw std::logic_error("An OpenGL swapchain image is already acquired");
     m_impl->ActivateContext(target);
+    // Keep the actual images in step with the native window's framebuffer size.
+    EGLint width{}, height{};
+    if (!eglQuerySurface(m_impl->group->display, target->surface, EGL_WIDTH, &width) ||
+        !eglQuerySurface(m_impl->group->display, target->surface, EGL_HEIGHT, &height))
+        throw std::runtime_error("Failed to query the OpenGL swapchain extent");
+    if (target->width != std::max(width, 1) || target->height != std::max(height, 1)) {
+        const auto count = static_cast<std::uint32_t>(target->images.size());
+        // Build the replacement first so allocation failure leaves the old images intact.
+        Impl::Swapchain replacement;
+        replacement.surface = target->surface;
+        replacement.context = target->context;
+        m_impl->CreateSwapchainImages(replacement, count);
+        m_impl->DestroySwapchainImages(*target);
+        target->images = std::move(replacement.images);
+        target->width = replacement.width;
+        target->height = replacement.height;
+        target->imageIndex = 0;
+    }
     m_impl->acquired = swapchain;
     m_impl->frameReady = false;
-    return {0x80000000u | swapchain.index, swapchain.generation, DeviceId()};
+    const auto& image = target->images.at(target->imageIndex);
+    return {.image = image.image, .view = image.view};
 }
 
 
@@ -139,6 +216,7 @@ OpenGLRenderDevice::~OpenGLRenderDevice() {
         auto& slot = m_impl->swapchains[i];
         if (!slot.value) continue;
         m_impl->ActivateContext(slot.value.get());
+        m_impl->DestroySwapchainImages(*slot.value);
         const SwapchainHandle handle{i, slot.generation, DeviceId()};
         for (auto& [_, pipeline] : m_impl->pipelines) {
             if (const auto vao = pipeline.vaos.find(handle); vao != pipeline.vaos.end()) {
@@ -163,6 +241,8 @@ OpenGLRenderDevice::~OpenGLRenderDevice() {
 }
 
 SwapchainHandle OpenGLRenderDevice::CreateSwapchain(Window& window, const SwapchainConfig& config) {
+    if (config.minImageCount == 0)
+        throw std::invalid_argument("Swapchain minImageCount must be at least one");
     if (!window.NativeDisplayHandle() || !window.NativeEGLWindowHandle())
         throw std::invalid_argument("OpenGL swapchain requires an EGL-enabled window from WindowManager");
     m_impl->group->Initialize(window.NativeDisplayHandle());
@@ -175,6 +255,7 @@ SwapchainHandle OpenGLRenderDevice::CreateSwapchain(Window& window, const Swapch
         m_impl->ActivateContext(state.get());
         if (eglSwapInterval(m_impl->group->display, config.vsync ? 1 : 0) != EGL_TRUE)
             throw std::runtime_error("Failed to configure EGL swap interval");
+        m_impl->CreateSwapchainImages(*state, config.minImageCount);
     } catch (...) {
         if (state->context != EGL_NO_CONTEXT) {
             eglMakeCurrent(m_impl->group->display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -197,6 +278,7 @@ bool OpenGLRenderDevice::DestroySwapchain(SwapchainHandle handle) {
     if (!slot.value || slot.generation != handle.generation) return false;
     if (m_impl->acquired == handle) { m_impl->acquired.reset(); m_impl->frameReady = false; }
     m_impl->ActivateContext(slot.value.get());
+    m_impl->DestroySwapchainImages(*slot.value);
     for (auto& [_, pipeline] : m_impl->pipelines) {
         if (const auto vao = pipeline.vaos.find(handle); vao != pipeline.vaos.end()) {
             glDeleteVertexArrays(1, &vao->second);
@@ -227,7 +309,7 @@ ImageHandle OpenGLRenderDevice::CreateImage(const ImageDesc& desc) {
     if (!desc.initialData.empty() && desc.type == ImageType::Image2D)
         glTextureSubImage2D(texture, 0, 0, 0, static_cast<GLsizei>(desc.width), static_cast<GLsizei>(desc.height), GL_RGBA, GL_UNSIGNED_BYTE, desc.initialData.data());
     const auto handle = MakeHandle<ImageHandle>(m_impl->nextImage++, DeviceId());
-    m_impl->images.emplace(handle, Impl::ImageResource{texture, desc.usage});
+    m_impl->images.emplace(handle, Impl::ImageResource{texture, desc.usage, desc.type});
     return handle;
 }
 ImageViewHandle OpenGLRenderDevice::CreateImageView(const ImageViewDesc& desc) {
@@ -478,8 +560,8 @@ RenderCapabilities OpenGLRenderDevice::GetCapabilities() const { return {}; }
 
 ImageViewHandle OpenGLRenderDevice::AcquiredImageView() const noexcept {
     if (!m_impl->acquired) return {};
-    const auto swapchain = *m_impl->acquired;
-    return {0x80000000u | swapchain.index, swapchain.generation, DeviceId()};
+    const auto* target = m_impl->FindSwapchain(*m_impl->acquired);
+    return target ? target->images[target->imageIndex].view : ImageViewHandle{};
 }
 
 void OpenGLRenderDevice::Submit(const IRenderCommandList& list) {
@@ -490,6 +572,7 @@ void OpenGLRenderDevice::Submit(const IRenderCommandList& list) {
     try {
         for (const auto& command : commands->Commands())
             std::visit([this](const auto& value) { value.Execute(this); }, command);
+        if (m_impl->acquired) m_impl->frameReady = true;
     } catch (...) {
         m_impl->frameReady = false;
         throw;
@@ -497,14 +580,43 @@ void OpenGLRenderDevice::Submit(const IRenderCommandList& list) {
 }
 
 void OpenGLRenderDevice::Present(SwapchainHandle swapchain) {
-    const auto* target = m_impl->FindSwapchain(swapchain);
+    auto* target = m_impl->FindSwapchain(swapchain);
     if (!target || m_impl->acquired != swapchain || !m_impl->frameReady)
         throw std::logic_error("OpenGL present requires the acquired swapchain image");
     m_impl->ActivateContext(target);
+    const auto& image = target->images.at(target->imageIndex);
+    GLint oldRead{}, oldDraw{};
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldRead);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &oldDraw);
+    const auto scissor = glIsEnabled(GL_SCISSOR_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, image.framebuffer);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glDrawBuffer(GL_BACK);
+    EGLint width{}, height{};
+    if (!eglQuerySurface(m_impl->group->display, target->surface, EGL_WIDTH, &width) ||
+        !eglQuerySurface(m_impl->group->display, target->surface, EGL_HEIGHT, &height)) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, oldRead);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, oldDraw);
+        if (scissor) glEnable(GL_SCISSOR_TEST);
+        throw std::runtime_error("Failed to query the OpenGL presentation extent");
+    }
+    glBlitFramebuffer(0, 0, target->width, target->height,
+                      0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, oldRead);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, oldDraw);
+    if (scissor) glEnable(GL_SCISSOR_TEST);
     if (eglSwapBuffers(m_impl->group->display, target->surface) != EGL_TRUE)
         throw std::runtime_error("EGL failed to present the rendered frame");
+    target->imageIndex = (target->imageIndex + 1) % target->images.size();
     m_impl->acquired.reset();
     m_impl->frameReady = false;
+}
+void OpenGLRenderDevice::WaitIdle() {
+    if (m_impl->acquired) m_impl->ActivateContext(m_impl->FindSwapchain(*m_impl->acquired));
+    else m_impl->ActivateContext();
+    glFinish();
 }
 
 #ifdef LIGHTHOUSE_IMGUI
@@ -530,8 +642,30 @@ void OpenGLRenderDevice::RenderImGui(SwapchainHandle swapchain, ImageViewHandle 
     if (m_impl->acquired != swapchain)
         throw std::logic_error("ImGui must render to the acquired OpenGL image");
     m_impl->ActivateContext(m_impl->FindSwapchain(swapchain));
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    const auto* target = m_impl->FindSwapchain(swapchain);
+    const auto view = m_impl->views.find(image);
+    if (view == m_impl->views.end())
+        throw std::invalid_argument("ImGui target is not a live OpenGL image view");
+    GLuint temporary{}, framebuffer = target->images[target->imageIndex].framebuffer;
+    if (image != target->images[target->imageIndex].view) {
+        glCreateFramebuffers(1, &temporary);
+        framebuffer = temporary;
+        glNamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, view->second.id, 0);
+        constexpr GLenum attachment = GL_COLOR_ATTACHMENT0;
+        glNamedFramebufferDrawBuffers(framebuffer, 1, &attachment);
+        if (glCheckNamedFramebufferStatus(framebuffer, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            glDeleteFramebuffers(1, &temporary);
+            throw std::runtime_error("OpenGL ImGui target framebuffer is incomplete");
+        }
+    }
+    GLint oldRead{}, oldDraw{};
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldRead);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &oldDraw);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     ImGui_ImplOpenGL3_RenderDrawData(drawData);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, oldRead);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, oldDraw);
+    if (temporary) glDeleteFramebuffers(1, &temporary);
     m_impl->frameReady = true;
 }
 #endif

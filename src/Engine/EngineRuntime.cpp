@@ -16,7 +16,7 @@ bool EngineRuntime::Initialize(const Config& config, const BackendRegistry& back
         try {
             auto device = m_backend.backend->CreateDevice(DeviceConfig{.applicationName = config.name});
             if (!device) { Shutdown(); return false; }
-            m_renderer.SetRenderDevice(std::move(device));
+            m_renderer = std::make_unique<Renderer>(std::move(device), &m_windows);
         } catch (...) {
             Shutdown();
             return false;
@@ -28,7 +28,7 @@ bool EngineRuntime::Initialize(const Config& config, const BackendRegistry& back
 }
 
 void EngineRuntime::Shutdown() noexcept {
-    m_renderer.ResetRenderDevice();
+    m_renderer.reset();
     if (m_backend.backend) m_backend.backend->Shutdown();
     m_backend.backend.reset();
     m_windows.Shutdown();

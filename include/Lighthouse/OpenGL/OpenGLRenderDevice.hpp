@@ -55,11 +55,12 @@ public:
     void DestroySampler(SamplerHandle handle) override;
     RenderCapabilities GetCapabilities() const override;
     SwapchainHandle CreateSwapchain(Window& window, const SwapchainConfig& config) override;
-    ImageViewHandle AcquireSwapchainImage(SwapchainHandle) override;
+    AcquiredSwapchainImage AcquireSwapchainImage(SwapchainHandle) override;
     bool DestroySwapchain(SwapchainHandle swapchain) override;
     bool IsValid(SwapchainHandle swapchain) const noexcept override;
     void Submit(const IRenderCommandList& commandList) override;
     void Present(SwapchainHandle swapchain) override;
+    void WaitIdle() override;
     ImageViewHandle AcquiredImageView() const noexcept;
 #ifdef LIGHTHOUSE_IMGUI
     void InitializeImGui(SwapchainHandle swapchain) override;

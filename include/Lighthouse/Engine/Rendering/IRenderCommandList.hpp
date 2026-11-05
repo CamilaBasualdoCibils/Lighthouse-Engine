@@ -13,6 +13,8 @@ class IRenderCommandList {
 public:
     virtual ~IRenderCommandList() = default;
 
+    virtual void Begin() = 0;
+    virtual void End() = 0;
     virtual void BeginRendering(const RenderPassDesc& description) = 0;
     virtual void EndRendering() = 0;
     virtual void BindPipeline(GraphicsPipelineHandle pipeline) = 0;

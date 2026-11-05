@@ -23,16 +23,27 @@ struct OpenGLRenderDevice::Impl {
     explicit Impl(std::shared_ptr<Detail::OpenGLDeviceGroup> deviceGroup, std::uint64_t deviceId)
         : group(std::move(deviceGroup)), owner(deviceId) {}
 
+    struct SwapchainImage {
+        ImageHandle image;
+        ImageViewHandle view;
+        GLuint framebuffer{};
+    };
     struct Swapchain {
         EGLSurface surface{EGL_NO_SURFACE};
         EGLContext context{EGL_NO_CONTEXT};
+        std::vector<SwapchainImage> images;
+        std::uint32_t imageIndex{};
+        GLsizei width{}, height{};
     };
     struct SwapchainSlot { std::uint32_t generation{1}; std::unique_ptr<Swapchain> value; };
     struct BufferResource { GLuint id{}; BufferMetadata metadata; };
-    struct ImageResource { GLuint id{}; Flags<ImageUsage> usage{ImageUsage::None}; };
+    struct ImageResource { GLuint id{}; Flags<ImageUsage> usage{ImageUsage::None}; ImageType type{ImageType::Image2D}; };
     struct ImageViewResource { GLuint id{}; ImageHandle image; };
 
-    const Swapchain* FindSwapchain(SwapchainHandle handle) const noexcept {
+    void CreateSwapchainImages(Swapchain& swapchain, std::uint32_t count);
+    void DestroySwapchainImages(Swapchain& swapchain);
+
+    Swapchain* FindSwapchain(SwapchainHandle handle) const noexcept {
         if (!handle || handle.owner != owner || handle.index >= swapchains.size()) return nullptr;
         const auto& slot = swapchains[handle.index];
         return slot.generation == handle.generation ? slot.value.get() : nullptr;

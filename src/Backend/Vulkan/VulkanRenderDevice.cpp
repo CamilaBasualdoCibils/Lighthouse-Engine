@@ -218,7 +218,7 @@ struct VulkanRenderDevice::Impl {
             state.extent.width = std::clamp(static_cast<std::uint32_t>(std::max(width, 1)), caps.minImageExtent.width, caps.maxImageExtent.width);
             state.extent.height = std::clamp(static_cast<std::uint32_t>(std::max(height, 1)), caps.minImageExtent.height, caps.maxImageExtent.height);
         }
-        std::uint32_t imageCount = std::max(caps.minImageCount + 1, config.imageCount);
+        std::uint32_t imageCount = std::max(caps.minImageCount + 1, config.minImageCount);
         if (caps.maxImageCount && imageCount > caps.maxImageCount) imageCount = caps.maxImageCount;
         VkSwapchainCreateInfoKHR create{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
         create.surface = state.surface;
@@ -579,7 +579,7 @@ void VulkanRenderDevice::DestroyModule(ShaderModuleHandle handle) {
 }
 RenderCapabilities VulkanRenderDevice::GetCapabilities() const { return {}; }
 
-ImageViewHandle VulkanRenderDevice::AcquireSwapchainImage(SwapchainHandle handle) {
+AcquiredSwapchainImage VulkanRenderDevice::AcquireSwapchainImage(SwapchainHandle handle) {
     auto& d = *m_impl;
     auto* target = d.FindSwapchain(handle);
     if (!target) throw std::invalid_argument("Vulkan acquire received an invalid swapchain handle");
@@ -594,7 +594,10 @@ ImageViewHandle VulkanRenderDevice::AcquireSwapchainImage(SwapchainHandle handle
 #ifdef LIGHTHOUSE_IMGUI
     d.imguiSubmitted = false;
 #endif
-    return {0x80000000u | handle.index, handle.generation, DeviceId()};
+    return {
+        .image = {0x80000000u | handle.index, handle.generation, DeviceId()},
+        .view = {0x80000000u | handle.index, handle.generation, DeviceId()}
+    };
 }
 
 void VulkanRenderDevice::Submit(const IRenderCommandList& list) {
@@ -725,6 +728,10 @@ void VulkanRenderDevice::Present(SwapchainHandle handle) {
 #ifdef LIGHTHOUSE_IMGUI
     d.imguiSubmitted = false;
 #endif
+}
+void VulkanRenderDevice::WaitIdle() {
+    auto& d = *m_impl;
+    if (d.device) vkDeviceWaitIdle(d.device);
 }
 
 #ifdef LIGHTHOUSE_IMGUI

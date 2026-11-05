@@ -7,6 +7,7 @@ pkg_check_modules(WAYLAND_EGL REQUIRED IMPORTED_TARGET wayland-egl)
 find_package(glm CONFIG REQUIRED)
 find_package(mimalloc CONFIG REQUIRED)
 find_path(TINYGLTF_INCLUDE_DIR NAMES tiny_gltf.h REQUIRED)
+find_package(spdlog CONFIG REQUIRED)
 
 file(GLOB_RECURSE _engine_sources CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
@@ -35,6 +36,6 @@ target_include_directories(LighthouseEngine PUBLIC
 target_include_directories(LighthouseEngine PRIVATE ${TINYGLTF_INCLUDE_DIR})
 target_include_directories(LighthouseEngine PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(LighthouseEngine PUBLIC EnTT::EnTT glm::glm fg::FrameGraph PRIVATE glfw PkgConfig::WAYLAND_EGL
-    glslang::glslang glslang::SPIRV glslang::glslang-default-resource-limits slang::slang $<IF:$<TARGET_EXISTS:mimalloc-static>,mimalloc-static,mimalloc>)
+    glslang::glslang glslang::SPIRV glslang::glslang-default-resource-limits slang::slang $<IF:$<TARGET_EXISTS:mimalloc-static>,mimalloc-static,mimalloc> spdlog::spdlog)
 target_compile_features(LighthouseEngine PUBLIC cxx_std_23)
 

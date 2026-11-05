@@ -3,6 +3,8 @@
 #include "IRenderGraphAllocator.hpp"
 #include "Lighthouse/Engine/Rendering/IRenderDevice.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
+#include <spdlog/logger.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 namespace Lighthouse {
 class SimpleRenderGraphAllocator : public IRenderGraphAllocator {
 public:
@@ -37,6 +39,8 @@ public:
                                       .baseArrayLayer = 0,
                                       .layerCount = 1};
     RenderGraphImageAllocation allocation{image, view, subresource};
+    m_logger->info("Allocated image ");
+
     return allocation;
   }
 
@@ -47,6 +51,7 @@ public:
       m_device.DestroyImageView(view);
       m_device.DestroyImage(it->second);
       m_imageViews.erase(it);
+      m_logger->info("Freed image ");
     }
   }
 
@@ -54,5 +59,6 @@ private:
   IRenderDevice &m_device;
 
   std::unordered_map<ImageViewHandle, ImageHandle> m_imageViews;
+  std::shared_ptr<spdlog::logger> m_logger = spdlog::stdout_color_mt("RenderGraphSimpleAllocator");
 };
 } // namespace Lighthouse

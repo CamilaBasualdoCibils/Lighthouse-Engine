@@ -51,7 +51,7 @@ TEST(WorldRendererTests, RegisteredSystemsCanBePreparedAndDispatched) {
     } commands;
     struct Device final : IRenderDevice {
         SwapchainHandle CreateSwapchain(Window&, const SwapchainConfig&) override { return {}; }
-        ImageViewHandle AcquireSwapchainImage(SwapchainHandle) override { return {}; }
+        AcquiredSwapchainImage AcquireSwapchainImage(SwapchainHandle) override { return {}; }
         bool DestroySwapchain(SwapchainHandle) override { return false; }
         bool IsValid(SwapchainHandle) const noexcept override { return false; }
         ImageHandle CreateImage(const ImageDesc&) override { return {}; }

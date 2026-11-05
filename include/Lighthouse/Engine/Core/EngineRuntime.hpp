@@ -9,7 +9,7 @@ namespace Lighthouse {
 
 class EngineRuntime {
 public:
-    EngineRuntime() : m_renderer(&m_windows) {}
+    EngineRuntime() {}
     ~EngineRuntime();
     EngineRuntime(const EngineRuntime&) = delete;
     EngineRuntime& operator=(const EngineRuntime&) = delete;
@@ -22,11 +22,11 @@ public:
     const IGraphicsBackend* GetGraphicsBackend() const noexcept { return m_backend.backend.get(); }
     const std::vector<BackendAttempt>& BackendDiagnostics() const noexcept { return m_backend.attempts; }
     WindowManager& GetWindowManager() noexcept { return m_windows; }
-    Renderer& GetRenderer() noexcept { return m_renderer; }
+    Renderer& GetRenderer() noexcept { return *m_renderer; }
 
 private:
     WindowManager m_windows;
-    Renderer m_renderer;
+    std::unique_ptr<Renderer> m_renderer;
     BackendSelectionResult m_backend;
 };
 

@@ -288,9 +288,16 @@ struct DeviceConfig {
     bool enableValidation{};
 };
 
+// Borrowed handles for the currently acquired swapchain image. The swapchain
+// owns these resources; callers must not destroy them.
+struct AcquiredSwapchainImage {
+    ImageHandle image;
+    ImageViewHandle view;
+};
+
 struct SwapchainConfig {
     bool vsync{true};
-    std::uint32_t imageCount{3};
+    std::uint32_t minImageCount{3};
 };
 
 } // namespace Lighthouse

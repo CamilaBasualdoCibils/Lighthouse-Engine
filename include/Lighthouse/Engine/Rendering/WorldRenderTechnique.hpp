@@ -46,7 +46,7 @@ public:
           data.metallic = builder.Write(data.metallic);
         },
         [](const WorldRenderGbufferPassData &data,
-           FrameGraphPassResources &resources,IRenderCommandList& context) {
+           FrameGraphPassResources &resources,RenderGraphExecutePassContext& context) {
 
         });
     m_worldRenderPassData =context.graph.AddPass<WorldRenderPassData>(
@@ -60,11 +60,11 @@ public:
               builder.Read(m_gbufferPassData.metallic);
               data.color = builder.Create<RenderGraphImage>(
                   std::string_view("Color"),
-                  RenderGraphImage::Desc{.format = ImageFormat::RGBA8});
+                  RenderGraphImage::Desc{.width = 1280,.height = 720,.format = ImageFormat::RGBA8,});
               data.color = builder.Write(data.color);
            },
         [](const WorldRenderPassData &data,
-           FrameGraphPassResources &resources,IRenderCommandList& context) {
+           FrameGraphPassResources &resources,RenderGraphExecutePassContext& context) {
 
         });
   }
