@@ -20,6 +20,9 @@ public:
 
     std::uint64_t DeviceId() const noexcept { return m_deviceId; }
 
+    // Native window requirement used by Renderer when creating a window view.
+    virtual bool RequiresEGLWindow() const noexcept { return false; }
+
     virtual SwapchainHandle CreateSwapchain(Window&, const SwapchainConfig&) = 0;
     // Returns an attachment handle for the currently acquired swapchain image.
     virtual AcquiredSwapchainImage AcquireSwapchainImage(SwapchainHandle) = 0;

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <spdlog/logger.h>
+#include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <stdexcept>
 #include <utility>
@@ -128,8 +129,6 @@ public:
 
 class WindowView final : public IOutputView {
 public:
-    WindowView(WindowHandle window, RenderViewDesc desc = {}, SwapchainConfig config = {})
-        : IOutputView(std::move(desc)), window(window), presentation(config) {}
     WindowHandle window;
     SwapchainConfig presentation;
     SwapchainHandle swapchain;
@@ -144,10 +143,12 @@ public:
     RenderGraphResource GetAcquiredImageAsRGResource() const noexcept { return m_acquiredImageAsRGResource.value_or(kInvalidGraphResource); }
   private:
     friend class Renderer;
+    WindowView(WindowHandle window, RenderViewDesc desc, SwapchainConfig config)
+        : IOutputView(std::move(desc)), window(window), presentation(config) {}
     WindowManager* m_windows{};
     std::optional<AcquiredSwapchainImage> m_acquiredImage;
     std::optional<RenderGraphResource> m_acquiredImageAsRGResource;
-    std::shared_ptr<spdlog::logger> m_logger = spdlog::stdout_color_mt("WindowView");
+    std::shared_ptr<spdlog::logger> m_logger = (spdlog::get("WindowView") ? spdlog::get("WindowView") : spdlog::stdout_color_mt("WindowView"));
 };
 class ExportView final : public IOutputView {
 public:

@@ -58,18 +58,12 @@ public:
         camera.Add<Lighthouse::Camera>(Lighthouse::Camera{70.0f});
         scene.SetActiveCamera(camera);
 
-        const auto windowHandle = GetWindowManager().CreateWindow({
-            .title = "Lighthouse Window and Scene",
-            .width = 960,
-            .height = 540,
-            .eglSurface = true});
-        GetWindowManager().GetWindow(windowHandle)->Show();
-
         Lighthouse::RenderViewDesc description;
         description.scene = scene.Handle();
         description.camera = Lighthouse::CameraSource{camera};
         
-        m_windowView = GetRenderer().CreateView<Lighthouse::WindowView>(windowHandle, description);
+        m_windowView = GetRenderer().CreateView<Lighthouse::WindowView>(Lighthouse::RenderWindowDesc{
+            .title = "Lighthouse Window and Scene", .width = 960, .height = 540}, description);
         auto* view = GetRenderer().GetView<Lighthouse::WindowView>(m_windowView);
 
         //acquire swapchain image
@@ -79,7 +73,7 @@ public:
         const auto clear = view->AddTechnique<GreenClearTechnique>(acquire);
 
 #ifdef LIGHTHOUSE_IMGUI
-        m_imgui = std::make_shared<Lighthouse::ImGuiSession>(*GetWindowManager().GetWindow(windowHandle));
+        m_imgui = std::make_shared<Lighthouse::ImGuiSession>(*view->GetWindow());
         const auto imgui = view->AddTechnique<Lighthouse::ImGuiTechnique>(
             m_imgui, clear, [] { ImGui::ShowDemoWindow(); });
         view->AddTechnique<Lighthouse::PresentSwapchainImageTechnique>(imgui);

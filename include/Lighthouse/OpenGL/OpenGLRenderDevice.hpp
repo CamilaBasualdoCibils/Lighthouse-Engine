@@ -27,6 +27,8 @@ public:
     OpenGLRenderDevice(const OpenGLRenderDevice&) = delete;
     OpenGLRenderDevice& operator=(const OpenGLRenderDevice&) = delete;
 
+    bool RequiresEGLWindow() const noexcept override { return true; }
+
     ImageHandle CreateImage(const ImageDesc& description) override;
     ImageViewHandle CreateImageView(const ImageViewDesc& description) override;
     BufferHandle CreateBuffer(const BufferDesc& description) override;

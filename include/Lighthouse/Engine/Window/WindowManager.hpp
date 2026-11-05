@@ -24,6 +24,7 @@ struct WindowDesc {
     bool eglSurface{};
     bool resizable{true};
     bool visible{true};
+    bool decorated{true};
 };
 
 struct WindowEvent {
@@ -38,6 +39,10 @@ struct WindowEvent {
 
 class WindowManager;
 
+struct FramebufferSize {
+    std::uint32_t width{}, height{};
+};
+
 class Window {
 public:
     WindowHandle Handle() const noexcept { return m_handle; }
@@ -46,6 +51,9 @@ public:
     std::uint32_t Height() const noexcept { return m_height; }
     std::uint32_t FramebufferWidth() const noexcept { return m_framebufferWidth; }
     std::uint32_t FramebufferHeight() const noexcept { return m_framebufferHeight; }
+    FramebufferSize GetFramebufferSize() const noexcept {
+        return {m_framebufferWidth, m_framebufferHeight};
+    }
     std::int32_t X() const noexcept { return m_x; }
     std::int32_t Y() const noexcept { return m_y; }
     bool IsVisible() const noexcept { return m_visible; }

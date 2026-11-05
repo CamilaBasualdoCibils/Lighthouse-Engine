@@ -20,6 +20,17 @@ namespace Lighthouse {
 class IRenderDevice;
 class RenderMeshManager;
 
+// Renderer-facing window options. Native surface setup comes from the device.
+struct RenderWindowDesc {
+  std::string title;
+  std::uint32_t width{1280};
+  std::uint32_t height{720};
+  WindowMode mode{WindowMode::Windowed};
+  bool resizable{true};
+  bool visible{true};
+  bool decorated{true};
+};
+
 class Renderer {
 public:
   explicit Renderer(std::unique_ptr<IRenderDevice> device,
@@ -45,22 +56,16 @@ public:
   template <typename T, typename... Args>
   RenderViewHandle CreateView(Args &&...args) {
     static_assert(std::is_base_of_v<IRenderView, T>);
-    auto value = std::make_unique<T>(std::forward<Args>(args)...);
-    if (auto *window = dynamic_cast<WindowView *>(value.get())) {
-      window->m_windows = m_windows;
-      for (const auto &slot : m_views)
-        if (auto *existing = dynamic_cast<WindowView *>(slot.value.get());
-            existing && existing->window == window->window)
-          throw std::logic_error("Window already has a render view");
+    if constexpr (std::is_same_v<T, WindowView>) {
+      return CreateWindowView(std::forward<Args>(args)...);
+    } else {
+      return AddView(std::make_unique<T>(std::forward<Args>(args)...));
     }
-    std::uint32_t index = 0;
-    while (index < m_views.size() && m_views[index].value)
-      ++index;
-    if (index == m_views.size())
-      m_views.emplace_back();
-    m_views[index].value = std::move(value);
-    return {index, m_views[index].generation, m_ownerId};
   }
+  // Creates and owns the native window along with its render view.
+  RenderViewHandle CreateWindowView(const RenderWindowDesc& window = {},
+                                    RenderViewDesc description = {},
+                                    SwapchainConfig presentation = {});
   bool DestroyView(RenderViewHandle view);
   IRenderView *GetView(RenderViewHandle view) noexcept;
   const IRenderView *GetView(RenderViewHandle view) const noexcept;
@@ -76,6 +81,7 @@ public:
   void Render();
 
 private:
+  RenderViewHandle AddView(std::unique_ptr<IRenderView> value);
   struct Slot {
     std::uint32_t generation{1};
     std::unique_ptr<IRenderView> value;

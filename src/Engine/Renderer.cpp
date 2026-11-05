@@ -19,7 +19,45 @@ Renderer::Renderer(std::unique_ptr<IRenderDevice> device,WindowManager *windows)
   static std::atomic<std::uint64_t> nextOwner{1};
   m_ownerId = nextOwner.fetch_add(1, std::memory_order_relaxed);
 }
-Renderer::~Renderer() { }
+Renderer::~Renderer() {
+  for (std::uint32_t i = 0; i < m_views.size(); ++i)
+    if (m_views[i].value)
+      DestroyView({i, m_views[i].generation, m_ownerId});
+}
+
+RenderViewHandle Renderer::AddView(std::unique_ptr<IRenderView> value) {
+  std::uint32_t index = 0;
+  while (index < m_views.size() && m_views[index].value) ++index;
+  if (index == m_views.size()) m_views.emplace_back();
+  m_views[index].value = std::move(value);
+  return {index, m_views[index].generation, m_ownerId};
+}
+
+RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc& description,
+                                           RenderViewDesc viewDescription,
+                                           SwapchainConfig presentation) {
+  if (!m_windows)
+    throw std::logic_error("Creating a window view requires a WindowManager");
+  const auto window = m_windows->CreateWindow(WindowDesc{
+      .title = description.title,
+      .width = description.width,
+      .height = description.height,
+      .mode = description.mode,
+      .eglSurface = m_device->RequiresEGLWindow(),
+      .resizable = description.resizable,
+      .visible = description.visible,
+      .decorated = description.decorated,
+  });
+  try {
+    auto view = std::unique_ptr<WindowView>(
+        new WindowView(window, std::move(viewDescription), presentation));
+    view->m_windows = m_windows;
+    return AddView(std::move(view));
+  } catch (...) {
+    m_windows->DestroyWindow(window);
+    throw;
+  }
+}
 
 RenderMeshHandle Renderer::CreateRenderMesh(const RenderMesh &description) {
   return m_renderMeshManager->Create(description, m_device.get());
@@ -52,11 +90,13 @@ bool Renderer::DestroyView(RenderViewHandle handle) {
   auto *view = GetView(handle);
   if (!view)
     return false;
-  if (auto *window = dynamic_cast<WindowView *>(view);
-      window && window->swapchain && m_device)
-    m_device->DestroySwapchain(window->swapchain);
+  auto* windowView = dynamic_cast<WindowView*>(view);
+  const auto window = windowView ? windowView->window : WindowHandle{};
+  if (windowView && windowView->swapchain && m_device)
+    m_device->DestroySwapchain(windowView->swapchain);
   auto &slot = m_views[handle.index];
   slot.value.reset();
+  if (window && m_windows) m_windows->DestroyWindow(window);
   if (++slot.generation == 0)
     ++slot.generation;
   return true;

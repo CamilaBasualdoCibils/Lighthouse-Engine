@@ -1,5 +1,6 @@
 #include <Lighthouse/Engine/Assets/Assets.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
+#include <Lighthouse/Engine/Rendering/Renderer.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
 #include <Lighthouse/OpenGL/OpenGLBackend.hpp>
 #include "OpenGLShaderTranslator.hpp"
@@ -176,6 +177,64 @@ TEST(OpenGLSwapchainTests, RotatesRealImagesAndBlitsTheirPixels) {
     device.reset();
     backend.Shutdown();
     windows.DestroyWindow(windowHandle);
+}
+
+TEST(OpenGLWindowViewTests, RendererCreatesAndOwnsWindowWhileStandaloneWindowsRemainIndependent) {
+    WindowManager windows;
+    WindowHandle standalone;
+    try {
+        standalone = windows.CreateWindow({.title = "Standalone", .width = 64, .height = 64,
+            .eglSurface = true, .visible = false});
+    } catch (const std::runtime_error& error) {
+        GTEST_SKIP() << "Native OpenGL display is unavailable: " << error.what();
+    }
+    OpenGLBackend backend;
+    std::string diagnostic;
+    ASSERT_TRUE(backend.Initialize(diagnostic)) << diagnostic;
+    WindowHandle ownedWindow;
+    {
+        Renderer renderer(backend.CreateDevice({}), &windows);
+        const auto viewHandle = renderer.CreateView<WindowView>(RenderWindowDesc{
+            .title = "Renderer window", .width = 96, .height = 80,
+            .resizable = false, .visible = false, .decorated = false});
+        auto* view = renderer.GetView<WindowView>(viewHandle);
+        ASSERT_NE(view, nullptr);
+        auto* window = view->GetWindow();
+        ASSERT_NE(window, nullptr);
+        ownedWindow = window->Handle();
+        EXPECT_EQ(window->Title(), "Renderer window");
+        EXPECT_EQ(window->Width(), 96u);
+        EXPECT_EQ(window->Height(), 80u);
+        EXPECT_FALSE(window->IsVisible());
+        EXPECT_NE(window->NativeEGLWindowHandle(), nullptr);
+        EXPECT_NE(window->NativeDisplayHandle(), nullptr);
+        const auto size = window->GetFramebufferSize();
+        EXPECT_EQ(size.width, window->FramebufferWidth());
+        EXPECT_EQ(size.height, window->FramebufferHeight());
+        EXPECT_GT(size.width, 0u);
+        EXPECT_GT(size.height, 0u);
+        RenderGraph graph;
+        ViewBuildContext context{graph, *renderer.GetRenderDevice()};
+        view->BuildGraph(context);
+        const auto swapchain = view->swapchain;
+        EXPECT_TRUE(renderer.GetRenderDevice()->IsValid(swapchain));
+        EXPECT_TRUE(renderer.DestroyView(viewHandle));
+        EXPECT_EQ(renderer.GetView(viewHandle), nullptr);
+        EXPECT_EQ(windows.GetWindow(ownedWindow), nullptr);
+        EXPECT_FALSE(renderer.GetRenderDevice()->IsValid(swapchain));
+        EXPECT_NE(windows.GetWindow(standalone), nullptr);
+        EXPECT_THROW(renderer.CreateView<WindowView>(RenderWindowDesc{.width = 0}), std::invalid_argument);
+        const auto remaining = renderer.CreateWindowView(RenderWindowDesc{
+            .title = "Destructor cleanup", .width = 64, .height = 64,
+            .visible = false});
+        auto* remainingView = renderer.GetView<WindowView>(remaining);
+        ownedWindow = remainingView->GetWindow()->Handle();
+        remainingView->BuildGraph(context);
+    }
+    EXPECT_EQ(windows.GetWindow(ownedWindow), nullptr);
+    EXPECT_NE(windows.GetWindow(standalone), nullptr);
+    windows.DestroyWindow(standalone);
+    backend.Shutdown();
 }
 
 } // namespace
