@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-#include <Lighthouse/Engine/Scene/Entity.hpp>
+
 #include <Lighthouse/Engine/Core/Handle.hpp>
 #include <Lighthouse/Engine/Core/Types.hpp>
 #include <Lighthouse/Engine/Rendering/RenderTechnique.hpp>
@@ -27,50 +27,13 @@ struct ViewBuildContext {
     IRenderDevice& device;
 };
 
-struct ExplicitCamera {
-    Vec3 position{};
-    Vec3 direction{0.0f, 0.0f, 1.0f};
-    float fieldOfViewDegrees{70.0f};
-};
-class CameraSource {
-public:
-    CameraSource() = default;
-    CameraSource(const Entity& entity);
-    CameraSource(ExplicitCamera camera) : m_source(camera) {}
-    bool IsSet() const noexcept;
-    bool IsValid() const noexcept;
-    const std::variant<std::monostate, Entity, ExplicitCamera>& Value() const noexcept { return m_source; }
-private:
-    std::variant<std::monostate, Entity, ExplicitCamera> m_source;
-};
-struct RenderSettings {
-    Vec3 clearColor{};
-    bool clearColorEnabled{true};
-    bool clearDepthEnabled{true};
-};
-using LayerMask = std::uint64_t;
-struct RenderViewDesc {
-    SceneHandle scene;
-    CameraSource camera;
-    RenderSettings settings;
-    LayerMask visibleLayers{~LayerMask{0}};
-};
 
 class IRenderView {
 public:
-    explicit IRenderView(RenderViewDesc desc = {});
+    explicit IRenderView();
     virtual ~IRenderView() = default;
     IRenderView(const IRenderView&) = delete;
     IRenderView& operator=(const IRenderView&) = delete;
-    void SetScene(SceneHandle value) noexcept { m_desc.scene = value; }
-    void SetCamera(CameraSource value) { m_desc.camera = std::move(value); }
-    void SetSettings(const RenderSettings& value) { m_desc.settings = value; }
-    void SetVisibleLayers(LayerMask value) noexcept { m_desc.visibleLayers = value; }
-    SceneHandle GetScene() const noexcept { return m_desc.scene; }
-    const CameraSource& GetCamera() const noexcept { return m_desc.camera; }
-    const RenderSettings& GetSettings() const noexcept { return m_desc.settings; }
-    LayerMask GetVisibleLayers() const noexcept { return m_desc.visibleLayers; }
-    bool HasValidReferences() const noexcept;
     virtual void BuildGraph(ViewBuildContext& ctx);
 
     template <typename T, typename... Args> TechniqueRef<T> AddTechnique(Args&&... args) {
@@ -100,8 +63,6 @@ public:
     template <typename T> bool RemoveTechnique(TechniqueRef<T> ref) { return RemoveTechnique(ref.handle); }
     std::vector<RenderTechniqueHandle> Techniques() const;
     std::uint64_t OwnerId() const noexcept { return m_ownerId; }
-    void AddViewDependency(RenderViewHandle handle);
-    const std::vector<RenderViewHandle>& ViewDependencies() const noexcept { return m_viewDependencies; }
 
 protected:
     void BuildTechniques(ViewBuildContext& ctx);
@@ -113,10 +74,8 @@ private:
     };
     Slot* FindSlot(RenderTechniqueHandle handle) noexcept;
     const Slot* FindSlot(RenderTechniqueHandle handle) const noexcept;
-    RenderViewDesc m_desc;
     std::uint64_t m_ownerId;
     std::vector<Slot> m_techniques;
-    std::vector<RenderViewHandle> m_viewDependencies;
 };
 
 class IOutputView : public IRenderView {
@@ -143,8 +102,8 @@ public:
     RenderGraphResource GetAcquiredImageAsRGResource() const noexcept { return m_acquiredImageAsRGResource.value_or(kInvalidGraphResource); }
   private:
     friend class Renderer;
-    WindowView(WindowHandle window, RenderViewDesc desc, SwapchainConfig config)
-        : IOutputView(std::move(desc)), window(window), presentation(config) {}
+    WindowView(WindowHandle window, SwapchainConfig config)
+        : IOutputView(), window(window), presentation(config) {}
     WindowManager* m_windows{};
     std::optional<AcquiredSwapchainImage> m_acquiredImage;
     std::optional<RenderGraphResource> m_acquiredImageAsRGResource;
@@ -160,8 +119,8 @@ public:
 
   }
 
-    ExportView(ImageViewHandle imageView, ImportedRenderGraphImage::Desc description, RenderViewDesc desc = {})
-        : IOutputView(std::move(desc)), imageView(imageView), description(description) {}
+    ExportView(ImageViewHandle imageView, ImportedRenderGraphImage::Desc description)
+        : IOutputView(), imageView(imageView), description(description) {}
     ImageViewHandle imageView;
     ImportedRenderGraphImage::Desc description;
     RenderGraphResource GetExportImage() const noexcept { return m_exportImage; }

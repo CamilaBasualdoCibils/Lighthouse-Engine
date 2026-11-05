@@ -38,6 +38,7 @@ public:
   ~Renderer();
   Renderer(const Renderer &) = delete;
   Renderer &operator=(const Renderer &) = delete;
+  WindowManager* GetWindowManager() noexcept { return m_windows; }
   IRenderDevice *GetRenderDevice() noexcept { return m_device.get(); }
   const IRenderDevice *GetRenderDevice() const noexcept {
     return m_device.get();
@@ -64,7 +65,6 @@ public:
   }
   // Creates and owns the native window along with its render view.
   RenderViewHandle CreateWindowView(const RenderWindowDesc& window = {},
-                                    RenderViewDesc description = {},
                                     SwapchainConfig presentation = {});
   bool DestroyView(RenderViewHandle view);
   IRenderView *GetView(RenderViewHandle view) noexcept;

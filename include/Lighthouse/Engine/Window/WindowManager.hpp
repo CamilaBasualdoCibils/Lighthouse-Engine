@@ -90,6 +90,9 @@ public:
     WindowManager(const WindowManager&) = delete;
     WindowManager& operator=(const WindowManager&) = delete;
 
+    // Selects the configured platform before GLFW initialization. Also used by
+    // ImGui's private platform windows, which are not engine windows.
+    void Initialize();
     WindowHandle CreateWindow(const WindowDesc& desc);
     void DestroyWindow(WindowHandle window);
     void Shutdown() noexcept;

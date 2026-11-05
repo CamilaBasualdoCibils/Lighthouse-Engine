@@ -4,6 +4,9 @@
 #include "OpenGLDeviceGroup.hpp"
 
 #include <EGL/eglext.h>
+#ifdef LIGHTHOUSE_IMGUI
+#include <X11/Xlib.h>
+#endif
 #include <stdexcept>
 
 namespace Lighthouse {
@@ -12,6 +15,8 @@ namespace Detail {
 
 OpenGLDeviceGroup::~OpenGLDeviceGroup() {
     if (display == EGL_NO_DISPLAY) return;
+    if (eglGetCurrentDisplay() == display)
+        eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     if (pbuffer != EGL_NO_SURFACE) eglDestroySurface(display, pbuffer);
     if (shareContext != EGL_NO_CONTEXT) eglDestroyContext(display, shareContext);
     eglTerminate(display);
@@ -19,7 +24,11 @@ OpenGLDeviceGroup::~OpenGLDeviceGroup() {
 
 void OpenGLDeviceGroup::Initialize(void* nativeDisplay) {
     if (display != EGL_NO_DISPLAY) return;
+#ifdef LIGHTHOUSE_IMGUI
+    const auto candidateDisplay = eglGetPlatformDisplay(EGL_PLATFORM_X11_KHR, nativeDisplay, nullptr);
+#else
     const auto candidateDisplay = eglGetPlatformDisplay(EGL_PLATFORM_WAYLAND_KHR, nativeDisplay, nullptr);
+#endif
     if (candidateDisplay == EGL_NO_DISPLAY || eglInitialize(candidateDisplay, nullptr, nullptr) != EGL_TRUE)
         throw std::runtime_error("Failed to initialize EGL for the window's native display");
     if (eglBindAPI(EGL_OPENGL_API) != EGL_TRUE) {
@@ -28,7 +37,13 @@ void OpenGLDeviceGroup::Initialize(void* nativeDisplay) {
     }
     const EGLint configAttributes[]{EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE,
         EGL_OPENGL_BIT, EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8,
-        EGL_ALPHA_SIZE, 8, EGL_NONE};
+#ifdef LIGHTHOUSE_IMGUI
+        EGL_ALPHA_SIZE, 0, EGL_NATIVE_VISUAL_ID,
+        static_cast<EGLint>(XVisualIDFromVisual(DefaultVisual(static_cast<Display*>(nativeDisplay), DefaultScreen(static_cast<Display*>(nativeDisplay))))),
+#else
+        EGL_ALPHA_SIZE, 8,
+#endif
+        EGL_NONE};
     EGLConfig candidateConfig{};
     EGLint count{};
     if (eglChooseConfig(candidateDisplay, configAttributes, &candidateConfig, 1, &count) != EGL_TRUE || !count) {

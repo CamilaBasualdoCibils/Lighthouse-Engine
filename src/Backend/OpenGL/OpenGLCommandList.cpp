@@ -95,15 +95,16 @@ GLuint CreateVertexArray(const VertexLayout &layout) {
 void OpenGLCommandList::BeginRenderCommand::Execute(
     OpenGLRenderDevice *device) const {
   auto &state = *device->m_impl;
+  state.ActivateView(desc.colorAttachment);
   if (state.activeFramebuffer) {
     glDeleteFramebuffers(1, &state.activeFramebuffer);
     state.activeFramebuffer = 0;
   }
   if (state.acquired && desc.colorAttachment == device->AcquiredImageView()) {
-    const auto *target = state.FindSwapchain(*state.acquired);
+    auto *target = state.FindSwapchain(*state.acquired);
     glBindFramebuffer(GL_FRAMEBUFFER,
                       target->images[target->imageIndex].framebuffer);
-    state.frameReady = true;
+    target->frameReady = true;
   } else {
     if (!desc.colorAttachment)
       throw std::logic_error("Render pass has no color attachment");
@@ -313,6 +314,8 @@ void OpenGLCommandList::DispatchCommand::Execute(OpenGLRenderDevice *) const {
 void OpenGLCommandList::BlitImageCommand::Execute(
     OpenGLRenderDevice *device) const {
   auto &state = *device->m_impl;
+  // FBOs are context-local, even though their texture attachments are shared.
+  if (!state.ActivateImage(dst)) state.ActivateImage(src);
   const auto srcImage = state.images.find(src);
   const auto dstImage = state.images.find(dst);
   if (srcImage == state.images.end() || dstImage == state.images.end())

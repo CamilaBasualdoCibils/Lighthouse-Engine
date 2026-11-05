@@ -10,12 +10,6 @@
 
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
 
-#include <Lighthouse/Engine/Scene/Camera.hpp>
-#include <Lighthouse/Engine/Scene/Entity.hpp>
-#include <Lighthouse/Engine/Scene/MeshRenderer.hpp>
-#include <Lighthouse/Engine/Scene/Scene.hpp>
-#include <Lighthouse/Engine/Scene/Transform.hpp>
-
 #include <Lighthouse/Engine/Assets/Assets.hpp>
 #include <Lighthouse/Engine/Assets/Shader.hpp>
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
@@ -27,7 +21,6 @@
 #include <Lighthouse/Engine/Rendering/RenderView.hpp>
 #include <Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp>
 #include <Lighthouse/Engine/Rendering/RenderMesh.hpp>
-#include <Lighthouse/Engine/Rendering/RenderScene.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderCommandList.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 #include <Lighthouse/Engine/Rendering/RenderTypes.hpp>

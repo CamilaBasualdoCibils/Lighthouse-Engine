@@ -12,6 +12,9 @@
 #include <vector>
 #include <map>
 
+struct GLFWwindow;
+struct ImGuiContext;
+
 namespace Lighthouse {
 
 template <typename HandleType>
@@ -34,6 +37,7 @@ struct OpenGLRenderDevice::Impl {
         std::vector<SwapchainImage> images;
         std::uint32_t imageIndex{};
         GLsizei width{}, height{};
+        bool acquired{}, frameReady{};
     };
     struct SwapchainSlot { std::uint32_t generation{1}; std::unique_ptr<Swapchain> value; };
     struct BufferResource { GLuint id{}; BufferMetadata metadata; };
@@ -49,6 +53,21 @@ struct OpenGLRenderDevice::Impl {
         return slot.generation == handle.generation ? slot.value.get() : nullptr;
     }
 
+    bool ActivateImage(ImageHandle image) {
+        for (std::uint32_t i = 0; i < swapchains.size(); ++i) {
+            auto* target = swapchains[i].value.get();
+            if (!target || !target->acquired || target->images[target->imageIndex].image != image) continue;
+            ActivateContext(target);
+            acquired = SwapchainHandle{i, swapchains[i].generation, owner};
+            return true;
+        }
+        return false;
+    }
+    void ActivateView(ImageViewHandle view) {
+        const auto found = views.find(view);
+        if (found != views.end()) ActivateImage(found->second.image);
+    }
+
     void ActivateContext(const Swapchain* requested = nullptr) const {
         if (!group || group->display == EGL_NO_DISPLAY)
             throw std::logic_error("Initialize an EGL display by creating a swapchain before using the OpenGL device");
@@ -61,12 +80,28 @@ struct OpenGLRenderDevice::Impl {
             throw std::runtime_error("Failed to make the EGL OpenGL context current");
     }
 
+#ifdef LIGHTHOUSE_IMGUI
+    struct ContextSnapshot {
+        GLFWwindow* glfw{};
+        EGLDisplay display{EGL_NO_DISPLAY};
+        EGLContext context{EGL_NO_CONTEXT};
+        EGLSurface read{EGL_NO_SURFACE}, draw{EGL_NO_SURFACE};
+        static ContextSnapshot Capture();
+        void Restore() const noexcept;
+    };
+    struct ImGuiState {
+        GLFWwindow* host{};
+        ContextSnapshot saved;
+        bool frameActive{};
+    };
+    std::unordered_map<ImGuiContext*, ImGuiState> imgui;
+#endif
+
     std::shared_ptr<Detail::OpenGLDeviceGroup> group;
     std::uint64_t owner{};
     std::vector<SwapchainSlot> swapchains;
     GLuint activeFramebuffer{};
     std::optional<SwapchainHandle> acquired;
-    bool frameReady{};
     std::uint32_t nextImage{1}, nextView{1}, nextBuffer{1}, nextShader{1}, nextPipeline{1};
     std::uint32_t nextSetLayout{1}, nextSet{1}, nextPipelineLayout{1}, nextSampler{1};
     std::unordered_map<ImageHandle, ImageResource, OpenGLHandleHash<ImageHandle>> images;

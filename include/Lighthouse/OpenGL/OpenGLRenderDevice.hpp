@@ -65,10 +65,11 @@ public:
     void WaitIdle() override;
     ImageViewHandle AcquiredImageView() const noexcept;
 #ifdef LIGHTHOUSE_IMGUI
-    void InitializeImGui(SwapchainHandle swapchain) override;
+    void InitializeImGui(WindowManager& windows) override;
     void ShutdownImGui() noexcept override;
-    void NewImGuiFrame() override;
-    void RenderImGui(SwapchainHandle swapchain, ImageViewHandle image, ImDrawData* drawData) override;
+    void BeginImGuiFrame() override;
+    void RenderImGuiViewports() override;
+    void EndImGuiFrame() noexcept override;
 #endif
 
 private:

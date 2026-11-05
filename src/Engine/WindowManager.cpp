@@ -2,9 +2,13 @@
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#ifdef LIGHTHOUSE_IMGUI
+#define GLFW_EXPOSE_NATIVE_X11
+#else
 #define GLFW_EXPOSE_NATIVE_WAYLAND
-#include <GLFW/glfw3native.h>
 #include <wayland-egl.h>
+#endif
+#include <GLFW/glfw3native.h>
 
 #include <algorithm>
 #include <iterator>
@@ -45,7 +49,9 @@ void WindowManager::Shutdown() noexcept {
     if (std::this_thread::get_id() != m_mainThread) std::terminate();
     for (auto& slot : m_slots) {
         if (slot.window && slot.window->m_native) {
+#ifndef LIGHTHOUSE_IMGUI
             if (slot.window->m_eglWindow) wl_egl_window_destroy(static_cast<wl_egl_window*>(slot.window->m_eglWindow));
+#endif
             glfwDestroyWindow(slot.window->m_native);
             slot.window.reset();
             if (++slot.generation == 0) ++slot.generation;
@@ -63,16 +69,37 @@ void WindowManager::RequireMainThread() const {
     }
 }
 
+void WindowManager::Initialize() {
+    RequireMainThread();
+    if (m_glfwInitialized) return;
+#ifdef LIGHTHOUSE_IMGUI
+    constexpr int platform = GLFW_PLATFORM_X11;
+    constexpr const char* name = "X11/XWayland";
+#else
+    constexpr int platform = GLFW_PLATFORM_WAYLAND;
+    constexpr const char* name = "Wayland";
+#endif
+    glfwInitHint(GLFW_PLATFORM, platform);
+    if (!glfwInit()) {
+        const char* reason{};
+        glfwGetError(&reason);
+        throw std::runtime_error(std::string("Failed to initialize required GLFW platform ") + name +
+                                 ": " + (reason ? reason : "unknown GLFW error"));
+    }
+    if (glfwGetPlatform() != platform) {
+        glfwTerminate();
+        throw std::runtime_error(std::string("GLFW did not select required platform ") + name);
+    }
+    m_glfwInitialized = true;
+    int count{};
+    auto** monitors = glfwGetMonitors(&count);
+    for (int i = 0; i < count; ++i) m_monitors.push_back(monitors[i]);
+}
+
 WindowHandle WindowManager::CreateWindow(const WindowDesc& desc) {
     RequireMainThread();
     if (desc.width == 0 || desc.height == 0) throw std::invalid_argument("Window dimensions must be nonzero");
-    if (!m_glfwInitialized) {
-        if (!glfwInit()) throw std::runtime_error("GLFW could not initialize a native window system");
-        m_glfwInitialized = true;
-        int count{};
-        GLFWmonitor** monitors = glfwGetMonitors(&count);
-        for (int i = 0; i < count; ++i) m_monitors.push_back(monitors[i]);
-    }
+    Initialize();
     std::uint32_t index = 0;
     while (index < m_slots.size() && m_slots[index].window) ++index;
     if (index == m_slots.size()) m_slots.emplace_back();
@@ -116,6 +143,10 @@ WindowHandle WindowManager::CreateWindow(const WindowDesc& desc) {
     slot.window = std::move(window);
     auto* native = slot.window->m_native;
     if (desc.eglSurface) {
+#ifdef LIGHTHOUSE_IMGUI
+        slot.window->m_nativeDisplay = glfwGetX11Display();
+        slot.window->m_eglWindow = reinterpret_cast<void*>(static_cast<std::uintptr_t>(glfwGetX11Window(native)));
+#else
         auto* display = glfwGetWaylandDisplay();
         auto* surface = glfwGetWaylandWindow(native);
         if (!display || !surface) {
@@ -133,6 +164,7 @@ WindowHandle WindowManager::CreateWindow(const WindowDesc& desc) {
         }
         slot.window->m_nativeDisplay = display;
         slot.window->m_eglWindow = eglWindow;
+#endif
     }
     glfwSetWindowUserPointer(native, slot.window.get());
     glfwSetWindowCloseCallback(native, &OnClose);
@@ -154,7 +186,9 @@ void WindowManager::DestroyWindow(WindowHandle handle) {
     RequireMainThread();
     auto* window = GetWindow(handle);
     if (!window) return;
+#ifndef LIGHTHOUSE_IMGUI
     if (window->m_eglWindow) wl_egl_window_destroy(static_cast<wl_egl_window*>(window->m_eglWindow));
+#endif
     glfwDestroyWindow(window->m_native);
     auto& slot = m_slots[handle.index];
     slot.window.reset();
@@ -210,7 +244,9 @@ void WindowManager::OnFramebufferSize(GLFWwindow* native, int width, int height)
     if (auto* w = From(native)) {
         w->m_framebufferWidth = static_cast<std::uint32_t>(std::max(width, 0));
         w->m_framebufferHeight = static_cast<std::uint32_t>(std::max(height, 0));
+#ifndef LIGHTHOUSE_IMGUI
         if (w->m_eglWindow) wl_egl_window_resize(static_cast<wl_egl_window*>(w->m_eglWindow), std::max(width, 1), std::max(height, 1), 0, 0);
+#endif
     }
 }
 void WindowManager::OnFocus(GLFWwindow* native, int focused) {

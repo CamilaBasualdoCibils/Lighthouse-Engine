@@ -8,23 +8,11 @@
 
 namespace Lighthouse {
 
-CameraSource::CameraSource(const Entity &entity) : m_source(entity) {}
-bool CameraSource::IsSet() const noexcept {
-  return !std::holds_alternative<std::monostate>(m_source);
-}
-bool CameraSource::IsValid() const noexcept {
-  if (const auto *entity = std::get_if<Entity>(&m_source))
-    return entity->IsValid();
-  return std::holds_alternative<ExplicitCamera>(m_source);
-}
-
-IRenderView::IRenderView(RenderViewDesc desc) : m_desc(std::move(desc)) {
+IRenderView::IRenderView()  {
   static std::atomic<std::uint64_t> next{1};
   m_ownerId = next.fetch_add(1, std::memory_order_relaxed);
 }
-bool IRenderView::HasValidReferences() const noexcept {
-  return static_cast<bool>(m_desc.scene) && m_desc.camera.IsValid();
-}
+
 IRenderView::Slot *
 IRenderView::FindSlot(RenderTechniqueHandle handle) noexcept {
   if (!handle || handle.owner != m_ownerId ||
@@ -56,13 +44,7 @@ bool IRenderView::RemoveTechnique(RenderTechniqueHandle handle) {
     ++slot->generation;
   return true;
 }
-void IRenderView::AddViewDependency(RenderViewHandle handle) {
-  if (!handle)
-    throw std::invalid_argument("View dependency is invalid");
-  if (std::find(m_viewDependencies.begin(), m_viewDependencies.end(), handle) ==
-      m_viewDependencies.end())
-    m_viewDependencies.push_back(handle);
-}
+
 std::vector<RenderTechniqueHandle> IRenderView::Techniques() const {
   std::vector<RenderTechniqueHandle> result;
   for (std::uint32_t i = 0; i < m_techniques.size(); ++i)

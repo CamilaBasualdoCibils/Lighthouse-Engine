@@ -24,7 +24,14 @@
 #include <cmath>
 #include <functional>
 #ifdef LIGHTHOUSE_IMGUI
+#include <imgui.h>
 #include <imgui_impl_opengl3.h>
+#include <imgui_impl_glfw.h>
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+#define GLFW_EXPOSE_NATIVE_X11
+#include <GLFW/glfw3native.h>
+#undef None
 #endif
 
 namespace Lighthouse {
@@ -174,7 +181,7 @@ void OpenGLRenderDevice::Impl::CreateSwapchainImages(Swapchain& swapchain, std::
 AcquiredSwapchainImage OpenGLRenderDevice::AcquireSwapchainImage(SwapchainHandle swapchain) {
     auto* target = m_impl->FindSwapchain(swapchain);
     if (!target) throw std::invalid_argument("OpenGL acquire received an invalid swapchain handle");
-    if (m_impl->acquired) throw std::logic_error("An OpenGL swapchain image is already acquired");
+    if (target->acquired) throw std::logic_error("An OpenGL swapchain image is already acquired");
     m_impl->ActivateContext(target);
     // Keep the actual images in step with the native window's framebuffer size.
     EGLint width{}, height{};
@@ -195,7 +202,8 @@ AcquiredSwapchainImage OpenGLRenderDevice::AcquireSwapchainImage(SwapchainHandle
         target->imageIndex = 0;
     }
     m_impl->acquired = swapchain;
-    m_impl->frameReady = false;
+    target->acquired = true;
+    target->frameReady = false;
     const auto& image = target->images.at(target->imageIndex);
     return {.image = image.image, .view = image.view};
 }
@@ -276,7 +284,7 @@ bool OpenGLRenderDevice::DestroySwapchain(SwapchainHandle handle) {
     if (!handle || handle.owner != DeviceId() || handle.index >= m_impl->swapchains.size()) return false;
     auto& slot = m_impl->swapchains[handle.index];
     if (!slot.value || slot.generation != handle.generation) return false;
-    if (m_impl->acquired == handle) { m_impl->acquired.reset(); m_impl->frameReady = false; }
+    if (m_impl->acquired == handle) m_impl->acquired.reset();
     m_impl->ActivateContext(slot.value.get());
     m_impl->DestroySwapchainImages(*slot.value);
     for (auto& [_, pipeline] : m_impl->pipelines) {
@@ -572,16 +580,16 @@ void OpenGLRenderDevice::Submit(const IRenderCommandList& list) {
     try {
         for (const auto& command : commands->Commands())
             std::visit([this](const auto& value) { value.Execute(this); }, command);
-        if (m_impl->acquired) m_impl->frameReady = true;
+        if (m_impl->acquired) m_impl->FindSwapchain(*m_impl->acquired)->frameReady = true;
     } catch (...) {
-        m_impl->frameReady = false;
+        if (m_impl->acquired) m_impl->FindSwapchain(*m_impl->acquired)->frameReady = false;
         throw;
     }
 }
 
 void OpenGLRenderDevice::Present(SwapchainHandle swapchain) {
     auto* target = m_impl->FindSwapchain(swapchain);
-    if (!target || m_impl->acquired != swapchain || !m_impl->frameReady)
+    if (!target || !target->acquired || !target->frameReady)
         throw std::logic_error("OpenGL present requires the acquired swapchain image");
     m_impl->ActivateContext(target);
     const auto& image = target->images.at(target->imageIndex);
@@ -610,8 +618,9 @@ void OpenGLRenderDevice::Present(SwapchainHandle swapchain) {
     if (eglSwapBuffers(m_impl->group->display, target->surface) != EGL_TRUE)
         throw std::runtime_error("EGL failed to present the rendered frame");
     target->imageIndex = (target->imageIndex + 1) % target->images.size();
-    m_impl->acquired.reset();
-    m_impl->frameReady = false;
+    target->acquired = false;
+    target->frameReady = false;
+    if (m_impl->acquired == swapchain) m_impl->acquired.reset();
 }
 void OpenGLRenderDevice::WaitIdle() {
     if (m_impl->acquired) m_impl->ActivateContext(m_impl->FindSwapchain(*m_impl->acquired));
@@ -620,53 +629,169 @@ void OpenGLRenderDevice::WaitIdle() {
 }
 
 #ifdef LIGHTHOUSE_IMGUI
-void OpenGLRenderDevice::InitializeImGui(SwapchainHandle swapchain) {
-    const auto* target = m_impl->FindSwapchain(swapchain);
-    if (!target) throw std::invalid_argument("ImGui requires a valid OpenGL swapchain");
-    m_impl->ActivateContext(target);
-    if (!ImGui_ImplOpenGL3_Init("#version 450 core"))
-        throw std::runtime_error("Failed to initialize the ImGui OpenGL renderer");
+OpenGLRenderDevice::Impl::ContextSnapshot OpenGLRenderDevice::Impl::ContextSnapshot::Capture() {
+    return {glfwGetCurrentContext(), eglGetCurrentDisplay(), eglGetCurrentContext(),
+            eglGetCurrentSurface(EGL_READ), eglGetCurrentSurface(EGL_DRAW)};
 }
-
-void OpenGLRenderDevice::ShutdownImGui() noexcept {
-    try {
-        if (m_impl->acquired) m_impl->ActivateContext(m_impl->FindSwapchain(*m_impl->acquired));
-        else m_impl->ActivateContext();
-        ImGui_ImplOpenGL3_Shutdown();
-    } catch (...) {}
+void OpenGLRenderDevice::Impl::ContextSnapshot::Restore() const noexcept {
+    if (glfwGetCurrentContext()) glfwMakeContextCurrent(nullptr);
+    if (glfw) glfwMakeContextCurrent(glfw);
+    else if (display != EGL_NO_DISPLAY && context != EGL_NO_CONTEXT)
+        eglMakeCurrent(display, draw, read, context);
+    else if (const auto current = eglGetCurrentDisplay(); current != EGL_NO_DISPLAY)
+        eglMakeCurrent(current, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 }
-
-void OpenGLRenderDevice::NewImGuiFrame() { ImGui_ImplOpenGL3_NewFrame(); }
-
-void OpenGLRenderDevice::RenderImGui(SwapchainHandle swapchain, ImageViewHandle image, ImDrawData* drawData) {
-    if (m_impl->acquired != swapchain)
-        throw std::logic_error("ImGui must render to the acquired OpenGL image");
-    m_impl->ActivateContext(m_impl->FindSwapchain(swapchain));
-    const auto* target = m_impl->FindSwapchain(swapchain);
-    const auto view = m_impl->views.find(image);
-    if (view == m_impl->views.end())
-        throw std::invalid_argument("ImGui target is not a live OpenGL image view");
-    GLuint temporary{}, framebuffer = target->images[target->imageIndex].framebuffer;
-    if (image != target->images[target->imageIndex].view) {
-        glCreateFramebuffers(1, &temporary);
-        framebuffer = temporary;
-        glNamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, view->second.id, 0);
-        constexpr GLenum attachment = GL_COLOR_ATTACHMENT0;
-        glNamedFramebufferDrawBuffers(framebuffer, 1, &attachment);
-        if (glCheckNamedFramebufferStatus(framebuffer, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            glDeleteFramebuffers(1, &temporary);
-            throw std::runtime_error("OpenGL ImGui target framebuffer is incomplete");
-        }
+namespace {
+// GLFW dispatches events outside ImGuiView's frame scope. The installed
+// backend's viewport move/resize/close callbacks assume a current context.
+// Route those callbacks to their owning UI context, not an engine window.
+struct ViewportCallbacks {
+    ImGuiContext* context{};
+    GLFWwindowposfun position{};
+    GLFWwindowsizefun size{};
+    GLFWwindowclosefun close{};
+};
+thread_local std::unordered_map<GLFWwindow*, ViewportCallbacks> viewportCallbacks;
+void ImGuiWindowPosition(GLFWwindow* window, int x, int y) {
+    const auto callbacks = viewportCallbacks.at(window);
+    const auto previous = ImGui::GetCurrentContext();
+    ImGui::SetCurrentContext(callbacks.context);
+    if (callbacks.position) callbacks.position(window, x, y);
+    ImGui::SetCurrentContext(previous);
+}
+void ImGuiWindowSize(GLFWwindow* window, int width, int height) {
+    const auto callbacks = viewportCallbacks.at(window);
+    const auto previous = ImGui::GetCurrentContext();
+    ImGui::SetCurrentContext(callbacks.context);
+    if (callbacks.size) callbacks.size(window, width, height);
+    ImGui::SetCurrentContext(previous);
+}
+void ImGuiWindowClose(GLFWwindow* window) {
+    const auto callbacks = viewportCallbacks.at(window);
+    const auto previous = ImGui::GetCurrentContext();
+    ImGui::SetCurrentContext(callbacks.context);
+    if (callbacks.close) callbacks.close(window);
+    ImGui::SetCurrentContext(previous);
+}
+void RouteViewportCallbacks() {
+    const auto context = ImGui::GetCurrentContext();
+    const auto& viewports = ImGui::GetPlatformIO().Viewports;
+    for (int i = 1; i < viewports.Size; ++i) {
+        auto* window = static_cast<GLFWwindow*>(viewports[i]->PlatformHandle);
+        if (!window) continue;
+        auto& callbacks = viewportCallbacks[window];
+        callbacks.context = context;
+        const auto position = glfwSetWindowPosCallback(window, ImGuiWindowPosition);
+        const auto size = glfwSetWindowSizeCallback(window, ImGuiWindowSize);
+        const auto close = glfwSetWindowCloseCallback(window, ImGuiWindowClose);
+        if (position != ImGuiWindowPosition) callbacks.position = position;
+        if (size != ImGuiWindowSize) callbacks.size = size;
+        if (close != ImGuiWindowClose) callbacks.close = close;
     }
-    GLint oldRead{}, oldDraw{};
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldRead);
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &oldDraw);
-    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-    ImGui_ImplOpenGL3_RenderDrawData(drawData);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, oldRead);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, oldDraw);
-    if (temporary) glDeleteFramebuffers(1, &temporary);
-    m_impl->frameReady = true;
+    for (auto it = viewportCallbacks.begin(); it != viewportCallbacks.end();) {
+        bool live = it->second.context != context;
+        for (int i = 1; !live && i < viewports.Size; ++i)
+            live = viewports[i]->PlatformHandle == it->first;
+        if (live) ++it;
+        else it = viewportCallbacks.erase(it);
+    }
+}
+void ImGuiWindowHints() {
+    // Engine creation resets global GLFW hints to GLFW_NO_API. Reset these
+    // before every viewport update, which may create a new ImGui window.
+    glfwDefaultWindowHints();
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
+    glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_EGL_CONTEXT_API);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+}
+}
+void OpenGLRenderDevice::InitializeImGui(WindowManager& windows) {
+    auto* context = ImGui::GetCurrentContext();
+    if (m_impl->imgui.contains(context)) return;
+    windows.Initialize();
+    const auto saved = Impl::ContextSnapshot::Capture();
+    GLFWwindow* host{};
+    bool platformInitialized = false, rendererInitialized = false;
+    try {
+        // Initialize the engine's shared EGL context even for an ImGui-only
+        // renderer. The ImGui GLFW contexts have their own shared resources.
+        m_impl->group->Initialize(glfwGetX11Display());
+        ImGuiWindowHints();
+        glfwWindowHint(GLFW_FOCUSED, GLFW_FALSE);
+        host = glfwCreateWindow(1280, 720, "Lighthouse ImGui host", nullptr, nullptr);
+        if (!host) throw std::runtime_error("Failed to create the hidden ImGui OpenGL host");
+        glfwMakeContextCurrent(host);
+        glfwSwapInterval(0);
+        if (!ImGui_ImplGlfw_InitForOpenGL(host, true))
+            throw std::runtime_error("Failed to initialize ImGui GLFW viewports");
+        platformInitialized = true;
+        if (!(ImGui::GetIO().BackendFlags & ImGuiBackendFlags_PlatformHasViewports))
+            throw std::runtime_error("The selected GLFW platform does not support ImGui multi-viewports");
+        if (!ImGui_ImplOpenGL3_Init("#version 450 core"))
+            throw std::runtime_error("Failed to initialize ImGui OpenGL viewports");
+        rendererInitialized = true;
+        m_impl->imgui.emplace(context, Impl::ImGuiState{.host = host});
+    } catch (...) {
+        if (rendererInitialized) ImGui_ImplOpenGL3_Shutdown();
+        if (platformInitialized) ImGui_ImplGlfw_Shutdown();
+        if (host) { glfwMakeContextCurrent(nullptr); glfwDestroyWindow(host); }
+        glfwDefaultWindowHints();
+        saved.Restore();
+        throw;
+    }
+    glfwDefaultWindowHints();
+    saved.Restore();
+}
+void OpenGLRenderDevice::ShutdownImGui() noexcept {
+    const auto found = m_impl->imgui.find(ImGui::GetCurrentContext());
+    if (found == m_impl->imgui.end()) return;
+    EndImGuiFrame();
+    auto saved = Impl::ContextSnapshot::Capture();
+    const auto host = found->second.host;
+    if (saved.glfw == host) saved = {};
+    glfwMakeContextCurrent(host);
+    ImGui::DestroyPlatformWindows();
+    for (auto it = viewportCallbacks.begin(); it != viewportCallbacks.end();)
+        if (it->second.context == ImGui::GetCurrentContext()) it = viewportCallbacks.erase(it);
+        else ++it;
+    glfwMakeContextCurrent(host);
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    glfwMakeContextCurrent(nullptr);
+    glfwDestroyWindow(host);
+    m_impl->imgui.erase(found);
+    saved.Restore();
+}
+void OpenGLRenderDevice::BeginImGuiFrame() {
+    auto& state = m_impl->imgui.at(ImGui::GetCurrentContext());
+    if (state.frameActive) throw std::logic_error("ImGui frame already active");
+    state.saved = Impl::ContextSnapshot::Capture();
+    state.frameActive = true;
+    try {
+        glfwMakeContextCurrent(state.host);
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+    } catch (...) {
+        EndImGuiFrame();
+        throw;
+    }
+}
+void OpenGLRenderDevice::RenderImGuiViewports() {
+    ImGuiWindowHints();
+    // The primary host stays hidden. No engine window is registered with ImGui.
+    ImGui::UpdatePlatformWindows();
+    RouteViewportCallbacks();
+    ImGui::RenderPlatformWindowsDefault();
+    glfwDefaultWindowHints();
+}
+void OpenGLRenderDevice::EndImGuiFrame() noexcept {
+    const auto found = m_impl->imgui.find(ImGui::GetCurrentContext());
+    if (found == m_impl->imgui.end() || !found->second.frameActive) return;
+    found->second.saved.Restore();
+    found->second.frameActive = false;
 }
 #endif
 

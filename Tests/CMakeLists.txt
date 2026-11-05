@@ -2,6 +2,7 @@ find_package(GTest CONFIG REQUIRED)
 
 add_executable(LighthouseEngineTests
     SceneEntityTests.cpp
+    SceneInspectorTests.cpp
     GraphicsBackendTests.cpp
     WindowManagerTests.cpp
     RendererTests.cpp

@@ -1,7 +1,11 @@
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
 
+#include "Lighthouse/Engine/Rendering/RenderView.hpp"
 #include "RenderMeshManager.hpp"
+#ifdef LIGHTHOUSE_IMGUI
+#include <Lighthouse/Engine/Rendering/ImGuiView.hpp>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -11,15 +15,21 @@
 
 namespace Lighthouse {
 
-Renderer::Renderer(std::unique_ptr<IRenderDevice> device,WindowManager *windows)
-    : m_windows(windows),
-      m_device(std::move(device)),
+Renderer::Renderer(std::unique_ptr<IRenderDevice> device,
+                   WindowManager *windows)
+    : m_windows(windows), m_device(std::move(device)),
       m_renderGraphAllocator(*m_device.get()),
       m_renderMeshManager(std::make_unique<RenderMeshManager>()) {
   static std::atomic<std::uint64_t> nextOwner{1};
   m_ownerId = nextOwner.fetch_add(1, std::memory_order_relaxed);
 }
 Renderer::~Renderer() {
+#ifdef LIGHTHOUSE_IMGUI
+  // ImGui owns native contexts and must release them before engine windows.
+  for (std::uint32_t i = 0; i < m_views.size(); ++i)
+    if (dynamic_cast<ImGuiView *>(m_views[i].value.get()))
+      DestroyView({i, m_views[i].generation, m_ownerId});
+#endif
   for (std::uint32_t i = 0; i < m_views.size(); ++i)
     if (m_views[i].value)
       DestroyView({i, m_views[i].generation, m_ownerId});
@@ -27,15 +37,17 @@ Renderer::~Renderer() {
 
 RenderViewHandle Renderer::AddView(std::unique_ptr<IRenderView> value) {
   std::uint32_t index = 0;
-  while (index < m_views.size() && m_views[index].value) ++index;
-  if (index == m_views.size()) m_views.emplace_back();
+  while (index < m_views.size() && m_views[index].value)
+    ++index;
+  if (index == m_views.size())
+    m_views.emplace_back();
   m_views[index].value = std::move(value);
   return {index, m_views[index].generation, m_ownerId};
 }
 
-RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc& description,
-                                           RenderViewDesc viewDescription,
-                                           SwapchainConfig presentation) {
+RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc &description,
+
+                                            SwapchainConfig presentation) {
   if (!m_windows)
     throw std::logic_error("Creating a window view requires a WindowManager");
   const auto window = m_windows->CreateWindow(WindowDesc{
@@ -49,8 +61,8 @@ RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc& description,
       .decorated = description.decorated,
   });
   try {
-    auto view = std::unique_ptr<WindowView>(
-        new WindowView(window, std::move(viewDescription), presentation));
+    auto view =
+        std::unique_ptr<WindowView>(new WindowView(window, presentation));
     view->m_windows = m_windows;
     return AddView(std::move(view));
   } catch (...) {
@@ -90,13 +102,14 @@ bool Renderer::DestroyView(RenderViewHandle handle) {
   auto *view = GetView(handle);
   if (!view)
     return false;
-  auto* windowView = dynamic_cast<WindowView*>(view);
+  auto *windowView = dynamic_cast<WindowView *>(view);
   const auto window = windowView ? windowView->window : WindowHandle{};
   if (windowView && windowView->swapchain && m_device)
     m_device->DestroySwapchain(windowView->swapchain);
   auto &slot = m_views[handle.index];
   slot.value.reset();
-  if (window && m_windows) m_windows->DestroyWindow(window);
+  if (window && m_windows)
+    m_windows->DestroyWindow(window);
   if (++slot.generation == 0)
     ++slot.generation;
   return true;
@@ -104,45 +117,29 @@ bool Renderer::DestroyView(RenderViewHandle handle) {
 
 void Renderer::Compile() {
   RenderGraph graph;
-  std::vector<unsigned char> state(m_views.size());
-  std::function<void(RenderViewHandle)> build = [&](RenderViewHandle handle) {
-    auto *view = GetView(handle);
-    if (!view)
-      throw std::logic_error("View dependency is missing or invalidated");
-    if (!view->HasValidReferences())
-      throw std::logic_error("View scene or camera is invalid");
-    if (state[handle.index] == 1)
-      throw std::logic_error("Cyclic view dependency");
-    if (state[handle.index] == 2)
-      return;
-    state[handle.index] = 1;
-    for (auto dependency : view->ViewDependencies())
-      build(dependency);
 
-    ViewBuildContext context{graph, *m_device.get()};
-    view->BuildGraph(context);
-    state[handle.index] = 2;
-  };
   for (std::uint32_t i = 0; i < m_views.size(); ++i) {
-    if (auto *outputView = dynamic_cast<IOutputView *>(m_views[i].value.get()))
-      build({i, m_views[i].generation, m_ownerId});
+    if (auto *view = dynamic_cast<IRenderView *>(m_views[i].value.get())) {
+      ViewBuildContext context{graph, *m_device.get()};
+      view->BuildGraph(context);
+    }
   }
   graph.Compile();
   m_renderGraph = std::move(graph);
 }
 void Renderer::Render() {
 
-    for (const auto &viewSlot : m_views) {
-        if (auto *outputView = dynamic_cast<IOutputView *>(viewSlot.value.get())) {
-           outputView->Begin(this);
-        }
+  for (const auto &viewSlot : m_views) {
+    if (auto *outputView = dynamic_cast<IOutputView *>(viewSlot.value.get())) {
+      outputView->Begin(this);
     }
-    m_renderGraph.Execute(this, &m_renderGraphAllocator);
-    for (const auto &viewSlot : m_views) {
-        if (auto *outputView = dynamic_cast<IOutputView *>(viewSlot.value.get())) {
-           outputView->End(this);
-        }
+  }
+  m_renderGraph.Execute(this, &m_renderGraphAllocator);
+  for (const auto &viewSlot : m_views) {
+    if (auto *outputView = dynamic_cast<IOutputView *>(viewSlot.value.get())) {
+      outputView->End(this);
     }
+  }
 }
 
 } // namespace Lighthouse

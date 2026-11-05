@@ -10,16 +10,10 @@ namespace Lighthouse {
 struct Application::Storage {
     EngineRuntime* runtime{};
     const Config* config{};
-    std::vector<std::unique_ptr<Scene>> scenes;
 };
 
 Application::Application() : m_storage(std::make_shared<Storage>()) {}
 Application::~Application() = default;
-
-Scene& Application::CreateScene(std::string name) {
-    m_storage->scenes.push_back(std::make_unique<Scene>(std::move(name)));
-    return *m_storage->scenes.back();
-}
 
 void Application::AttachRuntime(EngineRuntime& runtime, const Config& config) {
     m_storage->runtime = &runtime;

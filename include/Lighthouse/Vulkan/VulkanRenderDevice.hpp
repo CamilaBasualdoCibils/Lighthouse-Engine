@@ -59,11 +59,11 @@ public:
     void Present(SwapchainHandle swapchain) override;
     void WaitIdle() override;
 #ifdef LIGHTHOUSE_IMGUI
-    ImGuiPlatformBackend PlatformBackend() const noexcept override { return ImGuiPlatformBackend::Vulkan; }
-    void InitializeImGui(SwapchainHandle swapchain) override;
+    void InitializeImGui(WindowManager& windows) override;
     void ShutdownImGui() noexcept override;
-    void NewImGuiFrame() override;
-    void RenderImGui(SwapchainHandle swapchain, ImageViewHandle image, ImDrawData* drawData) override;
+    void BeginImGuiFrame() override;
+    void RenderImGuiViewports() override;
+    void EndImGuiFrame() noexcept override;
 #endif
 
 private:

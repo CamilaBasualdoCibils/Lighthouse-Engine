@@ -8,7 +8,6 @@
 #include <iostream>
 
 #include <Lighthouse/Engine/Core/Config.hpp>
-#include <Lighthouse/Engine/Scene/Scene.hpp>
 #include <Lighthouse/Engine/Core/EngineRuntime.hpp>
 
 namespace Lighthouse {
