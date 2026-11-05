@@ -66,7 +66,25 @@ struct RenderGraphImage {
   void preRead(const Desc &, std::uint32_t, void *) {}
   void preWrite(const Desc &, std::uint32_t, void *) {}
 };
+struct RenderGraphBuffer {
+  using Desc = RenderGraphBufferDesc;
+  BufferHandle handle;
+  // ImageViewHandle viewHandle;
+  void create(const Desc &desc, void *allocator) {
+    IRenderGraphAllocator *alloc =
+        static_cast<IRenderGraphAllocator *>(allocator);
+    RenderGraphBufferAllocation allocation = alloc->AllocateBuffer(desc);
 
+  }
+  void destroy(const Desc &desc, void *allocator) {
+    IRenderGraphAllocator *alloc =
+        static_cast<IRenderGraphAllocator *>(allocator);
+    alloc->FreeBuffer(handle);
+    handle = {};
+  }
+  void preRead(const Desc &, std::uint32_t, void *) {}
+  void preWrite(const Desc &, std::uint32_t, void *) {}
+};
 /* struct RenderGraphBuffer {
     using Desc = GraphBufferDesc;
 
@@ -82,11 +100,22 @@ struct ImportedRenderGraphImage {
     uint32_t width{};
     uint32_t height{};
     ImageFormat format;
-    Flags<ImageUsage> usage{ImageUsage::None};
+    Flags<ImageUsage> usage{};
   };
   ImageViewHandle viewHandle;
   ImageHandle handle;
   ImageSubresourceRange subresource;
+  void create(const Desc &, void *) {}
+  void destroy(const Desc &, void *) {}
+  void preRead(const Desc &, std::uint32_t, void *) {}
+  void preWrite(const Desc &, std::uint32_t, void *) {}
+};
+struct ImportedRenderGraphBuffer {
+  struct Desc {
+    uint64_t size{};
+    Flags<BufferUsage> usage{};
+  };
+  BufferHandle handle;
   void create(const Desc &, void *) {}
   void destroy(const Desc &, void *) {}
   void preRead(const Desc &, std::uint32_t, void *) {}

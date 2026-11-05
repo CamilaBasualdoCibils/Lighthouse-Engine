@@ -34,7 +34,6 @@ add_library(Lighthouse::Engine ALIAS LighthouseEngine)
 
 target_include_directories(LighthouseEngine PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
 )
 target_include_directories(LighthouseEngine PRIVATE ${TINYGLTF_INCLUDE_DIR})
 target_include_directories(LighthouseEngine PRIVATE ${CMAKE_CURRENT_BINARY_DIR})

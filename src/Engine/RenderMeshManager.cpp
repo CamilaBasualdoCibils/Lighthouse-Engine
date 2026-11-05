@@ -1,4 +1,5 @@
 #include "RenderMeshManager.hpp"
+#include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
 
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 
@@ -60,7 +61,7 @@ void ValidateRenderMeshription(const RenderMesh& desc, IRenderDevice* device) {
         if (!device->IsValid(binding.buffer)) throw std::invalid_argument("Mesh references an unknown or stale vertex buffer");
         const auto metadata = device->GetBufferDesc(binding.buffer);
         if (!metadata) throw std::invalid_argument("Render device has no metadata for the referenced vertex buffer");
-        if (!HasUsage(metadata->usage, BufferUsage::Vertex))
+        if (!metadata->usage.Contains(BufferUsage::Vertex))
             throw std::invalid_argument("Referenced buffer for vertex binding " + std::to_string(binding.binding) + " lacks Vertex usage");
     }
 
@@ -115,7 +116,7 @@ void ValidateRenderMeshription(const RenderMesh& desc, IRenderDevice* device) {
                 throw std::invalid_argument("Mesh references an unknown or stale index buffer");
             const auto metadata = device->GetBufferDesc(desc.indexBuffer->buffer);
             if (!metadata) throw std::invalid_argument("Render device has no metadata for the referenced index buffer");
-            if (!HasUsage(metadata->usage, BufferUsage::Index))
+            if (!metadata->usage.Contains(BufferUsage::Index))
                 throw std::invalid_argument("Referenced index buffer lacks Index usage");
             const auto needed = RequiredBytes(desc.indexBuffer->offset, desc.indexCount,
                 IndexFormatByteSize(desc.indexBuffer->format), "Index buffer");

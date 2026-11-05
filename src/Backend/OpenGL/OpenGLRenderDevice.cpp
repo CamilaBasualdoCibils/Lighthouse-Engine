@@ -428,7 +428,7 @@ void OpenGLRenderDevice::UpdateDescriptorSet(DescriptorSetHandle handle, std::sp
             auto info = std::get<DescriptorBufferInfo>(write.resource); const auto buffer = m_impl->buffers.find(info.buffer);
             if (buffer == m_impl->buffers.end() || info.buffer.owner != DeviceId()) throw std::invalid_argument("Invalid or cross-device descriptor buffer");
             const auto required = binding->second.type == DescriptorType::UniformBuffer ? BufferUsage::Uniform : BufferUsage::Storage;
-            if ((buffer->second.metadata.usage & required) == BufferUsage::None) throw std::invalid_argument("Descriptor buffer has incompatible usage");
+            if (!buffer->second.metadata.usage.Contains(required)) throw std::invalid_argument("Descriptor buffer has incompatible usage");
             if (info.offset >= buffer->second.metadata.size) throw std::out_of_range("Descriptor buffer offset is out of range");
             if (info.range == WholeBuffer) info.range = buffer->second.metadata.size - info.offset;
             if (!info.range || info.range > buffer->second.metadata.size - info.offset) throw std::out_of_range("Descriptor buffer range is out of bounds");
@@ -442,7 +442,7 @@ void OpenGLRenderDevice::UpdateDescriptorSet(DescriptorSetHandle handle, std::sp
             const auto view=m_impl->views.find(info.image);
             if (view==m_impl->views.end() || info.image.owner != DeviceId() || !m_impl->samplers.contains(info.sampler) || info.sampler.owner != DeviceId()) throw std::invalid_argument("Invalid or cross-device descriptor image or sampler");
             const auto image=m_impl->images.find(view->second.image);
-            if(image==m_impl->images.end() || (static_cast<std::uint32_t>(image->second.usage) & static_cast<std::uint32_t>(ImageUsage::Sampled))==0) throw std::invalid_argument("Descriptor image was not created for sampling");
+            if(image==m_impl->images.end() || !image->second.usage.Contains(ImageUsage::Sampled)) throw std::invalid_argument("Descriptor image was not created for sampling");
             target = info;
         }
     }

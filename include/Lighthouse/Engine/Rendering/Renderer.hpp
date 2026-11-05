@@ -64,7 +64,7 @@ public:
       return AddView(std::make_unique<T>(std::forward<Args>(args)...));
     }
   }
-  // Creates and owns the native window along with its render view.
+  // Creates and owns the native window, swapchain, and render view immediately.
   RenderViewHandle CreateWindowView(const RenderWindowDesc& window = {},
                                     SwapchainConfig presentation = {});
   bool DestroyView(RenderViewHandle view);

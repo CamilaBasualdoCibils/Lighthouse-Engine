@@ -71,7 +71,9 @@ public:
     bool Contains(T t) const {
         return (underlyingMask & static_cast<underlying_type>(t)) != 0;
     }
-	
+	bool Empty() const {
+		return underlyingMask == 0;
+	}
 
 
 };

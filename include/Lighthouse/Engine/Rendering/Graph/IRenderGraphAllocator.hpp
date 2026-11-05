@@ -1,6 +1,5 @@
 #pragma once
 
-#include "Lighthouse/Engine/Rendering/IRenderCommandList.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
 #include <cstdint>
 namespace Lighthouse {
@@ -15,6 +14,15 @@ struct RenderGraphImageDesc {
   ImageFormat format;
   Flags<ImageUsage> usage{ImageUsage::Sampled, ImageUsage::ColorAttachment};
 };
+struct RenderGraphBufferAllocation
+{
+  BufferHandle buffer;
+};
+struct RenderGraphBufferDesc
+{
+  uint64_t size;
+  Flags<BufferUsage> usage{};
+};
 
 class IRenderGraphAllocator {
 public:
@@ -23,7 +31,9 @@ public:
   virtual RenderGraphImageAllocation
   AllocateImage(const RenderGraphImageDesc &desc) = 0;
   virtual void FreeImage(ImageViewHandle image) = 0;
-
+  virtual RenderGraphBufferAllocation
+  AllocateBuffer(const RenderGraphBufferDesc &desc) = 0;
+  virtual void FreeBuffer(BufferHandle buffer) = 0;
 
 
 

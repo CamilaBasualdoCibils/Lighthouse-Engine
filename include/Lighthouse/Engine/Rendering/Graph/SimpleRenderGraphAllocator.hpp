@@ -54,6 +54,21 @@ public:
       m_logger->info("Freed image ");
     }
   }
+  RenderGraphBufferAllocation AllocateBuffer(const RenderGraphBufferDesc& rgdesc) override {
+    BufferDesc desc{};
+    desc.size = rgdesc.size;
+    desc.usage = rgdesc.usage;
+    BufferHandle buffer = m_device.CreateBuffer(desc);
+    RenderGraphBufferAllocation allocation{buffer};
+    m_logger->info("Allocated buffer ");
+    return allocation;
+  }
+
+  void FreeBuffer(BufferHandle buffer) override {
+    // TODO: Implement this pure virtual method.
+    m_device.DestroyBuffer(buffer);
+    m_logger->info("Freed buffer ");
+  }
 
 private:
   IRenderDevice &m_device;

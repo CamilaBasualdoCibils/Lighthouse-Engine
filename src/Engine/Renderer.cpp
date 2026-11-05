@@ -101,12 +101,18 @@ RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc &description,
       .visible = description.visible,
       .decorated = description.decorated,
   });
+  SwapchainHandle swapchain{};
   try {
     auto view =
         std::unique_ptr<WindowView>(new WindowView(window, presentation));
     view->m_windows = m_windows;
+    // OpenGL resource creation requires the EGL context owned by a swapchain.
+    swapchain = m_device->CreateSwapchain(*m_windows->GetWindow(window), presentation);
+    view->swapchain = swapchain;
     return AddView(std::move(view));
   } catch (...) {
+    if (swapchain)
+      m_device->DestroySwapchain(swapchain);
     m_windows->DestroyWindow(window);
     throw;
   }
