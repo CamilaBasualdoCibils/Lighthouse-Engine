@@ -19,7 +19,7 @@ public:
             .title = "Lighthouse Window and Scene", .width = 960, .height = 540},
             RenderViewDesc{.scene = scene.Handle(), .camera = CameraSource{camera}});
         auto* view = GetRenderer().GetView<WindowView>(handle);
-        view->AddLambdaTechnique([view](TechniqueBuildContext& ctx) {
+        GetRenderer().AddLambdaTechnique([view](TechniqueBuildContext& ctx) {
             struct Data { RenderGraphResource image; };
             ctx.graph.AddPass<Data>("clear window green",
                 [view](RenderGraph::Builder& builder, Data& data) {

@@ -8,6 +8,7 @@
 #include <EGL/egl.h>
 
 #include <optional>
+#include <algorithm>
 #include <unordered_map>
 #include <vector>
 #include <map>
@@ -58,10 +59,20 @@ struct OpenGLRenderDevice::Impl {
             auto* target = swapchains[i].value.get();
             if (!target || !target->acquired || target->images[target->imageIndex].image != image) continue;
             ActivateContext(target);
-            acquired = SwapchainHandle{i, swapchains[i].generation, owner};
+            activeSwapchain = SwapchainHandle{i, swapchains[i].generation, owner};
             return true;
         }
         return false;
+    }
+    void RecordWrite(ImageHandle image) {
+        for (std::uint32_t i = 0; i < swapchains.size(); ++i) {
+            const auto* target = swapchains[i].value.get();
+            if (!target || !target->acquired || target->images[target->imageIndex].image != image) continue;
+            const SwapchainHandle handle{i, swapchains[i].generation, owner};
+            if (std::find(submissionWrites.begin(), submissionWrites.end(), handle) == submissionWrites.end())
+                submissionWrites.push_back(handle);
+            return;
+        }
     }
     void ActivateView(ImageViewHandle view) {
         const auto found = views.find(view);
@@ -75,7 +86,14 @@ struct OpenGLRenderDevice::Impl {
         const auto surface = requested ? requested->surface : group->pbuffer;
         if (context == EGL_NO_CONTEXT || surface == EGL_NO_SURFACE)
             throw std::logic_error("The OpenGL device has no active EGL context");
-        if (eglGetCurrentContext() == context) return;
+        const auto current = eglGetCurrentContext();
+        if (current == context) return;
+        // Shared textures may be consumed by a different window context next.
+        // Complete producer work before switching contexts.
+        const bool ownedContext = current != EGL_NO_CONTEXT &&
+            (current == group->shareContext || std::any_of(swapchains.begin(), swapchains.end(),
+                [current](const auto& slot) { return slot.value && slot.value->context == current; }));
+        if (ownedContext) glFinish();
         if (eglMakeCurrent(group->display, surface, surface, context) != EGL_TRUE)
             throw std::runtime_error("Failed to make the EGL OpenGL context current");
     }
@@ -101,7 +119,9 @@ struct OpenGLRenderDevice::Impl {
     std::uint64_t owner{};
     std::vector<SwapchainSlot> swapchains;
     GLuint activeFramebuffer{};
-    std::optional<SwapchainHandle> acquired;
+    // Context selection is independent of each swapchain's acquisition state.
+    std::optional<SwapchainHandle> activeSwapchain;
+    std::vector<SwapchainHandle> submissionWrites;
     std::uint32_t nextImage{1}, nextView{1}, nextBuffer{1}, nextShader{1}, nextPipeline{1};
     std::uint32_t nextSetLayout{1}, nextSet{1}, nextPipelineLayout{1}, nextSampler{1};
     std::unordered_map<ImageHandle, ImageResource, OpenGLHandleHash<ImageHandle>> images;

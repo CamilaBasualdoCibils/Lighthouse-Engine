@@ -201,7 +201,7 @@ AcquiredSwapchainImage OpenGLRenderDevice::AcquireSwapchainImage(SwapchainHandle
         target->height = replacement.height;
         target->imageIndex = 0;
     }
-    m_impl->acquired = swapchain;
+    m_impl->activeSwapchain = swapchain;
     target->acquired = true;
     target->frameReady = false;
     const auto& image = target->images.at(target->imageIndex);
@@ -284,7 +284,7 @@ bool OpenGLRenderDevice::DestroySwapchain(SwapchainHandle handle) {
     if (!handle || handle.owner != DeviceId() || handle.index >= m_impl->swapchains.size()) return false;
     auto& slot = m_impl->swapchains[handle.index];
     if (!slot.value || slot.generation != handle.generation) return false;
-    if (m_impl->acquired == handle) m_impl->acquired.reset();
+    if (m_impl->activeSwapchain == handle) m_impl->activeSwapchain.reset();
     m_impl->ActivateContext(slot.value.get());
     m_impl->DestroySwapchainImages(*slot.value);
     for (auto& [_, pipeline] : m_impl->pipelines) {
@@ -566,31 +566,36 @@ void OpenGLRenderDevice::DestroySampler(SamplerHandle h) {
 }
 RenderCapabilities OpenGLRenderDevice::GetCapabilities() const { return {}; }
 
-ImageViewHandle OpenGLRenderDevice::AcquiredImageView() const noexcept {
-    if (!m_impl->acquired) return {};
-    const auto* target = m_impl->FindSwapchain(*m_impl->acquired);
-    return target ? target->images[target->imageIndex].view : ImageViewHandle{};
+ImageViewHandle OpenGLRenderDevice::AcquiredImageView(SwapchainHandle swapchain) const noexcept {
+    const auto* target = m_impl->FindSwapchain(swapchain);
+    return target && target->acquired ? target->images[target->imageIndex].view : ImageViewHandle{};
 }
 
 void OpenGLRenderDevice::Submit(const IRenderCommandList& list) {
     const auto* commands = dynamic_cast<const OpenGLCommandList*>(&list);
     if (!commands) throw std::invalid_argument("OpenGL submit received a command list from another backend");
-    if (m_impl->acquired) m_impl->ActivateContext(m_impl->FindSwapchain(*m_impl->acquired));
+    if (m_impl->activeSwapchain) m_impl->ActivateContext(m_impl->FindSwapchain(*m_impl->activeSwapchain));
     else m_impl->ActivateContext();
+    m_impl->submissionWrites.clear();
     try {
         for (const auto& command : commands->Commands())
             std::visit([this](const auto& value) { value.Execute(this); }, command);
-        if (m_impl->acquired) m_impl->FindSwapchain(*m_impl->acquired)->frameReady = true;
+        for (auto handle : m_impl->submissionWrites)
+            m_impl->FindSwapchain(handle)->frameReady = true;
+        m_impl->submissionWrites.clear();
     } catch (...) {
-        if (m_impl->acquired) m_impl->FindSwapchain(*m_impl->acquired)->frameReady = false;
+        for (auto handle : m_impl->submissionWrites)
+            m_impl->FindSwapchain(handle)->frameReady = false;
+        m_impl->submissionWrites.clear();
         throw;
     }
 }
 
 void OpenGLRenderDevice::Present(SwapchainHandle swapchain) {
     auto* target = m_impl->FindSwapchain(swapchain);
-    if (!target || !target->acquired || !target->frameReady)
-        throw std::logic_error("OpenGL present requires the acquired swapchain image");
+    if (!target) throw std::invalid_argument("OpenGL present received an invalid swapchain handle");
+    if (!target->acquired) throw std::logic_error("OpenGL present requires an acquired image for this swapchain");
+    if (!target->frameReady) throw std::logic_error("OpenGL present requires successfully submitted writes to this swapchain");
     m_impl->ActivateContext(target);
     const auto& image = target->images.at(target->imageIndex);
     GLint oldRead{}, oldDraw{};
@@ -620,12 +625,19 @@ void OpenGLRenderDevice::Present(SwapchainHandle swapchain) {
     target->imageIndex = (target->imageIndex + 1) % target->images.size();
     target->acquired = false;
     target->frameReady = false;
-    if (m_impl->acquired == swapchain) m_impl->acquired.reset();
+    if (m_impl->activeSwapchain == swapchain) m_impl->activeSwapchain.reset();
 }
 void OpenGLRenderDevice::WaitIdle() {
-    if (m_impl->acquired) m_impl->ActivateContext(m_impl->FindSwapchain(*m_impl->acquired));
-    else m_impl->ActivateContext();
+    // Work can be submitted to any window context as well as the shared context.
+    m_impl->ActivateContext();
     glFinish();
+    for (const auto& slot : m_impl->swapchains) {
+        if (!slot.value) continue;
+        m_impl->ActivateContext(slot.value.get());
+        glFinish();
+    }
+    if (m_impl->activeSwapchain) m_impl->ActivateContext(m_impl->FindSwapchain(*m_impl->activeSwapchain));
+    else m_impl->ActivateContext();
 }
 
 #ifdef LIGHTHOUSE_IMGUI

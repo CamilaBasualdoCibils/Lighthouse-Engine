@@ -35,7 +35,7 @@ TEST_F(ImGuiViewTests, IndependentViewportsRestoreContextAndSurviveEngineWindowC
             .title = "Engine", .width = 160, .height = 120, .visible = false},
             RenderViewDesc{.scene = scene.Handle(), .camera = camera});
         auto* view = renderer.GetView<WindowView>(handle);
-        view->AddLambdaTechnique([view](TechniqueBuildContext& ctx) {
+        renderer.AddLambdaTechnique([view](TechniqueBuildContext& ctx) {
             struct Data { RenderGraphResource image; };
             ctx.graph.AddPass<Data>("clear", [view](RenderGraph::Builder& b, Data& d) {
                 d.image = b.Write(view->GetAcquiredImageAsRGResource());

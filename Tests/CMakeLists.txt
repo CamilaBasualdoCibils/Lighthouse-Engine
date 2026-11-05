@@ -27,3 +27,8 @@ target_link_libraries(LighthouseEngineTests PRIVATE
 
 include(GoogleTest)
 gtest_discover_tests(LighthouseEngineTests)
+
+# This focused regression target does not depend on the legacy scene tests.
+add_executable(LighthouseRendererTechniqueTests RendererTechniqueTests.cpp)
+target_link_libraries(LighthouseRendererTechniqueTests PRIVATE Lighthouse::Engine)
+add_test(NAME LighthouseRendererTechniqueTests COMMAND LighthouseRendererTechniqueTests)

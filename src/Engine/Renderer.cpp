@@ -24,6 +24,7 @@ Renderer::Renderer(std::unique_ptr<IRenderDevice> device,
   m_ownerId = nextOwner.fetch_add(1, std::memory_order_relaxed);
 }
 Renderer::~Renderer() {
+  m_techniques.clear();
 #ifdef LIGHTHOUSE_IMGUI
   // ImGui owns native contexts and must release them before engine windows.
   for (std::uint32_t i = 0; i < m_views.size(); ++i)
@@ -33,6 +34,46 @@ Renderer::~Renderer() {
   for (std::uint32_t i = 0; i < m_views.size(); ++i)
     if (m_views[i].value)
       DestroyView({i, m_views[i].generation, m_ownerId});
+}
+
+Renderer::TechniqueSlot *
+Renderer::FindSlot(RenderTechniqueHandle handle) noexcept {
+  if (!handle || handle.owner != m_ownerId ||
+      handle.index >= m_techniques.size())
+    return nullptr;
+  auto &slot = m_techniques[handle.index];
+  return slot.value && slot.generation == handle.generation ? &slot : nullptr;
+}
+const Renderer::TechniqueSlot *
+Renderer::FindSlot(RenderTechniqueHandle handle) const noexcept {
+  return const_cast<Renderer *>(this)->FindSlot(handle);
+}
+IRenderTechnique *
+Renderer::GetTechnique(RenderTechniqueHandle handle) noexcept {
+  auto *slot = FindSlot(handle);
+  return slot ? slot->value.get() : nullptr;
+}
+const IRenderTechnique *
+Renderer::GetTechnique(RenderTechniqueHandle handle) const noexcept {
+  auto *slot = FindSlot(handle);
+  return slot ? slot->value.get() : nullptr;
+}
+bool Renderer::RemoveTechnique(RenderTechniqueHandle handle) {
+  auto *slot = FindSlot(handle);
+  if (!slot)
+    return false;
+  slot->value.reset();
+  if (++slot->generation == 0)
+    ++slot->generation;
+  return true;
+}
+
+std::vector<RenderTechniqueHandle> Renderer::Techniques() const {
+  std::vector<RenderTechniqueHandle> result;
+  for (std::uint32_t i = 0; i < m_techniques.size(); ++i)
+    if (m_techniques[i].value)
+      result.push_back({i, m_techniques[i].generation, m_ownerId});
+  return result;
 }
 
 RenderViewHandle Renderer::AddView(std::unique_ptr<IRenderView> value) {
@@ -123,6 +164,10 @@ void Renderer::Compile() {
       ViewBuildContext context{graph, *m_device.get()};
       view->BuildGraph(context);
     }
+  }
+  for (auto handle : Techniques()) {
+    TechniqueBuildContext context{graph, *this, *m_device};
+    GetTechnique(handle)->BuildGraph(context);
   }
   graph.Compile();
   m_renderGraph = std::move(graph);

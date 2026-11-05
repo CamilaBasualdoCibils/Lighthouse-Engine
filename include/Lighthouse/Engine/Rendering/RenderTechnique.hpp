@@ -12,7 +12,7 @@
 
 namespace Lighthouse {
 
-class IRenderView;
+class Renderer;
 
 template <typename T> struct TechniqueRef {
     RenderTechniqueHandle handle;
@@ -21,14 +21,12 @@ template <typename T> struct TechniqueRef {
 
 class TechniqueBuildContext {
 public:
-    TechniqueBuildContext(RenderGraph& graph, IRenderView& view, IRenderDevice& device, RenderGraph::Builder* builder = nullptr)
-        : graph(graph), view(view), device(device), m_builder(builder) {}
+    TechniqueBuildContext(RenderGraph& graph, Renderer& renderer, IRenderDevice& device, RenderGraph::Builder* builder = nullptr)
+        : graph(graph), renderer(renderer), device(device), m_builder(builder) {}
 
     RenderGraph& graph;
-    IRenderView& view;
+    Renderer& renderer;
     IRenderDevice& device;
-    template <typename T> T* GetParentViewAs() noexcept;
-    template <typename T> const T* GetParentViewAs() const noexcept;
     template <typename T> const T& GetTechnique(TechniqueRef<T> ref) const;
     RenderGraph::Builder& Builder() const {
         if (!m_builder) throw std::logic_error("No render graph pass is being built");

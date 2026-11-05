@@ -24,7 +24,8 @@ public:
     virtual bool RequiresEGLWindow() const noexcept { return false; }
 
     virtual SwapchainHandle CreateSwapchain(Window&, const SwapchainConfig&) = 0;
-    // Returns an attachment handle for the currently acquired swapchain image.
+    // Acquires an image for this swapchain. Other swapchains may remain acquired.
+    // The returned attachments identify the destination of recorded commands.
     virtual AcquiredSwapchainImage AcquireSwapchainImage(SwapchainHandle) = 0;
     virtual bool DestroySwapchain(SwapchainHandle) = 0;
     virtual bool IsValid(SwapchainHandle) const noexcept = 0;
@@ -67,9 +68,10 @@ public:
     virtual void DestroySampler(SamplerHandle) = 0;
 
     virtual RenderCapabilities GetCapabilities() const = 0;
-    // Execute commands against their declared attachments.
+    // Execute commands against their declared attachments. One command list may
+    // write multiple acquired swapchains; each becomes independently presentable.
     virtual void Submit(const IRenderCommandList& commandList) = 0;
-    // Display the acquired swapchain image after its submitted work completes.
+    // Display this swapchain's acquired image after its submitted work completes.
     virtual void Present(SwapchainHandle swapchain) = 0;
     virtual void WaitIdle() = 0;
 

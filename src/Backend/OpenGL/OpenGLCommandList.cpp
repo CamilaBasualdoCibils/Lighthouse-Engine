@@ -100,11 +100,11 @@ void OpenGLCommandList::BeginRenderCommand::Execute(
     glDeleteFramebuffers(1, &state.activeFramebuffer);
     state.activeFramebuffer = 0;
   }
-  if (state.acquired && desc.colorAttachment == device->AcquiredImageView()) {
-    auto *target = state.FindSwapchain(*state.acquired);
+  if (state.activeSwapchain && desc.colorAttachment == device->AcquiredImageView(*state.activeSwapchain)) {
+    auto *target = state.FindSwapchain(*state.activeSwapchain);
     glBindFramebuffer(GL_FRAMEBUFFER,
                       target->images[target->imageIndex].framebuffer);
-    target->frameReady = true;
+
   } else {
     if (!desc.colorAttachment)
       throw std::logic_error("Render pass has no color attachment");
@@ -132,6 +132,7 @@ void OpenGLCommandList::BeginRenderCommand::Execute(
   }
   if (desc.clearDepth)
     glClear(GL_DEPTH_BUFFER_BIT);
+  state.RecordWrite(state.views.at(desc.colorAttachment).image);
 }
 void OpenGLCommandList::EndRenderCommand::Execute(
     OpenGLRenderDevice *device) const {
@@ -217,7 +218,7 @@ void OpenGLCommandList::BindPipelineCommand::Execute(
     }
   }
   state.activePipeline = handle;
-  const auto context = device->m_impl->acquired.value_or(SwapchainHandle{});
+  const auto context = device->m_impl->activeSwapchain.value_or(SwapchainHandle{});
   auto [vao, inserted] = pipeline.vaos.try_emplace(context, 0);
   if (inserted)
     vao->second = CreateVertexArray(pipeline.layout);
@@ -369,6 +370,7 @@ void OpenGLCommandList::BlitImageCommand::Execute(
       static_cast<GLint>(dst1.y), mask,
       filter == ImageFilter::Linear ? GL_LINEAR : GL_NEAREST);
   glDeleteFramebuffers(2, framebuffers);
+  state.RecordWrite(dst);
 }
 
 } // namespace Lighthouse

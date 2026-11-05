@@ -63,7 +63,7 @@ public:
     void Submit(const IRenderCommandList& commandList) override;
     void Present(SwapchainHandle swapchain) override;
     void WaitIdle() override;
-    ImageViewHandle AcquiredImageView() const noexcept;
+    ImageViewHandle AcquiredImageView(SwapchainHandle swapchain) const noexcept;
 #ifdef LIGHTHOUSE_IMGUI
     void InitializeImGui(WindowManager& windows) override;
     void ShutdownImGui() noexcept override;
