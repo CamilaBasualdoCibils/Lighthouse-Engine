@@ -21,10 +21,10 @@ bool EngineRuntime::Initialize(const Config& config,
   Shutdown();
   const DeviceConfig deviceConfig{.applicationName = config.name};
   m_backend = backends.Select(config.graphics, &deviceConfig);
-  for (const auto& attempt : m_backend.attempts)
+  for (const auto& attempt : m_backend.attempts){
     if (!attempt.selected)
       spdlog::warn("Graphics backend {}: {}", attempt.backend,
-                   attempt.diagnostic);
+                   attempt.diagnostic);}
   if (!m_backend)
     return config.graphics.backends.empty();
   try

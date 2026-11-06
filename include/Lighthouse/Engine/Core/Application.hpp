@@ -7,6 +7,7 @@
 #include <exception>
 #include <iostream>
 
+#include <Lighthouse/Engine/Core/Profiling.hpp>
 #include <Lighthouse/Engine/Core/Config.hpp>
 #include <Lighthouse/Engine/Core/EngineRuntime.hpp>
 
@@ -52,16 +53,29 @@ int Run(const Config& config) {
         {
             ApplicationType application;
             application.AttachRuntime(runtime, config);
-            application.OnStart();
+            {
+                LIGHTHOUSE_PROFILE_SCOPE("Application::OnStart");
+                application.OnStart();
+            }
 
             using Clock = std::chrono::steady_clock;
             auto previousFrame = Clock::now();
             while (!application.ShouldClose()) {
-                runtime.GetWindowManager().PollEvents();
-                const auto now = Clock::now();
-                const auto deltaTime = std::chrono::duration<float>(now - previousFrame).count();
-                previousFrame = now;
-                application.OnUpdate(deltaTime);
+                {
+                    LIGHTHOUSE_PROFILE_SCOPE("Frame");
+                    {
+                        LIGHTHOUSE_PROFILE_SCOPE("WindowManager::PollEvents");
+                        runtime.GetWindowManager().PollEvents();
+                    }
+                    const auto now = Clock::now();
+                    const auto deltaTime = std::chrono::duration<float>(now - previousFrame).count();
+                    previousFrame = now;
+                    {
+                        LIGHTHOUSE_PROFILE_SCOPE("Application::OnUpdate");
+                        application.OnUpdate(deltaTime);
+                    }
+                }
+                LIGHTHOUSE_PROFILE_FRAME();
             }
         }
     } catch (const std::exception& error) {

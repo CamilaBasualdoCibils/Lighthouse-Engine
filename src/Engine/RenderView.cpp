@@ -28,13 +28,12 @@ void WindowView::BuildGraph(ViewBuildContext &ctx) {
   m_logger->info("Imported WindowView Swapchain to RenderGraph");
 }
 void WindowView::Begin(Renderer *renderer) {
-    m_logger->info("Acquiring swapchain image");
+
   const auto acquire =
       renderer->GetRenderDevice()->AcquireSwapchainImage(swapchain);
   m_acquiredImage = acquire;
 }
 void WindowView::End(Renderer *renderer) {
-    m_logger->info("Presenting swapchain image");
   renderer->GetRenderDevice()->Present(swapchain);
   m_acquiredImage.reset();
 }

@@ -1,3 +1,4 @@
+#include <Lighthouse/Engine/Core/Profiling.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
 
@@ -124,6 +125,7 @@ RenderMeshHandle Renderer::UploadMesh(const Mesh& mesh) {
   return UploadMesh(mesh.ToRenderMesh());
 }
 RenderMeshHandle Renderer::UploadMesh(const RenderMesh& mesh) {
+    LIGHTHOUSE_PROFILE_SCOPE("Renderer::UploadMesh");
   return m_renderMeshManager->Upload(mesh, *m_device);
 }
 
@@ -172,6 +174,7 @@ bool Renderer::DestroyView(RenderViewHandle handle) {
 }
 
 void Renderer::Compile() {
+    LIGHTHOUSE_PROFILE_SCOPE("Renderer::Compile");
   RenderGraph graph;
 
   for (std::uint32_t i = 0; i < m_views.size(); ++i) {
@@ -188,6 +191,7 @@ void Renderer::Compile() {
   m_renderGraph = std::move(graph);
 }
 void Renderer::Render() {
+    LIGHTHOUSE_PROFILE_SCOPE("Renderer::Render");
 
   for (const auto &viewSlot : m_views) {
     if (auto *outputView = dynamic_cast<IOutputView *>(viewSlot.value.get())) {

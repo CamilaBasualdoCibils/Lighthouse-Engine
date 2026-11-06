@@ -1,3 +1,4 @@
+#include <Lighthouse/Engine/Core/Profiling.hpp>
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 
 #include <glslang/Public/ResourceLimits.h>
@@ -45,6 +46,7 @@ void EnsureGlslangInitialized() {
 } // namespace
 
 Shader ShaderCompiler::Compile(std::string_view source, const ShaderCompileOptions& options) {
+    LIGHTHOUSE_PROFILE_SCOPE("ShaderCompiler::Compile");
     EnsureGlslangInitialized();
     std::lock_guard lock(CompilerMutex());
     if (source.empty())
@@ -93,6 +95,7 @@ Shader ShaderCompiler::Compile(std::string_view source, const ShaderCompileOptio
 }
 
 std::vector<std::uint32_t> ShaderCompiler::CompileOpenGL(std::string_view source, ShaderStage shaderStage) {
+    LIGHTHOUSE_PROFILE_SCOPE("ShaderCompiler::CompileOpenGL");
     EnsureGlslangInitialized();
     std::lock_guard lock(CompilerMutex());
     const auto stage = ToGlslangStage(shaderStage);

@@ -1,3 +1,4 @@
+#include <Lighthouse/Engine/Core/Profiling.hpp>
 #include <Lighthouse/Engine/Assets/Assets.hpp>
 
 #define TINYGLTF_IMPLEMENTATION
@@ -179,6 +180,7 @@ Mesh3D ReadPrimitive(const tinygltf::Model& model, const tinygltf::Primitive& pr
 } // namespace
 
 GLTFAsset LoadGLTF(const std::filesystem::path& path) {
+    LIGHTHOUSE_PROFILE_SCOPE("Assets::LoadGLTF");
     auto extension = path.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });

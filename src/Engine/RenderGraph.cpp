@@ -1,3 +1,4 @@
+#include <Lighthouse/Engine/Core/Profiling.hpp>
 #include "Lighthouse/Engine/Rendering/Graph/IRenderGraphAllocator.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
 #include <Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp>
@@ -12,12 +13,14 @@ RenderGraph::RenderGraph(RenderGraph&&) noexcept = default;
 RenderGraph& RenderGraph::operator=(RenderGraph&&) noexcept = default;
 
 void RenderGraph::Compile() {
+    LIGHTHOUSE_PROFILE_SCOPE("RenderGraph::Compile");
     if (m_compiled) return;
     m_graph->compile();
     m_compiled = true;
 }
 
 void RenderGraph::Execute(Renderer* renderer,IRenderGraphAllocator* allocator) {
+    LIGHTHOUSE_PROFILE_SCOPE("RenderGraph::Execute");
     if (!m_compiled) throw std::logic_error("Compile the render graph before executing it");
     
     RenderGraphExecuteContext context(renderer, renderer->GetRenderDevice());

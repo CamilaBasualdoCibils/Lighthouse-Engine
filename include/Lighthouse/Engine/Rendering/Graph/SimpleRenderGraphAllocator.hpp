@@ -50,7 +50,6 @@ public:
     else if (desc.format == ImageFormat::Depth24Stencil8)
       subresource.aspectMask = {ImageAspect::Depth, ImageAspect::Stencil};
     RenderGraphImageAllocation allocation{image, view, subresource};
-    m_logger->info("Allocated image ");
 
     return allocation;
   }
@@ -64,7 +63,6 @@ public:
       m_device.DestroyImageView(view);
       m_device.DestroyImage(it->second);
       m_imageViews.erase(it);
-      m_logger->info("Freed image ");
     }
   }
   RenderGraphBufferAllocation
