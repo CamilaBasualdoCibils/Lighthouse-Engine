@@ -63,6 +63,8 @@ public:
     };
     struct DrawIndexedCommand {
         std::uint32_t count;
+        std::uint32_t firstIndex{};
+        std::int32_t baseVertex{};
         void Execute(OpenGLRenderDevice* device) const;
     };
     struct DispatchCommand {
@@ -96,6 +98,10 @@ public:
         m_commands.emplace_back(DrawCommand{topology, count, first, instances, firstInstance});
     }
     void DrawIndexed(std::uint32_t count) override { m_commands.emplace_back(DrawIndexedCommand{count}); }
+    void DrawIndexedRange(std::uint32_t count, std::uint32_t firstIndex,
+                          std::int32_t baseVertex) override {
+        m_commands.emplace_back(DrawIndexedCommand{count, firstIndex, baseVertex});
+    }
     void Dispatch(std::uint32_t x, std::uint32_t y, std::uint32_t z) override { m_commands.emplace_back(DispatchCommand{x, y, z}); }
   void BlitImage(ImageHandle src, ImageHandle dst, const BlitRegion &region,
                  ImageFilter filter) override {

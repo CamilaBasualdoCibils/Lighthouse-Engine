@@ -1,42 +1,39 @@
 #pragma once
-
 #include <Lighthouse/Engine/Rendering/IRenderCommandList.hpp>
+#include <memory>
+#include <vulkan/vulkan.hpp>
 
-#include <variant>
-#include <vector>
-
-namespace Lighthouse {
-
-class VulkanCommandList final : public IRenderCommandList {
+namespace Lighthouse
+{
+class VulkanRenderDevice;
+// Records native Vulkan commands immediately; no replay/command vector.
+class VulkanCommandList final : public IRenderCommandList
+{
 public:
-  void Begin() override {
-    throw std::logic_error("Vulkan Begin is not implemented");
-  }
-  void End() override {
-    throw std::logic_error("Vulkan End is not implemented");
-  }
-  void Clear() override {
-    throw std::logic_error("Vulkan Clear is not implemented");
-  }
-  void BlitImage(ImageHandle src, ImageHandle dst, const BlitRegion &region,
-                 ImageFilter filter) override {
-    throw std::logic_error("Vulkan BlitImage is not implemented");
-  }
-
-  void BeginRendering(const RenderPassDesc &d) override {}
-  void EndRendering() override {}
-  void BindPipeline(GraphicsPipelineHandle h) override {}
-  void BindDescriptorSet(std::uint32_t setIndex,
-                         DescriptorSetHandle h) override {}
-  void BindVertexBuffer(BufferHandle h, std::uint32_t stride) override {}
-  void BindIndexBuffer(BufferHandle h) override {}
-  void BindTexture(std::uint32_t slot, ImageHandle h) override {}
-  void Draw(PrimitiveTopology t, std::uint32_t n, std::uint32_t first,
-            std::uint32_t instances, std::uint32_t firstInstance) override {}
-  void DrawIndexed(std::uint32_t n) override {}
-  void Dispatch(std::uint32_t x, std::uint32_t y, std::uint32_t z) override {}
+  explicit VulkanCommandList(VulkanRenderDevice& device);
+  ~VulkanCommandList() override;
+  void Begin() override;
+  void End() override;
+  void Clear() override;
+  void BeginRendering(const RenderPassDesc&) override;
+  void EndRendering() override;
+  void BindPipeline(GraphicsPipelineHandle) override;
+  void BindDescriptorSet(std::uint32_t, DescriptorSetHandle) override;
+  void BindVertexBuffer(BufferHandle, std::uint32_t) override;
+  void BindIndexBuffer(BufferHandle) override;
+  void BindTexture(std::uint32_t, ImageHandle) override;
+  void Draw(PrimitiveTopology, std::uint32_t, std::uint32_t, std::uint32_t = 1,
+            std::uint32_t = 0) override;
+  void DrawIndexed(std::uint32_t) override;
+  void DrawIndexedRange(std::uint32_t, std::uint32_t, std::int32_t) override;
+  void Dispatch(std::uint32_t, std::uint32_t, std::uint32_t) override;
+  void BlitImage(ImageHandle, ImageHandle, const BlitRegion&,
+                 ImageFilter) override;
+  const vk::CommandBuffer& Native() const noexcept;
 
 private:
+  friend class VulkanRenderDevice;
+  struct Impl;
+  std::unique_ptr<Impl> m_impl;
 };
-
 } // namespace Lighthouse

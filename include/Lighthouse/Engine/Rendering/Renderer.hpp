@@ -20,6 +20,7 @@ namespace Lighthouse {
 
 class IRenderDevice;
 class RenderMeshManager;
+class Mesh;
 
 // Renderer-facing window options. Native surface setup comes from the device.
 struct RenderWindowDesc {
@@ -45,6 +46,10 @@ public:
     return m_device.get();
   }
 
+  // Uploads into the renderer-owned shared vertex/index buffers. Resolve the
+  // current buffers/ranges with GetRenderMesh; subsequent uploads may grow them.
+  RenderMeshHandle UploadMesh(const Mesh& mesh);
+  RenderMeshHandle UploadMesh(const RenderMesh& mesh);
   RenderMeshHandle CreateRenderMesh(const RenderMesh &description);
   RenderMeshHandle CreateRenderMesh(const RenderMeshBuilder &builder) {
     return CreateRenderMesh(builder.Build());
@@ -64,7 +69,7 @@ public:
       return AddView(std::make_unique<T>(std::forward<Args>(args)...));
     }
   }
-  // Creates and owns the native window along with its render view.
+  // Creates and owns the native window, swapchain, and render view immediately.
   RenderViewHandle CreateWindowView(const RenderWindowDesc& window = {},
                                     SwapchainConfig presentation = {});
   bool DestroyView(RenderViewHandle view);
