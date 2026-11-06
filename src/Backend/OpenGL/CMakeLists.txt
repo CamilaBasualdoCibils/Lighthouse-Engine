@@ -11,7 +11,8 @@ target_compile_features(OpenGLBackend PUBLIC cxx_std_23)
 
 if(BUILD_TESTING)
     find_package(GTest CONFIG REQUIRED)
-    add_executable(OpenGLShaderTests ${PROJECT_SOURCE_DIR}/Tests/OpenGLShaderTests.cpp)
+    add_executable(OpenGLShaderTests ${PROJECT_SOURCE_DIR}/Tests/OpenGLShaderTests.cpp
+        ${PROJECT_SOURCE_DIR}/Tests/RenderMeshUploadTests.cpp)
     target_include_directories(OpenGLShaderTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(OpenGLShaderTests PRIVATE Lighthouse::OpenGLBackend GTest::gtest_main)
     include(GoogleTest)

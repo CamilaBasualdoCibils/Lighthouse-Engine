@@ -38,6 +38,10 @@ public:
                                       .mipLevelCount = 1,
                                       .baseArrayLayer = 0,
                                       .layerCount = 1};
+    if (desc.format == ImageFormat::Depth16 || desc.format == ImageFormat::Depth32)
+      subresource.aspectMask = ImageAspect::Depth;
+    else if (desc.format == ImageFormat::Depth24Stencil8)
+      subresource.aspectMask = {ImageAspect::Depth, ImageAspect::Stencil};
     RenderGraphImageAllocation allocation{image, view, subresource};
     m_logger->info("Allocated image ");
 

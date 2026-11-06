@@ -332,11 +332,23 @@ ImageViewHandle OpenGLRenderDevice::CreateImageView(const ImageViewDesc& desc) {
     return handle;
 }
 
+void OpenGLRenderDevice::UpdateBuffer(BufferHandle handle, std::uint64_t offset,
+                                      std::span<const std::byte> bytes) {
+    if (!IsValid(handle)) throw std::invalid_argument("Invalid buffer for update");
+    auto& buffer = m_impl->buffers.at(handle);
+    if (offset > buffer.metadata.size || bytes.size() > buffer.metadata.size - offset)
+        throw std::out_of_range("Buffer update exceeds allocation");
+    WaitIdle();
+    m_impl->ActivateContext();
+    glNamedBufferSubData(buffer.id, static_cast<GLintptr>(offset),
+                        static_cast<GLsizeiptr>(bytes.size()), bytes.data());
+}
+
 BufferHandle OpenGLRenderDevice::CreateBuffer(const BufferDesc& desc) {
     m_impl->ActivateContext();
     if (desc.initialData.size_bytes() > desc.size) throw std::invalid_argument("Buffer initial data exceeds buffer size");
     GLuint id{}; glCreateBuffers(1, &id);
-    glNamedBufferStorage(id, static_cast<GLsizeiptr>(desc.size), desc.initialData.empty() ? nullptr : desc.initialData.data(), 0);
+    glNamedBufferStorage(id, static_cast<GLsizeiptr>(desc.size), desc.initialData.empty() ? nullptr : desc.initialData.data(), GL_DYNAMIC_STORAGE_BIT);
     const auto handle = MakeHandle<BufferHandle>(m_impl->nextBuffer++, DeviceId());
     m_impl->buffers.emplace(handle, Impl::BufferResource{id, BufferMetadata{desc.size, desc.usage, desc.memory}});
     return handle;

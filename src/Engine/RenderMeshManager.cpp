@@ -4,6 +4,8 @@
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -127,17 +129,113 @@ void ValidateRenderMeshription(const RenderMesh& desc, IRenderDevice* device) {
 
 } // namespace
 
+RenderMeshManager::RenderMeshManager() {
+    static std::atomic<std::uint64_t> nextOwner{1};
+    m_ownerId = nextOwner.fetch_add(1, std::memory_order_relaxed);
+}
+
+RenderMeshHandle RenderMeshManager::Upload(const RenderMesh& source, IRenderDevice& device) {
+    ValidateRenderMeshription(source, &device);
+    if (source.vertexData.size() != 1 || source.layout.bindings.size() != 1 ||
+        source.layout.bindings.front().inputRate != VertexInputRate::PerVertex ||
+        !source.vertexBuffers.empty() || !source.hasIndexData || !source.indexBuffer ||
+        !source.vertexCount || !source.indexCount)
+        throw std::invalid_argument("Pooled upload requires one interleaved CPU vertex stream and CPU indices");
+    const auto& binding = source.layout.bindings.front();
+    if (source.vertexData.front().binding != binding.binding)
+        throw std::invalid_argument("Pooled vertex data must match the layout binding");
+    // Keep each mesh aligned to its stride so offset / stride is a base vertex.
+    const auto padding = (binding.stride - m_vertices.size() % binding.stride) % binding.stride;
+    const auto vertexOffset = m_vertices.size() + padding;
+    const auto firstIndex = m_indices.size();
+    if (vertexOffset / binding.stride > std::numeric_limits<std::int32_t>::max() ||
+        firstIndex > std::numeric_limits<std::uint32_t>::max() - source.indexCount)
+        throw std::length_error("Shared mesh buffers exceed indexed draw limits");
+    auto vertices = m_vertices;
+    vertices.resize(vertexOffset);
+    const auto vertexBytes = static_cast<std::size_t>(source.vertexCount) * binding.stride;
+    vertices.insert(vertices.end(), source.vertexData.front().bytes.begin(),
+                    source.vertexData.front().bytes.begin() + vertexBytes);
+    auto indices = m_indices;
+    for (std::uint32_t i = 0; i < source.indexCount; ++i) {
+        std::uint32_t index{};
+        if (source.indexBuffer->format == IndexFormat::UInt16) {
+            std::uint16_t small{};
+            std::memcpy(&small, source.indexData.data() + i * sizeof(small), sizeof(small));
+            index = small;
+        } else {
+            std::memcpy(&index, source.indexData.data() + i * sizeof(index), sizeof(index));
+        }
+        if (index >= source.vertexCount)
+            throw std::invalid_argument("Uploaded mesh index is outside its vertex array");
+        indices.push_back(index);
+    }
+    RenderMesh uploaded = source;
+    uploaded.vertexData.clear();
+    uploaded.indexData.clear();
+    uploaded.hasIndexData = false;
+    uploaded.vertexBuffers = {{.offset = vertexOffset, .binding = binding.binding}};
+    uploaded.indexBuffer = RenderMeshIndexBufferBinding{
+        .offset = firstIndex * sizeof(std::uint32_t), .format = IndexFormat::UInt32};
+    std::uint32_t slotIndex = 0;
+    while (slotIndex < m_slots.size() && m_slots[slotIndex].value) ++slotIndex;
+    if (slotIndex == m_slots.size()) m_slots.emplace_back();
+    auto entry = std::make_unique<Entry>(Entry{std::move(uploaded), true});
+    // Upload transactionally. Existing ranges/handles remain valid if either
+    // allocation fails. CPU mirrors allow rebuilding the shared pair on growth.
+    auto vertexBuffer = device.CreateBuffer({.size = vertices.size(),
+        .usage = BufferUsage::Vertex, .initialData = vertices});
+    BufferHandle indexBuffer{};
+    try {
+        const auto bytes = std::as_bytes(std::span(indices));
+        indexBuffer = device.CreateBuffer({.size = bytes.size(),
+            .usage = BufferUsage::Index, .initialData = bytes});
+        device.WaitIdle();
+    } catch (...) {
+        if (indexBuffer) device.DestroyBuffer(indexBuffer);
+        device.DestroyBuffer(vertexBuffer);
+        throw;
+    }
+    const auto oldVertices = m_vertexBuffer, oldIndices = m_indexBuffer;
+    m_vertexBuffer = vertexBuffer;
+    m_indexBuffer = indexBuffer;
+    m_vertices.swap(vertices);
+    m_indices.swap(indices);
+    m_slots[slotIndex].value = std::move(entry);
+    for (auto& slot : m_slots) {
+        if (slot.value && slot.value->pooled) {
+            slot.value->description.vertexBuffers.front().buffer = m_vertexBuffer;
+            slot.value->description.indexBuffer->buffer = m_indexBuffer;
+        }
+    }
+    if (oldVertices) device.DestroyBuffer(oldVertices);
+    if (oldIndices) device.DestroyBuffer(oldIndices);
+    return {slotIndex, m_slots[slotIndex].generation, m_ownerId};
+}
+
+void RenderMeshManager::Release(IRenderDevice& device) {
+    if (!m_vertexBuffer && !m_indexBuffer) return;
+    device.WaitIdle();
+    if (m_vertexBuffer) device.DestroyBuffer(m_vertexBuffer);
+    if (m_indexBuffer) device.DestroyBuffer(m_indexBuffer);
+    m_vertexBuffer = {};
+    m_indexBuffer = {};
+    m_slots.clear();
+    m_vertices.clear();
+    m_indices.clear();
+}
+
 RenderMeshHandle RenderMeshManager::Create(const RenderMesh& description, IRenderDevice* device) {
     ValidateRenderMeshription(description, device);
     std::uint32_t index = 0;
     while (index < m_slots.size() && m_slots[index].value) ++index;
     if (index == m_slots.size()) m_slots.emplace_back();
     m_slots[index].value = std::make_unique<Entry>(Entry{description});
-    return {index, m_slots[index].generation};
+    return {index, m_slots[index].generation, m_ownerId};
 }
 
 bool RenderMeshManager::Destroy(RenderMeshHandle handle) {
-    if (!handle || handle.index >= m_slots.size()) return false;
+    if (!handle || handle.owner != m_ownerId || handle.index >= m_slots.size()) return false;
     auto& slot = m_slots[handle.index];
     if (!slot.value || slot.generation != handle.generation) return false;
     slot.value.reset();
@@ -146,7 +244,7 @@ bool RenderMeshManager::Destroy(RenderMeshHandle handle) {
 }
 
 bool RenderMeshManager::IsValid(RenderMeshHandle handle, IRenderDevice* device) const noexcept {
-    if (!handle || handle.index >= m_slots.size()) return false;
+    if (!handle || handle.owner != m_ownerId || handle.index >= m_slots.size()) return false;
     const auto& slot = m_slots[handle.index];
     if (!slot.value || slot.generation != handle.generation) return false;
     const auto& description = slot.value->description;

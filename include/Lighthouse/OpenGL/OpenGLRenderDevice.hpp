@@ -32,6 +32,7 @@ public:
     ImageHandle CreateImage(const ImageDesc& description) override;
     ImageViewHandle CreateImageView(const ImageViewDesc& description) override;
     BufferHandle CreateBuffer(const BufferDesc& description) override;
+    void UpdateBuffer(BufferHandle, std::uint64_t, std::span<const std::byte>) override;
     std::optional<BufferMetadata> GetBufferDesc(BufferHandle handle) const noexcept override;
     bool IsValid(BufferHandle handle) const noexcept override;
     bool IsValid(DescriptorSetLayoutHandle handle) const noexcept override;

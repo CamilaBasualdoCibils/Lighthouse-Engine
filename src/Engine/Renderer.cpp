@@ -3,6 +3,7 @@
 
 #include "Lighthouse/Engine/Rendering/RenderView.hpp"
 #include "RenderMeshManager.hpp"
+#include <Lighthouse/Engine/Assets/Mesh.hpp>
 #ifdef LIGHTHOUSE_IMGUI
 #include <Lighthouse/Engine/Rendering/ImGuiView.hpp>
 #endif
@@ -25,6 +26,7 @@ Renderer::Renderer(std::unique_ptr<IRenderDevice> device,
 }
 Renderer::~Renderer() {
   m_techniques.clear();
+  m_renderMeshManager->Release(*m_device);
 #ifdef LIGHTHOUSE_IMGUI
   // ImGui owns native contexts and must release them before engine windows.
   for (std::uint32_t i = 0; i < m_views.size(); ++i)
@@ -116,6 +118,13 @@ RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc &description,
     m_windows->DestroyWindow(window);
     throw;
   }
+}
+
+RenderMeshHandle Renderer::UploadMesh(const Mesh& mesh) {
+  return UploadMesh(mesh.ToRenderMesh());
+}
+RenderMeshHandle Renderer::UploadMesh(const RenderMesh& mesh) {
+  return m_renderMeshManager->Upload(mesh, *m_device);
 }
 
 RenderMeshHandle Renderer::CreateRenderMesh(const RenderMesh &description) {

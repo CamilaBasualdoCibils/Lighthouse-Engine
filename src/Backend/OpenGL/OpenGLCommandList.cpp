@@ -123,6 +123,19 @@ void OpenGLCommandList::BeginRenderCommand::Execute(
     }
     glBindFramebuffer(GL_FRAMEBUFFER, state.activeFramebuffer);
   }
+  glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                       desc.depthAttachment ? state.views.at(desc.depthAttachment).id : 0, 0);
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    throw std::runtime_error("OpenGL render target attachments are incomplete");
+  if (desc.depthAttachment) {
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+  } else {
+    glDisable(GL_DEPTH_TEST);
+  }
+  // Match the canonical Vulkan/SPIR-V depth range used by engine shaders.
+  glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
   glViewport(desc.offsetX, desc.offsetY, static_cast<GLsizei>(desc.width),
              static_cast<GLsizei>(desc.height));
   if (desc.clearColor) {
@@ -130,12 +143,20 @@ void OpenGLCommandList::BeginRenderCommand::Execute(
                           desc.clearColorValue.z, 1.f};
     glClearBufferfv(GL_COLOR, 0, color);
   }
-  if (desc.clearDepth)
+  if (desc.clearDepth) {
+    glClearDepth(1.0);
     glClear(GL_DEPTH_BUFFER_BIT);
+  }
   state.RecordWrite(state.views.at(desc.colorAttachment).image);
+  if (desc.depthAttachment)
+    state.RecordWrite(state.views.at(desc.depthAttachment).image);
 }
 void OpenGLCommandList::EndRenderCommand::Execute(
     OpenGLRenderDevice *device) const {
+  // The depth image may be a transient graph resource, including on a
+  // persistent swapchain framebuffer. Release its attachment before graph free.
+  glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, 0, 0);
+  glDisable(GL_DEPTH_TEST);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   auto &framebuffer = device->m_impl->activeFramebuffer;
   if (framebuffer) {
@@ -306,8 +327,9 @@ void OpenGLCommandList::DrawCommand::Execute(OpenGLRenderDevice *) const {
 }
 void OpenGLCommandList::DrawIndexedCommand::Execute(
     OpenGLRenderDevice *) const {
-  glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(count), GL_UNSIGNED_INT,
-                 nullptr);
+  glDrawElementsBaseVertex(GL_TRIANGLES, static_cast<GLsizei>(count), GL_UNSIGNED_INT,
+      reinterpret_cast<const void*>(static_cast<std::uintptr_t>(firstIndex) * sizeof(std::uint32_t)),
+      baseVertex);
 }
 void OpenGLCommandList::DispatchCommand::Execute(OpenGLRenderDevice *) const {
   glDispatchCompute(x, y, z);

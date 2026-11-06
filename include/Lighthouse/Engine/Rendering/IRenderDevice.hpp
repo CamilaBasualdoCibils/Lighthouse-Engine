@@ -33,6 +33,12 @@ public:
     virtual ImageHandle CreateImage(const ImageDesc& description) = 0;
     virtual ImageViewHandle CreateImageView(const ImageViewDesc& description) = 0;
     virtual BufferHandle CreateBuffer(const BufferDesc& description) = 0;
+    // Synchronous host upload: completes prior device work, copies the bytes,
+    // and makes them visible to subsequent submissions. It does not record a
+    // command and must not race other threads submitting work on this device.
+    virtual void UpdateBuffer(BufferHandle, std::uint64_t, std::span<const std::byte>) {
+        throw std::logic_error("Buffer updates are unsupported by this backend");
+    }
     virtual std::optional<BufferMetadata> GetBufferDesc(BufferHandle handle) const noexcept = 0;
     virtual bool IsValid(BufferHandle handle) const noexcept = 0;
     virtual bool IsValid(DescriptorSetLayoutHandle) const noexcept = 0;

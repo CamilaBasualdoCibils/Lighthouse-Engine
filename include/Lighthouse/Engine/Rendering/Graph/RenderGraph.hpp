@@ -219,6 +219,10 @@ public:
           execute(data, resources, executePassContext);
 
           executeContext->device->Submit(*executePassContext.commandList);
+          // FrameGraph can destroy transient resources as soon as this callback
+          // returns. Complete their GPU use first on every backend; asynchronous
+          // submission will require fence-based deferred resource retirement.
+          executeContext->device->WaitIdle();
         });
   }
 

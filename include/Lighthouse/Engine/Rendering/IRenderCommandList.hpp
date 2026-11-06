@@ -27,6 +27,12 @@ public:
                       std::uint32_t firstVertex, std::uint32_t instanceCount = 1,
                       std::uint32_t firstInstance = 0) = 0;
     virtual void DrawIndexed(std::uint32_t indexCount) = 0;
+    virtual void DrawIndexedRange(std::uint32_t indexCount, std::uint32_t firstIndex,
+                                  std::int32_t baseVertex) {
+        if (firstIndex || baseVertex)
+            throw std::logic_error("Indexed draw ranges are unsupported by this backend");
+        DrawIndexed(indexCount);
+    }
     virtual void Dispatch(std::uint32_t x, std::uint32_t y, std::uint32_t z) = 0;
 
 
