@@ -5,12 +5,17 @@
 #include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
 #include <spdlog/logger.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
-namespace Lighthouse {
-class SimpleRenderGraphAllocator : public IRenderGraphAllocator {
+#include <spdlog/spdlog.h>
+namespace Lighthouse
+{
+class SimpleRenderGraphAllocator : public IRenderGraphAllocator
+{
 public:
-  SimpleRenderGraphAllocator(IRenderDevice &device) : m_device(device) {}
-  ~SimpleRenderGraphAllocator() {
-    for (auto &[view, image] : m_imageViews) {
+  SimpleRenderGraphAllocator(IRenderDevice& device) : m_device(device) {}
+  ~SimpleRenderGraphAllocator()
+  {
+    for (auto& [view, image] : m_imageViews)
+    {
       m_device.DestroyImageView(view);
       m_device.DestroyImage(image);
     }
@@ -20,7 +25,8 @@ public:
 
 public:
   RenderGraphImageAllocation
-  AllocateImage(const RenderGraphImageDesc &desc) override {
+  AllocateImage(const RenderGraphImageDesc& desc) override
+  {
     ImageDesc imageDesc{};
     imageDesc.width = desc.width;
     imageDesc.height = desc.height;
@@ -38,7 +44,8 @@ public:
                                       .mipLevelCount = 1,
                                       .baseArrayLayer = 0,
                                       .layerCount = 1};
-    if (desc.format == ImageFormat::Depth16 || desc.format == ImageFormat::Depth32)
+    if (desc.format == ImageFormat::Depth16 ||
+        desc.format == ImageFormat::Depth32)
       subresource.aspectMask = ImageAspect::Depth;
     else if (desc.format == ImageFormat::Depth24Stencil8)
       subresource.aspectMask = {ImageAspect::Depth, ImageAspect::Stencil};
@@ -48,17 +55,21 @@ public:
     return allocation;
   }
 
-  void FreeImage(ImageViewHandle view) override {
+  void FreeImage(ImageViewHandle view) override
+  {
     // TODO: Implement this pure virtual method.
     auto it = m_imageViews.find(view);
-    if (it != m_imageViews.end()) {
+    if (it != m_imageViews.end())
+    {
       m_device.DestroyImageView(view);
       m_device.DestroyImage(it->second);
       m_imageViews.erase(it);
       m_logger->info("Freed image ");
     }
   }
-  RenderGraphBufferAllocation AllocateBuffer(const RenderGraphBufferDesc& rgdesc) override {
+  RenderGraphBufferAllocation
+  AllocateBuffer(const RenderGraphBufferDesc& rgdesc) override
+  {
     BufferDesc desc{};
     desc.size = rgdesc.size;
     desc.usage = rgdesc.usage;
@@ -68,16 +79,20 @@ public:
     return allocation;
   }
 
-  void FreeBuffer(BufferHandle buffer) override {
+  void FreeBuffer(BufferHandle buffer) override
+  {
     // TODO: Implement this pure virtual method.
     m_device.DestroyBuffer(buffer);
     m_logger->info("Freed buffer ");
   }
 
 private:
-  IRenderDevice &m_device;
+  IRenderDevice& m_device;
 
   std::unordered_map<ImageViewHandle, ImageHandle> m_imageViews;
-  std::shared_ptr<spdlog::logger> m_logger = spdlog::stdout_color_mt("RenderGraphSimpleAllocator");
+  std::shared_ptr<spdlog::logger> m_logger =
+      spdlog::get("RenderGraphSimpleAllocator")
+          ? spdlog::get("RenderGraphSimpleAllocator")
+          : spdlog::stdout_color_mt("RenderGraphSimpleAllocator");
 };
 } // namespace Lighthouse

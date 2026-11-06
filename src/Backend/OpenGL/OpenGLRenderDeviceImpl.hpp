@@ -65,6 +65,7 @@ struct OpenGLRenderDevice::Impl
     GLuint id{};
     Flags<ImageUsage> usage{};
     ImageType type{ImageType::Image2D};
+    ImageFormat format{ImageFormat::RGBA8};
   };
   struct ImageViewResource
   {
@@ -122,8 +123,7 @@ struct OpenGLRenderDevice::Impl
   void ActivateContext(const Swapchain* requested = nullptr) const
   {
     if (!group || group->display == EGL_NO_DISPLAY)
-      throw std::logic_error("Initialize an EGL display by creating a "
-                             "swapchain before using the OpenGL device");
+      throw std::logic_error("OpenGL device context initialization failed");
     const auto context = requested ? requested->context : group->shareContext;
     const auto surface = requested ? requested->surface : group->pbuffer;
     if (context == EGL_NO_CONTEXT || surface == EGL_NO_SURFACE)
@@ -227,6 +227,7 @@ struct OpenGLRenderDevice::Impl
     std::unordered_map<SwapchainHandle, GLuint,
                        OpenGLHandleHash<SwapchainHandle>>
         vaos;
+    PrimitiveTopology topology{PrimitiveTopology::TriangleList};
   };
   std::unordered_map<GraphicsPipelineHandle, Pipeline,
                      OpenGLHandleHash<GraphicsPipelineHandle>>
