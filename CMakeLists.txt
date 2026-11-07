@@ -4,7 +4,7 @@ set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-option(LIGHTHOUSE_ENABLE_TRACY "Enable Tracy profiling instead of mimalloc" ON)
+option(LIGHTHOUSE_ENABLE_TRACY "Enable Tracy profiling instead of mimalloc" OFF)
 option(LIGHTHOUSE_IMGUI "Build ImGui views and select GLFW X11/XWayland (OFF selects Wayland)" ON)
 option(LIGHTHOUSE_BUILD_EXAMPLES "Build Lighthouse examples" OFF)
 option(LIGHTHOUSE_BUILD_OPENGL_BACKEND "Build the optional OpenGL backend" ON)

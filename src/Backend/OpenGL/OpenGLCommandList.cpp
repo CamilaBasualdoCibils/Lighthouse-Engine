@@ -384,6 +384,14 @@ void OpenGLCommandList::DrawIndexedCommand::Execute(
                                     sizeof(std::uint32_t)),
       baseVertex);
 }
+void OpenGLCommandList::MultiDrawCommand::Execute(OpenGLRenderDevice* device) const
+{
+  glBindBuffer(GL_DRAW_INDIRECT_BUFFER, device->m_impl->buffers.at(buffer).id);
+  glMultiDrawElementsIndirect(
+      ToGLTopology(device->m_impl->pipelines.at(*device->m_impl->activePipeline).topology),
+      GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(count), 20);
+  glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
+}
 void OpenGLCommandList::DispatchCommand::Execute(OpenGLRenderDevice*) const
 {
   glDispatchCompute(x, y, z);

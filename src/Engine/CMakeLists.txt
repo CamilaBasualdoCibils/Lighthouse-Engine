@@ -2,6 +2,8 @@ find_package(EnTT CONFIG REQUIRED)
 find_package(glslang CONFIG REQUIRED)
 find_package(slang CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
+find_package(boost_describe CONFIG REQUIRED)
+find_package(boost_program_options CONFIG REQUIRED)
 if(NOT LIGHTHOUSE_IMGUI)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(WAYLAND_EGL REQUIRED IMPORTED_TARGET wayland-egl)
@@ -37,8 +39,20 @@ target_include_directories(LighthouseEngine PUBLIC
 )
 target_include_directories(LighthouseEngine PRIVATE ${TINYGLTF_INCLUDE_DIR})
 target_include_directories(LighthouseEngine PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(LighthouseEngine PUBLIC EnTT::EnTT glm::glm fg::FrameGraph PRIVATE glfw
-    glslang::glslang glslang::SPIRV glslang::glslang-default-resource-limits slang::slang $<IF:$<TARGET_EXISTS:mimalloc-static>,mimalloc-static,mimalloc> spdlog::spdlog)
+target_link_libraries(LighthouseEngine PUBLIC 
+EnTT::EnTT 
+glm::glm 
+fg::FrameGraph 
+Boost::program_options
+Boost::describe
+PRIVATE 
+glfw
+glslang::glslang 
+glslang::SPIRV 
+glslang::glslang-default-resource-limits 
+slang::slang 
+$<IF:$<TARGET_EXISTS:mimalloc-static>,mimalloc-static,mimalloc> 
+spdlog::spdlog)
 target_compile_features(LighthouseEngine PUBLIC cxx_std_23)
 
 

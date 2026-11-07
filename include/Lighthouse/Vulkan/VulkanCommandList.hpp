@@ -26,6 +26,7 @@ public:
             std::uint32_t = 0) override;
   void DrawIndexed(std::uint32_t) override;
   void DrawIndexedRange(std::uint32_t, std::uint32_t, std::int32_t) override;
+  void MultiDrawIndexedIndirect(BufferHandle, std::uint32_t) override;
   void Dispatch(std::uint32_t, std::uint32_t, std::uint32_t) override;
   void BlitImage(ImageHandle, ImageHandle, const BlitRegion&,
                  ImageFilter) override;

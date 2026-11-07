@@ -569,6 +569,7 @@ void VulkanRenderDevice::Impl::Init(const DeviceConfig& config,
     enabled12.pNext = &enabled13;
     enabled13.pNext = &enabledShader;
     vk::PhysicalDeviceFeatures enabledBase;
+    enabledBase.multiDrawIndirect = features.features.multiDrawIndirect;
     enabledBase.samplerAnisotropy = features.features.samplerAnisotropy;
     const float priority = 1;
     vk::DeviceQueueCreateInfo queueInfo({}, family, 1, &priority);
@@ -1800,6 +1801,23 @@ void VulkanCommandList::DrawIndexedRange(std::uint32_t count,
   c.StartNative();
   c.GraphicsState(c.d.pipelines.at(c.pipeline).desc.topology);
   c.command.drawIndexed(count, 1, first, base, 0, c.d.dispatch);
+}
+void VulkanCommandList::MultiDrawIndexedIndirect(BufferHandle buffer, std::uint32_t count)
+{
+  auto& c = *m_impl;
+  c.RequireRecording();
+  c.StartNative();
+  c.GraphicsState(c.d.pipelines.at(c.pipeline).desc.topology);
+  const auto native = c.d.buffers.at(buffer).native;
+  const auto features = c.d.physical.getFeatures(c.d.dispatch);
+  const auto limit = c.d.physical.getProperties(c.d.dispatch).limits.maxDrawIndirectCount;
+  const std::uint32_t batch = features.multiDrawIndirect ? limit : 1;
+  for (std::uint32_t first = 0; first < count;)
+  {
+    const auto n = std::min(batch, count - first);
+    c.command.drawIndexedIndirect(native, vk::DeviceSize(first) * 20, n, 20, c.d.dispatch);
+    first += n;
+  }
 }
 void VulkanCommandList::Dispatch(std::uint32_t x, std::uint32_t y,
                                  std::uint32_t z)

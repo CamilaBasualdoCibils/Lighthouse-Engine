@@ -78,10 +78,15 @@ public:
         ImageFilter filter;
         void Execute(OpenGLRenderDevice *device) const;
     };
+    struct MultiDrawCommand {
+        BufferHandle buffer;
+        std::uint32_t count;
+        void Execute(OpenGLRenderDevice* device) const;
+    };
     using Command = std::variant<BeginRenderCommand, EndRenderCommand, BindPipelineCommand,
         BindDescriptorSetCommand,
         BindVertexBufferCommand, BindIndexBufferCommand, BindTextureCommand,
-        DrawCommand, DrawIndexedCommand, DispatchCommand, BlitImageCommand>;
+        DrawCommand, DrawIndexedCommand, MultiDrawCommand, DispatchCommand, BlitImageCommand>;
 
     const std::vector<Command>& Commands() const noexcept { return m_commands; }
     void BeginRendering(const RenderPassDesc& desc) override { m_commands.emplace_back(BeginRenderCommand{desc}); }
@@ -101,6 +106,9 @@ public:
     void DrawIndexedRange(std::uint32_t count, std::uint32_t firstIndex,
                           std::int32_t baseVertex) override {
         m_commands.emplace_back(DrawIndexedCommand{count, firstIndex, baseVertex});
+    }
+    void MultiDrawIndexedIndirect(BufferHandle buffer, std::uint32_t count) override {
+        m_commands.emplace_back(MultiDrawCommand{buffer, count});
     }
     void Dispatch(std::uint32_t x, std::uint32_t y, std::uint32_t z) override { m_commands.emplace_back(DispatchCommand{x, y, z}); }
   void BlitImage(ImageHandle src, ImageHandle dst, const BlitRegion &region,

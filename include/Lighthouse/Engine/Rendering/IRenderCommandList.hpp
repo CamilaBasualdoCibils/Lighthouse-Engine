@@ -9,6 +9,14 @@
 namespace Lighthouse
 {
 
+struct DrawIndexedIndirectCommand
+{
+  std::uint32_t indexCount, instanceCount, firstIndex;
+  std::int32_t baseVertex;
+  std::uint32_t firstInstance;
+};
+static_assert(sizeof(DrawIndexedIndirectCommand) == 20);
+
 class IRenderCommandList
 {
 public:
@@ -38,6 +46,11 @@ public:
       throw std::logic_error(
           "Indexed draw ranges are unsupported by this backend");
     DrawIndexed(indexCount);
+  }
+  // Buffer contains tightly packed DrawIndexedIndirectCommand records.
+  virtual void MultiDrawIndexedIndirect(BufferHandle, std::uint32_t)
+  {
+    throw std::logic_error("Indexed multidraw unsupported by this backend");
   }
   virtual void Dispatch(std::uint32_t x, std::uint32_t y, std::uint32_t z) = 0;
 
