@@ -1,6 +1,6 @@
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
-#include <Lighthouse/Vulkan/VulkanCommandList.hpp>
-#include <Lighthouse/Vulkan/VulkanRenderDevice.hpp>
+#include <Lighthouse/Backends/Render/Vulkan/VulkanCommandList.hpp>
+#include <Lighthouse/Backends/Render/Vulkan/VulkanRenderDevice.hpp>
 #include <vulkan/vulkan.hpp>
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
@@ -1461,7 +1461,10 @@ struct VulkanCommandList::Impl
       {
         auto handle = d.views.at(image->image).desc.image;
         Require(!logicalRendering ||
-                    (d.views.at(pass.colorAttachment).desc.image != handle &&
+                    (std::none_of(
+                         pass.colorAttachments.begin(),
+                         pass.colorAttachments.end(), [&](auto view)
+                         { return d.views.at(view).desc.image == handle; }) &&
                      (!pass.depthAttachment ||
                       d.views.at(pass.depthAttachment).desc.image != handle)),
                 "Attachment sampling feedback is not supported");
@@ -1480,15 +1483,19 @@ struct VulkanCommandList::Impl
     Require(logicalRendering, "Draw requires BeginRendering");
     if (nativeRendering)
       return;
-    auto& colorView = d.views.at(pass.colorAttachment);
-    auto& colorImage = d.images.at(colorView.desc.image);
-    Transition(colorView.desc.image, vk::ImageLayout::eColorAttachmentOptimal,
-               true);
-    vk::RenderingAttachmentInfo color;
-    color.setImageView(colorView.native)
-        .setImageLayout(vk::ImageLayout::eColorAttachmentOptimal)
-        .setLoadOp(vk::AttachmentLoadOp::eLoad)
-        .setStoreOp(vk::AttachmentStoreOp::eStore);
+    std::vector<vk::RenderingAttachmentInfo> colors;
+    for (auto handle : pass.colorAttachments)
+    {
+      auto& view = d.views.at(handle);
+      Transition(view.desc.image, vk::ImageLayout::eColorAttachmentOptimal,
+                 true);
+      vk::RenderingAttachmentInfo color;
+      color.setImageView(view.native)
+          .setImageLayout(vk::ImageLayout::eColorAttachmentOptimal)
+          .setLoadOp(vk::AttachmentLoadOp::eLoad)
+          .setStoreOp(vk::AttachmentStoreOp::eStore);
+      colors.push_back(color);
+    }
     vk::RenderingAttachmentInfo depth;
     if (pass.depthAttachment)
     {
@@ -1506,7 +1513,7 @@ struct VulkanCommandList::Impl
             vk::Rect2D({pass.offsetX, pass.offsetY}, {pass.width, pass.height}))
         .setLayerCount(pass.layerCount)
         .setViewMask(pass.viewMask)
-        .setColorAttachments(color);
+        .setColorAttachments(colors);
     if (pass.depthAttachment)
     {
       rendering.setPDepthAttachment(&depth);
@@ -1527,8 +1534,9 @@ struct VulkanCommandList::Impl
     command.setScissorWithCount(
         vk::Rect2D({pass.offsetX, pass.offsetY}, {pass.width, pass.height}),
         d.dispatch);
-    (void)colorImage;
   }
+  StencilMode stencilMode = StencilMode::Disabled;
+  uint32_t stencilReference = 0;
   void GraphicsState(PrimitiveTopology topology)
   {
     auto& p = d.pipelines.at(pipeline);
@@ -1571,26 +1579,51 @@ struct VulkanCommandList::Impl
                              d.dispatch);
     command.setAlphaToCoverageEnableEXT(false, d.dispatch);
     command.setDepthBiasEnable(false, d.dispatch);
-    command.setDepthTestEnable(static_cast<bool>(pass.depthAttachment),
+    command.setDepthTestEnable(static_cast<bool>(pass.depthAttachment) &&
+                                   !pass.depthReadOnly,
                                d.dispatch);
-    command.setDepthWriteEnable(static_cast<bool>(pass.depthAttachment),
+    command.setDepthWriteEnable(static_cast<bool>(pass.depthAttachment) &&
+                                    !pass.depthReadOnly,
                                 d.dispatch);
     command.setDepthCompareOp(vk::CompareOp::eLess, d.dispatch);
     command.setDepthBoundsTestEnable(false, d.dispatch);
-    command.setStencilTestEnable(false, d.dispatch);
-    const std::array<vk::Bool32, 1> blend{false};
+    command.setStencilTestEnable(stencilMode != StencilMode::Disabled,
+                                 d.dispatch);
+    command.setStencilCompareMask(vk::StencilFaceFlagBits::eFrontAndBack, 0xff,
+                                  d.dispatch);
+    command.setStencilWriteMask(vk::StencilFaceFlagBits::eFrontAndBack,
+                                stencilMode == StencilMode::Write ? 0xff : 0,
+                                d.dispatch);
+    command.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack,
+                                stencilReference, d.dispatch);
+    command.setStencilOp(
+        vk::StencilFaceFlagBits::eFrontAndBack, vk::StencilOp::eKeep,
+        stencilMode == StencilMode::Write ? vk::StencilOp::eReplace
+                                          : vk::StencilOp::eKeep,
+        vk::StencilOp::eKeep,
+        stencilMode == StencilMode::Equal ? vk::CompareOp::eEqual
+                                          : vk::CompareOp::eAlways,
+        d.dispatch);
+    const std::vector<vk::Bool32> blend(pass.colorAttachments.size(), false);
     command.setColorBlendEnableEXT(0, blend, d.dispatch);
-    const std::array<vk::ColorComponentFlags, 1> colors{
+    const std::vector<vk::ColorComponentFlags> colors(
+        pass.colorAttachments.size(),
         vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-        vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA};
+            vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
     command.setColorWriteMaskEXT(0, colors, d.dispatch);
-    const auto& image =
-        d.images.at(d.views.at(pass.colorAttachment).desc.image);
-    Require(p.desc.sampleCount == image.desc.sampleCount,
-            "Pipeline sample count differs from attachments");
-    if (!p.desc.colorFormats.empty())
-      Require(Format(p.desc.colorFormats.front()) == Format(image.desc.format),
-              "Pipeline color format differs from attachment");
+    Require(p.desc.colorFormats.empty() ||
+                p.desc.colorFormats.size() == pass.colorAttachments.size(),
+            "Pipeline color attachment count differs from rendering");
+    for (size_t i = 0; i < pass.colorAttachments.size(); ++i)
+    {
+      const auto& image =
+          d.images.at(d.views.at(pass.colorAttachments[i]).desc.image);
+      Require(p.desc.sampleCount == image.desc.sampleCount,
+              "Pipeline sample count differs from attachments");
+      if (!p.desc.colorFormats.empty())
+        Require(Format(p.desc.colorFormats[i]) == Format(image.desc.format),
+                "Pipeline color format differs from attachment");
+    }
     if (pass.depthAttachment)
       Require(p.desc.depthFormat ==
                   d.images.at(d.views.at(pass.depthAttachment).desc.image)
@@ -1658,7 +1691,16 @@ void VulkanCommandList::BeginRendering(const RenderPassDesc& desc)
   Require(desc.viewMask == 0,
           "Multiview is unavailable with Vulkan shader objects");
   c.pass = desc;
-  auto& view = c.d.views.at(desc.colorAttachment);
+  c.stencilMode = StencilMode::Disabled;
+  Require(!desc.colorAttachment || desc.colorAttachments.empty(),
+          "Specify either colorAttachment or colorAttachments");
+  if (c.pass.colorAttachments.empty() && desc.colorAttachment)
+    c.pass.colorAttachments.push_back(desc.colorAttachment);
+  Require(!c.pass.colorAttachments.empty() &&
+              c.pass.colorAttachments.size() <=
+                  c.d.properties.limits.maxColorAttachments,
+          "Invalid color attachment count");
+  auto& view = c.d.views.at(c.pass.colorAttachments.front());
   auto& image = c.d.images.at(view.desc.image);
   Require(image.desc.usage.Contains(ImageUsage::ColorAttachment),
           "Color attachment usage missing");
@@ -1670,19 +1712,30 @@ void VulkanCommandList::BeginRendering(const RenderPassDesc& desc)
               c.pass.offsetX + c.pass.width <= image.desc.width &&
               c.pass.offsetY + c.pass.height <= image.desc.height,
           "Rendering rectangle exceeds attachment");
-  if (desc.clearColor)
+  for (auto handle : c.pass.colorAttachments)
   {
-    c.Transition(view.desc.image, vk::ImageLayout::eTransferDstOptimal, true);
-    const vk::ClearColorValue clear(
-        std::array<float, 4>{desc.clearColorValue.x, desc.clearColorValue.y,
-                             desc.clearColorValue.z, 1});
-    c.command.clearColorImage(
-        image.native, vk::ImageLayout::eTransferDstOptimal, clear,
-        vk::ImageSubresourceRange(
-            vk::ImageAspectFlagBits::eColor, view.desc.baseMipLevel,
-            view.desc.mipLevelCount, view.desc.baseArrayLayer,
-            view.desc.arrayLayerCount),
-        c.d.dispatch);
+    auto& view = c.d.views.at(handle);
+    auto& attachment = c.d.images.at(view.desc.image);
+    Require(attachment.desc.usage.Contains(ImageUsage::ColorAttachment),
+            "Color attachment usage missing");
+    Require(attachment.desc.width == image.desc.width &&
+                attachment.desc.height == image.desc.height &&
+                attachment.desc.sampleCount == image.desc.sampleCount,
+            "Color attachment sizes or sample counts differ");
+    if (desc.clearColor)
+    {
+      c.Transition(view.desc.image, vk::ImageLayout::eTransferDstOptimal, true);
+      const vk::ClearColorValue clear(
+          std::array<float, 4>{desc.clearColorValue.x, desc.clearColorValue.y,
+                               desc.clearColorValue.z, 1});
+      c.command.clearColorImage(
+          attachment.native, vk::ImageLayout::eTransferDstOptimal, clear,
+          vk::ImageSubresourceRange(
+              vk::ImageAspectFlagBits::eColor, view.desc.baseMipLevel,
+              view.desc.mipLevelCount, view.desc.baseArrayLayer,
+              view.desc.arrayLayerCount),
+          c.d.dispatch);
+    }
   }
   if (desc.depthAttachment)
   {
@@ -1710,6 +1763,20 @@ void VulkanCommandList::BeginRendering(const RenderPassDesc& desc)
   }
   c.logicalRendering = true;
   c.StartNative();
+}
+void VulkanCommandList::SetStencil(StencilMode mode, uint32_t reference)
+{
+  auto& c = *m_impl;
+  c.RequireRecording();
+  Require(c.logicalRendering, "Stencil state requires rendering");
+  Require(reference <= 255, "Stencil reference exceeds 8 bits");
+  Require(mode == StencilMode::Disabled ||
+              (c.pass.depthAttachment &&
+               c.d.images.at(c.d.views.at(c.pass.depthAttachment).desc.image)
+                       .desc.format == ImageFormat::Depth24Stencil8),
+          "Stencil state requires a stencil attachment");
+  c.stencilMode = mode;
+  c.stencilReference = reference;
 }
 void VulkanCommandList::EndRendering()
 {

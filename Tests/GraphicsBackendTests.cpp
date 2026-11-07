@@ -111,7 +111,7 @@ TEST(GraphicsBackendTests, UnregisterRemovesFactory) {
 
 TEST(GraphicsBackendTests, ConfigCanRegisterBackendTypesDirectly) {
     Lighthouse::Config config;
-    config.AddBackend<ConfiguredTestBackend>();
+    config.AddRenderBackend<ConfiguredTestBackend>();
     Lighthouse::BackendRegistry registry;
 
     auto result = registry.Select(config.graphics);

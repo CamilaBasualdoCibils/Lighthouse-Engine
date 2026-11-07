@@ -84,6 +84,18 @@ public:
                                    std::span<const DescriptorWrite>) = 0;
   virtual GraphicsPipelineHandle
   CreatePipeline(const GraphicsPipelineDesc& description) = 0;
+  // Creates a material closest-hit pipeline library for later scene linking.
+  // A backend advertising rayTracing=true must implement this API. Unsupported
+  // backends fail explicitly; hardware support alone does not enable it.
+  virtual RayTracingPipelineHandle
+  CreateRayTracingPipeline(const RayTracingPipelineDesc&)
+  {
+    throw std::logic_error("Ray-tracing pipelines are unsupported by this backend");
+  }
+  virtual void DestroyRayTracingPipeline(RayTracingPipelineHandle)
+  {
+    throw std::logic_error("Ray-tracing pipelines are unsupported by this backend");
+  }
   virtual std::unique_ptr<IRenderCommandList>
   CreateCommandList(QueueType type) = 0;
 

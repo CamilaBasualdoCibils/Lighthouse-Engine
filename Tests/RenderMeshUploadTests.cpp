@@ -1,7 +1,7 @@
 #include <Lighthouse/Engine/Assets/Mesh.hpp>
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
-#include <Lighthouse/OpenGL/OpenGLBackend.hpp>
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
 #define GL_GLEXT_PROTOTYPES
 #include <GL/glcorearb.h>
 #include <array>

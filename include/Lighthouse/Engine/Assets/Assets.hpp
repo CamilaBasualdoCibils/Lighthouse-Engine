@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <Lighthouse/Engine/Assets/Mesh.hpp>
+#include <Lighthouse/Engine/Assets/ImageData.hpp>
 #include <Lighthouse/Engine/Assets/Material.hpp>
 #include <Lighthouse/Engine/Core/Types.hpp>
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
@@ -16,8 +17,9 @@
 namespace Lighthouse {
 
 struct MaterialAsset {};
-struct ImageAsset {};
-struct TextureAsset {};
+struct TextureAsset {
+    std::uint32_t image{}; // Index into GLTFAsset::images, not a GPU handle.
+};
 struct SkinAsset {};
 struct AnimationAsset {};
 struct CameraAsset {};
@@ -39,7 +41,10 @@ struct SceneAsset {
 struct GLTFAsset {
     std::vector<Mesh3D> meshes;
     std::vector<MaterialAsset> materials;
-    std::vector<ImageAsset> images;
+    // CPU-owned decoded pixels in glTF images[] order. No GPU resources.
+    std::vector<ImageData> images;
+    // glTF textures[] order; shared source images are decoded/stored once.
+    // Sampler and material import are not implemented yet.
     std::vector<TextureAsset> textures;
     std::vector<SceneNodeAsset> nodes;
     std::vector<SceneAsset> scenes;
@@ -56,6 +61,8 @@ namespace Lighthouse::Assets {
 template <typename AssetType>
 std::shared_ptr<AssetType> Load(const std::string& path);
 
+// Loads geometry and CPU-owned, decoded RGBA8 images. No render device or
+// GPU allocations; callers decide which images to upload and how to sample them.
 GLTFAsset LoadGLTF(const std::filesystem::path& path);
 std::string LoadText(const std::filesystem::path& path);
 

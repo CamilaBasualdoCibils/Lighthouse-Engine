@@ -2,7 +2,7 @@
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
 #include <Lighthouse/Engine/Rendering/IImGuiDevice.hpp>
 #include <Lighthouse/Engine/Scene/Scene.hpp>
-#include <Lighthouse/OpenGL/OpenGLBackend.hpp>
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
 #define GLFW_INCLUDE_NONE
@@ -12,7 +12,7 @@
 #include <GL/glcorearb.h>
 #include <gtest/gtest.h>
 #ifdef LIGHTHOUSE_TEST_VULKAN
-#include <Lighthouse/Vulkan/VulkanBackend.hpp>
+#include <Lighthouse/Backends/Render/Vulkan/VulkanBackend.hpp>
 #endif
 
 using namespace Lighthouse;

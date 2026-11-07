@@ -5,7 +5,7 @@
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 #include <Lighthouse/Engine/Rendering/Detail/ImGuiGlfwRouting.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
-#include <Lighthouse/OpenGL/OpenGLRenderDevice.hpp>
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLRenderDevice.hpp>
 #include <spirv_cross/spirv_glsl.hpp>
 
 #define GL_GLEXT_PROTOTYPES

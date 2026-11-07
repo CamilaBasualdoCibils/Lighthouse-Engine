@@ -1,7 +1,7 @@
 #pragma once
 
 #include "OpenGLDeviceGroup.hpp"
-#include <Lighthouse/OpenGL/OpenGLRenderDevice.hpp>
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLRenderDevice.hpp>
 
 #define GL_GLEXT_PROTOTYPES
 #include <EGL/egl.h>

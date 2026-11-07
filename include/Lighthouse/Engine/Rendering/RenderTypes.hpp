@@ -94,7 +94,10 @@ enum class ShaderStageFlags : std::uint32_t
 {
   Vertex = 1u << 0,
   Fragment = 1u << 1,
-  Compute = 1u << 2
+  Compute = 1u << 2,
+  RayGeneration = 1u << 3,
+  Miss = 1u << 4,
+  ClosestHit = 1u << 5
 };
 constexpr ShaderStageFlags operator|(ShaderStageFlags left,
                                      ShaderStageFlags right) noexcept
@@ -203,11 +206,13 @@ struct ImageViewTag;
 struct BufferTag;
 struct ShaderModuleTag;
 struct GraphicsPipelineTag;
+struct RayTracingPipelineTag;
 using ImageHandle = Handle<ImageTag>;
 using ImageViewHandle = Handle<ImageViewTag>;
 using BufferHandle = Handle<BufferTag>;
 using ShaderModuleHandle = Handle<ShaderModuleTag>;
 using GraphicsPipelineHandle = Handle<GraphicsPipelineTag>;
+using RayTracingPipelineHandle = Handle<RayTracingPipelineTag>;
 using SwapchainHandle = Handle<SwapchainHandleTag>;
 using DescriptorSetLayoutHandle = Handle<DescriptorSetLayoutTag>;
 using DescriptorSetHandle = Handle<DescriptorSetTag>;
@@ -420,19 +425,37 @@ struct GraphicsPipelineDesc
   ShaderModuleHandle computeShader;
 };
 
+// Material hit-group library, linked by the scene tracing pipeline. Shader
+// bytecode is consumed synchronously by CreateRayTracingPipeline. No raygen or
+// scene descriptors are required by a material library.
+struct RayTracingPipelineDesc
+{
+  ShaderModuleDesc closestHit;
+  PipelineLayoutHandle layout;
+  std::uint32_t maxPayloadSize{16};
+  std::uint32_t maxHitAttributeSize{8};
+};
+
+enum class StencilMode { Disabled, Write, Equal };
+
 struct RenderPassDesc
 {
+  // Legacy single target. Use either this or colorAttachments, never both.
   ImageViewHandle colorAttachment;
   ImageViewHandle depthAttachment;
   bool clearColor{};
   Vec3 clearColorValue{};
-  bool clearDepth{};
+  bool clearDepth{}; // Also clears stencil to zero for depth/stencil attachments.
   std::uint32_t width{};
   std::uint32_t height{};
   std::int32_t offsetX{};
   std::int32_t offsetY{};
   std::uint32_t viewMask{};
   std::uint32_t layerCount{1};
+  // Ordered by fragment output location; existing clear settings apply to all.
+  std::vector<ImageViewHandle> colorAttachments;
+  // Preserve depth/stencil for a fullscreen lighting pass; disable depth testing.
+  bool depthReadOnly{};
 };
 
 struct RenderCapabilities
@@ -448,7 +471,7 @@ struct RenderCapabilities
                                // access.
   bool hardwareRayTracing{};   // Physical device support, not a ray-tracing API
                                // promise.
-  bool rayTracing{}; // Enabled backend ray-tracing commands (currently
+  bool rayTracing{}; // Enabled backend ray-tracing API (currently
                      // unavailable).
   bool meshShaders{};
   bool asyncCompute{}; // False for the single-queue implementation.

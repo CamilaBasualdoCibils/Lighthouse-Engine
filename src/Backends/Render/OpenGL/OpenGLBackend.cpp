@@ -1,7 +1,7 @@
 #include "OpenGLDeviceGroup.hpp"
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
-#include <Lighthouse/OpenGL/OpenGLBackend.hpp>
-#include <Lighthouse/OpenGL/OpenGLRenderDevice.hpp>
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLRenderDevice.hpp>
 
 #include <EGL/eglext.h>
 #ifdef LIGHTHOUSE_IMGUI

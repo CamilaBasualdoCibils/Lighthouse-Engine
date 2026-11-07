@@ -177,9 +177,7 @@ Mesh3D ReadPrimitive(const tinygltf::Model& model, const tinygltf::Primitive& pr
     return mesh;
 }
 
-} // namespace
-
-GLTFAsset LoadGLTF(const std::filesystem::path& path) {
+GLTFAsset LoadGLTFImpl(const std::filesystem::path& path) {
     LIGHTHOUSE_PROFILE_SCOPE("Assets::LoadGLTF");
     auto extension = path.extension().string();
     std::transform(extension.begin(), extension.end(), extension.begin(),
@@ -187,9 +185,8 @@ GLTFAsset LoadGLTF(const std::filesystem::path& path) {
     if (extension != ".gltf" && extension != ".glb")
         throw std::invalid_argument("LoadGLTF requires a .gltf or .glb file");
     tinygltf::TinyGLTF loader;
-    loader.SetImageLoader(
-        [](tinygltf::Image*, int, std::string*, std::string*, int, int,
-           const unsigned char*, int, void*) { return true; }, nullptr);
+    // Expand source images to tightly packed RGBA pixels owned by ImageData.
+    loader.SetPreserveImageChannels(false);
     tinygltf::Model model;
     std::string error, warning;
     const auto filename = path.string();
@@ -202,7 +199,30 @@ GLTFAsset LoadGLTF(const std::filesystem::path& path) {
     for (const auto& mesh : model.meshes)
         for (const auto& primitive : mesh.primitives)
             result.meshes.push_back(ReadPrimitive(model, primitive));
+
+    for (const auto& texture : model.textures) {
+        if (texture.source < 0 || static_cast<size_t>(texture.source) >= model.images.size())
+            throw std::runtime_error("glTF texture references an invalid source image");
+        result.textures.push_back({static_cast<uint32_t>(texture.source)});
+    }
+    result.images.reserve(model.images.size());
+    for (size_t index = 0; index < model.images.size(); ++index) {
+        const auto& image = model.images[index];
+        if (image.width <= 0 || image.height <= 0 || image.component != 4 ||
+            image.bits != 8 || image.pixel_type != TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE)
+            throw std::runtime_error("glTF image " + std::to_string(index) +
+                " must decode to an 8-bit RGBA image");
+        const auto bytes = std::as_bytes(std::span(image.image));
+        result.images.emplace_back(UVec2{uint32_t(image.width), uint32_t(image.height)},
+            ImageFormat::RGBA8, std::vector<std::byte>(bytes.begin(), bytes.end()));
+    }
     return result;
+}
+
+} // namespace
+
+GLTFAsset LoadGLTF(const std::filesystem::path& path) {
+    return LoadGLTFImpl(path);
 }
 
 std::string LoadText(const std::filesystem::path& path) {

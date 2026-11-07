@@ -30,6 +30,11 @@ public:
         RenderPassDesc desc;
         void Execute(OpenGLRenderDevice* device) const;
     };
+    struct StencilCommand {
+        StencilMode mode;
+        std::uint32_t reference;
+        void Execute(OpenGLRenderDevice* device) const;
+    };
     struct EndRenderCommand {
         void Execute(OpenGLRenderDevice* device) const;
     };
@@ -83,13 +88,14 @@ public:
         std::uint32_t count;
         void Execute(OpenGLRenderDevice* device) const;
     };
-    using Command = std::variant<BeginRenderCommand, EndRenderCommand, BindPipelineCommand,
+    using Command = std::variant<StencilCommand, BeginRenderCommand, EndRenderCommand, BindPipelineCommand,
         BindDescriptorSetCommand,
         BindVertexBufferCommand, BindIndexBufferCommand, BindTextureCommand,
         DrawCommand, DrawIndexedCommand, MultiDrawCommand, DispatchCommand, BlitImageCommand>;
 
     const std::vector<Command>& Commands() const noexcept { return m_commands; }
     void BeginRendering(const RenderPassDesc& desc) override { m_commands.emplace_back(BeginRenderCommand{desc}); }
+    void SetStencil(StencilMode mode, std::uint32_t reference) override { m_commands.emplace_back(StencilCommand{mode, reference}); }
     void EndRendering() override { m_commands.emplace_back(EndRenderCommand{}); }
     void BindPipeline(GraphicsPipelineHandle handle) override { m_commands.emplace_back(BindPipelineCommand{handle}); }
     void BindDescriptorSet(std::uint32_t setIndex, DescriptorSetHandle handle) override {

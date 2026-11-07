@@ -23,6 +23,8 @@ public:
 
     virtual bool ShouldClose() const;
 
+    InputSystem& GetInputSystem() { return GetRuntime().GetInputSystem(); }
+
 protected:
     
     EngineRuntime& GetRuntime();

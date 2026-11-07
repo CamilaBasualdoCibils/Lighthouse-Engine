@@ -26,6 +26,12 @@ public:
   virtual void End() = 0;
   virtual void BeginRendering(const RenderPassDesc& description) = 0;
   virtual void EndRendering() = 0;
+  // Write replaces stencil on depth pass; Equal preserves stencil and masks draws.
+  virtual void SetStencil(StencilMode mode, std::uint32_t reference)
+  {
+    if (mode != StencilMode::Disabled)
+      throw std::logic_error("Stencil state is unsupported by this backend");
+  }
   virtual void BindPipeline(GraphicsPipelineHandle pipeline) = 0;
   // Descriptor contents are resolved when the recorded command list is
   // submitted.

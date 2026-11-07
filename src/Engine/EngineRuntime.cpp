@@ -19,14 +19,22 @@ bool EngineRuntime::Initialize(const Config& config,
                                const BackendRegistry& backends)
 {
   Shutdown();
+  std::string inputDiagnostic;
+  if (!m_input.Initialize(config.input, m_windows, inputDiagnostic)) {
+    spdlog::error("Input initialization failed: {}", inputDiagnostic);
+    Shutdown();
+    return false;
+  }
   const DeviceConfig deviceConfig{.applicationName = config.name};
   m_backend = backends.Select(config.graphics, &deviceConfig);
   for (const auto& attempt : m_backend.attempts){
     if (!attempt.selected)
       spdlog::warn("Graphics backend {}: {}", attempt.backend,
                    attempt.diagnostic);}
-  if (!m_backend)
-    return config.graphics.backends.empty();
+  if (!m_backend) {
+    if (config.graphics.backends.empty()) return true;
+    Shutdown(); return false;
+  }
   try
   {
     m_renderer =
@@ -42,12 +50,14 @@ bool EngineRuntime::Initialize(const Config& config,
     if (m_backend.backend)
       m_backend.backend->Shutdown();
     m_backend.backend.reset();
+    Shutdown();
     return false;
   }
 }
 
 void EngineRuntime::Shutdown() noexcept
 {
+  m_input.Shutdown();
   m_renderer.reset();
   m_backend.device.reset();
   if (m_backend.backend)

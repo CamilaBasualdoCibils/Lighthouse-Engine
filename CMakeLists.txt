@@ -28,10 +28,10 @@ if(BUILD_TESTING)
 endif()
 
 if(LIGHTHOUSE_BUILD_OPENGL_BACKEND OR LIGHTHOUSE_BUILD_EXAMPLES)
-    add_subdirectory(src/Backend/OpenGL)
+    add_subdirectory(src/Backends/Render/OpenGL)
 endif()
 if(LIGHTHOUSE_BUILD_VULKAN_BACKEND OR LIGHTHOUSE_BUILD_EXAMPLES)
-    add_subdirectory(src/Backend/Vulkan)
+    add_subdirectory(src/Backends/Render/Vulkan)
 endif()
 
 if(LIGHTHOUSE_BUILD_EXAMPLES)
@@ -40,3 +40,8 @@ endif()
 
 
 include(cmake/GetDeps.cmake)
+
+option(LIGHTHOUSE_BUILD_GLFW_INPUT_BACKEND "Build the GLFW input backend" ON)
+if(LIGHTHOUSE_BUILD_GLFW_INPUT_BACKEND OR LIGHTHOUSE_BUILD_EXAMPLES)
+    add_subdirectory(src/Backends/Input/GLFW)
+endif()

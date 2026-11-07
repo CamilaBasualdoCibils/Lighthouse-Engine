@@ -1,6 +1,6 @@
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
-#include <Lighthouse/OpenGL/OpenGLBackend.hpp>
-#include <Lighthouse/OpenGL/OpenGLRenderDevice.hpp>
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLRenderDevice.hpp>
 #include <cassert>
 #include <iostream>
 

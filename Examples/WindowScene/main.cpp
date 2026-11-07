@@ -1,6 +1,7 @@
+#include <Lighthouse/Backends/Input/GLFW/GLFWInputBackend.hpp>
 #include <Lighthouse/Engine/Engine.hpp>
-#include <Lighthouse/OpenGL/OpenGLBackend.hpp>
-#include <Lighthouse/Vulkan/VulkanBackend.hpp>
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
+#include <Lighthouse/Backends/Render/Vulkan/VulkanBackend.hpp>
 #ifdef LIGHTHOUSE_IMGUI
 #include <Lighthouse/Engine/Rendering/ImGuiView.hpp>
 #include <imgui.h>
@@ -44,7 +45,8 @@ public:
 int main() {
     Lighthouse::Config config{.name = "Lighthouse Window and Scene Example",
         .graphics = {.selection = Lighthouse::BackendSelection::FirstAvailable}};
-    config.AddBackend<Lighthouse::OpenGLBackend>();
-    config.AddBackend<Lighthouse::VulkanBackend>();
+    config.AddInputBackend<Lighthouse::GLFWInputBackend>();
+    config.AddRenderBackend<Lighthouse::OpenGLBackend>();
+    config.AddRenderBackend<Lighthouse::VulkanBackend>();
     return Lighthouse::Run<WindowSceneExample>(config);
 }

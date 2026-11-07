@@ -17,6 +17,7 @@ public:
   void Clear() override;
   void BeginRendering(const RenderPassDesc&) override;
   void EndRendering() override;
+  void SetStencil(StencilMode, std::uint32_t) override;
   void BindPipeline(GraphicsPipelineHandle) override;
   void BindDescriptorSet(std::uint32_t, DescriptorSetHandle) override;
   void BindVertexBuffer(BufferHandle, std::uint32_t) override;

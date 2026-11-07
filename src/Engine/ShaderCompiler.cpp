@@ -20,6 +20,9 @@ EShLanguage ToGlslangStage(ShaderStage stage) {
     case ShaderStage::Vertex: return EShLangVertex;
     case ShaderStage::Fragment: return EShLangFragment;
     case ShaderStage::Compute: return EShLangCompute;
+    case ShaderStage::RayGeneration: return EShLangRayGen;
+    case ShaderStage::Miss: return EShLangMiss;
+    case ShaderStage::ClosestHit: return EShLangClosestHit;
     }
     throw std::invalid_argument("Unsupported shader stage");
 }
@@ -65,8 +68,10 @@ Shader ShaderCompiler::Compile(std::string_view source, const ShaderCompileOptio
     shader.setSourceEntryPoint(options.entryPoint.c_str());
     const auto language = options.language == ShaderSourceLanguage::HLSL ? EShSourceHlsl : EShSourceGlsl;
     shader.setEnvInput(language, stage, EShClientVulkan, 100);
-    shader.setEnvClient(EShClientVulkan, EShTargetVulkan_1_1);
-    shader.setEnvTarget(EShTargetSpv, EShTargetSpv_1_3);
+    const bool rayTracing = options.stage == ShaderStage::RayGeneration ||
+        options.stage == ShaderStage::Miss || options.stage == ShaderStage::ClosestHit;
+    shader.setEnvClient(EShClientVulkan, rayTracing ? EShTargetVulkan_1_2 : EShTargetVulkan_1_1);
+    shader.setEnvTarget(EShTargetSpv, rayTracing ? EShTargetSpv_1_4 : EShTargetSpv_1_3);
     if (options.language == ShaderSourceLanguage::HLSL) {
         shader.setAutoMapBindings(true);
         shader.setAutoMapLocations(true);

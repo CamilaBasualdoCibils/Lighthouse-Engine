@@ -109,14 +109,31 @@ void OpenGLCommandList::BeginRenderCommand::Execute(
   auto& state = *device->m_impl;
   if (desc.viewMask)
     throw std::invalid_argument("OpenGL multiview is not enabled");
-  state.ActivateView(desc.colorAttachment);
+  if (desc.colorAttachment && !desc.colorAttachments.empty())
+    throw std::invalid_argument(
+        "Specify either colorAttachment or colorAttachments");
+  const auto attachments =
+      desc.colorAttachments.empty()
+          ? std::vector<ImageViewHandle>{desc.colorAttachment}
+          : desc.colorAttachments;
+  state.ActivateView(attachments.front());
+  GLint limit = 0;
+  glGetIntegerv(GL_MAX_DRAW_BUFFERS, &limit);
+  if (attachments.size() > static_cast<size_t>(limit))
+    throw std::invalid_argument("Too many color attachments");
+  for (auto view : attachments)
+  {
+    const auto& image = state.images.at(state.views.at(view).image);
+    if (!image.usage.Contains(ImageUsage::ColorAttachment))
+      throw std::invalid_argument("Color attachment usage missing");
+  }
   if (state.activeFramebuffer)
   {
     glDeleteFramebuffers(1, &state.activeFramebuffer);
     state.activeFramebuffer = 0;
   }
-  if (state.activeSwapchain &&
-      desc.colorAttachment == device->AcquiredImageView(*state.activeSwapchain))
+  if (state.activeSwapchain && attachments.size() == 1 &&
+      attachments.front() == device->AcquiredImageView(*state.activeSwapchain))
   {
     auto* target = state.FindSwapchain(*state.activeSwapchain);
     glBindFramebuffer(GL_FRAMEBUFFER,
@@ -124,13 +141,19 @@ void OpenGLCommandList::BeginRenderCommand::Execute(
   }
   else
   {
-    if (!desc.colorAttachment)
+    if (!attachments.front())
       throw std::logic_error("Render pass has no color attachment");
     glCreateFramebuffers(1, &state.activeFramebuffer);
-    glNamedFramebufferTexture(state.activeFramebuffer, GL_COLOR_ATTACHMENT0,
-                              state.views.at(desc.colorAttachment).id, 0);
-    constexpr GLenum attachment = GL_COLOR_ATTACHMENT0;
-    glNamedFramebufferDrawBuffers(state.activeFramebuffer, 1, &attachment);
+    std::vector<GLenum> drawBuffers;
+    for (size_t i = 0; i < attachments.size(); ++i)
+    {
+      drawBuffers.push_back(GL_COLOR_ATTACHMENT0 + static_cast<GLenum>(i));
+      glNamedFramebufferTexture(state.activeFramebuffer, drawBuffers.back(),
+                                state.views.at(attachments[i]).id, 0);
+    }
+    glNamedFramebufferDrawBuffers(state.activeFramebuffer,
+                                  static_cast<GLsizei>(drawBuffers.size()),
+                                  drawBuffers.data());
     if (glCheckNamedFramebufferStatus(
             state.activeFramebuffer, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
     {
@@ -141,12 +164,19 @@ void OpenGLCommandList::BeginRenderCommand::Execute(
     }
     glBindFramebuffer(GL_FRAMEBUFFER, state.activeFramebuffer);
   }
+  const bool stencil =
+      desc.depthAttachment &&
+      state.images.at(state.views.at(desc.depthAttachment).image).format ==
+          ImageFormat::Depth24Stencil8;
   glFramebufferTexture(
-      GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+      GL_FRAMEBUFFER,
+      stencil ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT,
       desc.depthAttachment ? state.views.at(desc.depthAttachment).id : 0, 0);
+  glDisable(GL_STENCIL_TEST);
+  glStencilMask(0xff);
   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
     throw std::runtime_error("OpenGL render target attachments are incomplete");
-  if (desc.depthAttachment)
+  if (desc.depthAttachment && !desc.depthReadOnly)
   {
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
@@ -164,16 +194,35 @@ void OpenGLCommandList::BeginRenderCommand::Execute(
   {
     const GLfloat color[]{desc.clearColorValue.x, desc.clearColorValue.y,
                           desc.clearColorValue.z, 1.f};
-    glClearBufferfv(GL_COLOR, 0, color);
+    for (size_t i = 0; i < attachments.size(); ++i)
+      glClearBufferfv(GL_COLOR, static_cast<GLint>(i), color);
   }
   if (desc.clearDepth)
   {
     glClearDepth(1.0);
-    glClear(GL_DEPTH_BUFFER_BIT);
+    glClearStencil(0);
+    glClear(GL_DEPTH_BUFFER_BIT | (stencil ? GL_STENCIL_BUFFER_BIT : 0));
   }
-  state.RecordWrite(state.views.at(desc.colorAttachment).image);
+  for (auto view : attachments)
+    state.RecordWrite(state.views.at(view).image);
   if (desc.depthAttachment)
     state.RecordWrite(state.views.at(desc.depthAttachment).image);
+}
+void OpenGLCommandList::StencilCommand::Execute(OpenGLRenderDevice*) const
+{
+  if (reference > 255)
+    throw std::invalid_argument("Stencil reference exceeds 8 bits");
+  if (mode == StencilMode::Disabled)
+  {
+    glDisable(GL_STENCIL_TEST);
+    return;
+  }
+  glEnable(GL_STENCIL_TEST);
+  glStencilMask(mode == StencilMode::Write ? 0xff : 0);
+  glStencilFunc(mode == StencilMode::Equal ? GL_EQUAL : GL_ALWAYS, reference,
+                0xff);
+  glStencilOp(GL_KEEP, GL_KEEP,
+              mode == StencilMode::Write ? GL_REPLACE : GL_KEEP);
 }
 void OpenGLCommandList::EndRenderCommand::Execute(
     OpenGLRenderDevice* device) const

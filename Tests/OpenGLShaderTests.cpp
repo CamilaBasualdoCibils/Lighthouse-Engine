@@ -2,7 +2,7 @@
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
-#include <Lighthouse/OpenGL/OpenGLBackend.hpp>
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
 #include "OpenGLShaderTranslator.hpp"
 #include <Lighthouse/Engine/Rendering/IRenderCommandList.hpp>
 #define GL_GLEXT_PROTOTYPES

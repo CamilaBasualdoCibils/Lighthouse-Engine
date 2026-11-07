@@ -1,5 +1,5 @@
-#include <Lighthouse/Vulkan/VulkanBackend.hpp>
-#include <Lighthouse/Vulkan/VulkanRenderDevice.hpp>
+#include <Lighthouse/Backends/Render/Vulkan/VulkanBackend.hpp>
+#include <Lighthouse/Backends/Render/Vulkan/VulkanRenderDevice.hpp>
 #include <algorithm>
 #include <cstring>
 #include <vulkan/vulkan.hpp>
