@@ -1,4 +1,5 @@
 #pragma once
+#include <Lighthouse/Engine/Input/InputAction.hpp>
 #include <functional>
 #include <stdexcept>
 #include <typeindex>
@@ -20,6 +21,9 @@ struct InputConfig {
 };
 class InputSystem {
 public:
+    std::shared_ptr<InputActionSet> CreateActionSet(std::string name);
+    void RemoveActionSet(const std::shared_ptr<InputActionSet>& set);
+    void Update();
     ~InputSystem() { Shutdown(); }
     bool Initialize(const InputConfig& config, WindowManager& windows, std::string& diagnostic);
     void Shutdown() noexcept;
@@ -34,6 +38,7 @@ public:
         throw std::out_of_range("Input backend is not configured or initialized");
     }
 private:
+    std::vector<std::shared_ptr<InputActionSet>> m_actionSets;
     std::vector<std::unique_ptr<IInputBackend>> m_backends;
 };
 } // namespace Lighthouse

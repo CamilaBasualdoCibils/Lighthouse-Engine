@@ -31,6 +31,8 @@ struct RenderWindowDesc {
   bool resizable{true};
   bool visible{true};
   bool decorated{true};
+  // Ordered preference. No implicit fallback outside this list.
+  std::vector<SwapchainFormat> swapchainFormats{SwapchainFormat::SRGB};
 };
 
 class Renderer {
@@ -70,6 +72,8 @@ public:
     }
   }
   // Creates and owns the native window, swapchain, and render view immediately.
+  // Selects presentation.format from window.swapchainFormats in preference
+  // order.
   RenderViewHandle CreateWindowView(const RenderWindowDesc& window = {},
                                     SwapchainConfig presentation = {});
   bool DestroyView(RenderViewHandle view);

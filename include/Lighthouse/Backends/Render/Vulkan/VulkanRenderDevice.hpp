@@ -27,6 +27,10 @@ public:
   VulkanRenderDevice(const VulkanRenderDevice&) = delete;
   VulkanRenderDevice& operator=(const VulkanRenderDevice&) = delete;
 
+  std::vector<SwapchainFormat>
+  EnumerateAvailableSwapchainFormats(Window&) override;
+  std::optional<SwapchainInfo> GetSwapchainInfo(SwapchainHandle) const override;
+
   ImageHandle CreateImage(const ImageDesc&) override;
   std::vector<std::byte> ReadImage(ImageHandle) override;
   ImageViewHandle CreateImageView(const ImageViewDesc&) override;

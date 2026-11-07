@@ -68,6 +68,9 @@ GLenum ToGLImageFormat(ImageFormat format)
   case ImageFormat::RGBA8Srgb:
   case ImageFormat::BGRA8Srgb:
     return GL_SRGB8_ALPHA8;
+  case ImageFormat::RGB10A2:
+  case ImageFormat::BGR10A2:
+    return GL_RGB10_A2;
   case ImageFormat::R16f:
     return GL_R16F;
   case ImageFormat::RG16f:
@@ -221,16 +224,19 @@ void OpenGLRenderDevice::Impl::CreateSwapchainImages(Swapchain& swapchain,
       image.image = MakeHandle<ImageHandle>(nextImage++, owner);
       images.emplace(
           image.image,
-          ImageResource{texture, ImageUsage::ColorAttachment |
-                                     ImageUsage::TransferSource |
-                                     ImageUsage::TransferDestination |
-                                     ImageUsage::Sampled});
-      glTextureStorage2D(texture, 1, GL_RGBA8, swapchain.width,
-                         swapchain.height);
+          ImageResource{
+              texture,
+              ImageUsage::ColorAttachment | ImageUsage::TransferSource |
+                  ImageUsage::TransferDestination | ImageUsage::Sampled,
+              ImageType::Image2D, swapchain.info.imageFormat});
+      glTextureStorage2D(texture, 1,
+                         ToGLImageFormat(swapchain.info.imageFormat),
+                         swapchain.width, swapchain.height);
       glGenTextures(1, &view);
       image.view = MakeHandle<ImageViewHandle>(nextView++, owner);
       views.emplace(image.view, ImageViewResource{view, image.image});
-      glTextureView(view, GL_TEXTURE_2D, texture, GL_RGBA8, 0, 1, 0, 1);
+      glTextureView(view, GL_TEXTURE_2D, texture,
+                    ToGLImageFormat(swapchain.info.imageFormat), 0, 1, 0, 1);
       glCreateFramebuffers(1, &image.framebuffer);
       glNamedFramebufferTexture(image.framebuffer, GL_COLOR_ATTACHMENT0, view,
                                 0);
@@ -277,6 +283,7 @@ OpenGLRenderDevice::AcquireSwapchainImage(SwapchainHandle swapchain)
     Impl::Swapchain replacement;
     replacement.surface = target->surface;
     replacement.context = target->context;
+    replacement.info = target->info;
     m_impl->CreateSwapchainImages(replacement, count);
     m_impl->DestroySwapchainImages(*target);
     target->images = std::move(replacement.images);
@@ -350,6 +357,51 @@ OpenGLRenderDevice::~OpenGLRenderDevice()
     }
 }
 
+std::vector<SwapchainFormat>
+OpenGLRenderDevice::EnumerateAvailableSwapchainFormats(Window& window)
+{
+  if (!window.NativeDisplayHandle() || !window.NativeEGLWindowHandle())
+    throw std::invalid_argument(
+        "OpenGL format query requires an EGL-enabled window");
+  // EGL forbids a second surface for a native window already in use. Return
+  // the capability snapshot taken immediately before its surface was created.
+  for (const auto& slot : m_impl->swapchains)
+    if (slot.value &&
+        slot.value->nativeWindow == window.NativeEGLWindowHandle())
+      return slot.value->availableFormats;
+  m_impl->group->Initialize(window.NativeDisplayHandle());
+  std::vector<SwapchainFormat> result;
+  for (auto format :
+       {SwapchainFormat::SRGB, SwapchainFormat::HDR10, SwapchainFormat::ScRGB})
+    for (auto config : m_impl->group->WindowConfigs(window, format))
+    {
+      EGLSurface surface = EGL_NO_SURFACE;
+      try
+      {
+        surface = m_impl->group->CreateWindowSurface(
+            window.NativeEGLWindowHandle(), config, format);
+        const auto context = m_impl->group->CreateSharedContext(config);
+        eglDestroyContext(m_impl->group->display, context);
+        eglDestroySurface(m_impl->group->display, surface);
+        result.push_back(format);
+        break;
+      }
+      catch (const std::runtime_error&)
+      {
+        if (surface != EGL_NO_SURFACE)
+          eglDestroySurface(m_impl->group->display, surface);
+      }
+    }
+  return result;
+}
+
+std::optional<SwapchainInfo>
+OpenGLRenderDevice::GetSwapchainInfo(SwapchainHandle handle) const
+{
+  const auto* swap = m_impl->FindSwapchain(handle);
+  return swap ? std::optional(swap->info) : std::nullopt;
+}
+
 SwapchainHandle
 OpenGLRenderDevice::CreateSwapchain(Window& window,
                                     const SwapchainConfig& config)
@@ -364,11 +416,34 @@ OpenGLRenderDevice::CreateSwapchain(Window& window,
     throw std::invalid_argument(
         "All swapchains on an OpenGL device must use the same EGL display");
   auto state = std::make_unique<Impl::Swapchain>();
-  state->surface =
-      m_impl->group->CreateWindowSurface(window.NativeEGLWindowHandle());
+  state->nativeWindow = window.NativeEGLWindowHandle();
+  state->availableFormats = EnumerateAvailableSwapchainFormats(window);
+  state->info = {config.format, config.format == SwapchainFormat::ScRGB
+                                    ? ImageFormat::RGBA16f
+                                : config.format == SwapchainFormat::HDR10
+                                    ? ImageFormat::RGB10A2
+                                    : ImageFormat::RGBA8};
+  for (auto nativeConfig : m_impl->group->WindowConfigs(window, config.format))
+  {
+    try
+    {
+      state->surface = m_impl->group->CreateWindowSurface(
+          window.NativeEGLWindowHandle(), nativeConfig, config.format);
+      state->context = m_impl->group->CreateSharedContext(nativeConfig);
+      break;
+    }
+    catch (const std::runtime_error&)
+    {
+      if (state->surface != EGL_NO_SURFACE)
+        eglDestroySurface(m_impl->group->display, state->surface);
+      state->surface = EGL_NO_SURFACE;
+    }
+  }
+  if (state->surface == EGL_NO_SURFACE)
+    throw std::runtime_error(
+        "Requested OpenGL swapchain format is unavailable for this window");
   try
   {
-    state->context = m_impl->group->CreateSharedContext();
     m_impl->ActivateContext(state.get());
     if (eglSwapInterval(m_impl->group->display, config.vsync ? 1 : 0) !=
         EGL_TRUE)

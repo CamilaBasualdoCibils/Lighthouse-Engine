@@ -68,6 +68,7 @@ int Run(const Config& config) {
                     {
                         LIGHTHOUSE_PROFILE_SCOPE("WindowManager::PollEvents");
                         runtime.GetWindowManager().PollEvents();
+                        runtime.GetInputSystem().Update();
                     }
                     const auto now = Clock::now();
                     const auto deltaTime = std::chrono::duration<float>(now - previousFrame).count();

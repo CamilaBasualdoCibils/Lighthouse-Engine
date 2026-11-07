@@ -1,6 +1,8 @@
 #include <Lighthouse/Engine/Core/Profiling.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <algorithm>
+#include <exception>
 
 #include "Lighthouse/Engine/Rendering/RenderView.hpp"
 #include "RenderMeshManager.hpp"
@@ -94,6 +96,9 @@ RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc &description,
                                             SwapchainConfig presentation) {
   if (!m_windows)
     throw std::logic_error("Creating a window view requires a WindowManager");
+  if (description.swapchainFormats.empty())
+    throw std::invalid_argument(
+        "Window view requires a swapchain format preference");
   const auto window = m_windows->CreateWindow(WindowDesc{
       .title = description.title,
       .width = description.width,
@@ -106,12 +111,43 @@ RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc &description,
   });
   SwapchainHandle swapchain{};
   try {
+    const auto available =
+        m_windows->EnumerateAvailableSwapchainFormats(window, *m_device);
+    std::exception_ptr lastError;
+    for (auto format : description.swapchainFormats)
+    {
+      if (std::find(available.begin(), available.end(), format) ==
+          available.end())
+        continue;
+      presentation.format = format;
+      try
+      {
+        swapchain = m_device->CreateSwapchain(*m_windows->GetWindow(window),
+                                              presentation);
+        if (swapchain)
+          break;
+      }
+      catch (const std::runtime_error&)
+      {
+        lastError = std::current_exception();
+      }
+    }
+    if (!swapchain)
+    {
+      if (lastError)
+        std::rethrow_exception(lastError);
+      throw std::runtime_error(
+          "None of the requested swapchain formats is available");
+    }
     auto view =
         std::unique_ptr<WindowView>(new WindowView(window, presentation));
     view->m_windows = m_windows;
-    // OpenGL resource creation requires the EGL context owned by a swapchain.
-    swapchain = m_device->CreateSwapchain(*m_windows->GetWindow(window), presentation);
     view->swapchain = swapchain;
+    const auto info = m_device->GetSwapchainInfo(swapchain);
+    if (!info)
+      throw std::runtime_error(
+          "Backend did not report the created swapchain format");
+    view->m_swapchainInfo = *info;
     return AddView(std::move(view));
   } catch (...) {
     if (swapchain)

@@ -22,6 +22,8 @@ void WindowView::BuildGraph(ViewBuildContext &ctx) {
   // device");
   if (!swapchain || !ctx.device.IsValid(swapchain))
     swapchain = ctx.device.CreateSwapchain(*targetWindow, presentation);
+  m_swapchainInfo =
+      ctx.device.GetSwapchainInfo(swapchain).value_or(m_swapchainInfo);
   ImportedWindowView imported_image_view(this);
   m_acquiredImageAsRGResource = ctx.graph.Import(
       "WindowView Swapchain", ImportedWindowView::Desc{}, imported_image_view);
@@ -32,6 +34,9 @@ void WindowView::Begin(Renderer *renderer) {
   const auto acquire =
       renderer->GetRenderDevice()->AcquireSwapchainImage(swapchain);
   m_acquiredImage = acquire;
+  m_swapchainInfo =
+      renderer->GetRenderDevice()->GetSwapchainInfo(swapchain).value_or(
+          m_swapchainInfo);
 }
 void WindowView::End(Renderer *renderer) {
   renderer->GetRenderDevice()->Present(swapchain);

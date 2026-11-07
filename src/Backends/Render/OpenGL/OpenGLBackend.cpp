@@ -8,6 +8,8 @@
 #include <X11/Xlib.h>
 #endif
 #include <stdexcept>
+#include <string>
+#include <string_view>
 
 namespace Lighthouse
 {
@@ -152,7 +154,7 @@ void OpenGLDeviceGroup::Initialize(void* nativeDisplay)
   }
 }
 
-EGLContext OpenGLDeviceGroup::CreateSharedContext() const
+EGLContext OpenGLDeviceGroup::CreateSharedContext(EGLConfig windowConfig) const
 {
   const EGLint attributes[]{EGL_CONTEXT_MAJOR_VERSION,
                             4,
@@ -161,20 +163,94 @@ EGLContext OpenGLDeviceGroup::CreateSharedContext() const
                             EGL_CONTEXT_OPENGL_PROFILE_MASK,
                             EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
                             EGL_NONE};
-  const auto context =
-      eglCreateContext(display, config, shareContext, attributes);
+  const auto context = eglCreateContext(
+      display, windowConfig ? windowConfig : config, shareContext, attributes);
   if (context == EGL_NO_CONTEXT)
     throw std::runtime_error("Failed to create the EGL device context");
   return context;
 }
 
-EGLSurface OpenGLDeviceGroup::CreateWindowSurface(void* nativeWindow) const
+std::vector<EGLConfig>
+OpenGLDeviceGroup::WindowConfigs(Window& window, SwapchainFormat format) const
 {
+  if (nativeDisplay != window.NativeDisplayHandle())
+    return {};
+  if (format == SwapchainFormat::SRGB)
+    return {config};
+  const char* extensions = eglQueryString(display, EGL_EXTENSIONS);
+  const std::string names =
+      " " + std::string(extensions ? extensions : "") + " ";
+  auto has = [&](const char* name)
+  { return names.find(" " + std::string(name) + " ") != std::string::npos; };
+  if (!has("EGL_KHR_gl_colorspace"))
+    return {};
+  if (format == SwapchainFormat::ScRGB)
+  {
+    if (!has("EGL_EXT_pixel_format_float") ||
+        !has("EGL_EXT_gl_colorspace_scrgb_linear"))
+      return {};
+  }
+  else if (format == SwapchainFormat::HDR10)
+  {
+    if (!has("EGL_EXT_gl_colorspace_bt2020_pq"))
+      return {};
+  }
+  else
+    return {};
+  const bool floating = format == SwapchainFormat::ScRGB;
+  std::vector<EGLint> attributes{
+      EGL_SURFACE_TYPE,   EGL_WINDOW_BIT,     EGL_RENDERABLE_TYPE,
+      EGL_OPENGL_BIT,     EGL_RED_SIZE,       floating ? 16 : 10,
+      EGL_GREEN_SIZE,     floating ? 16 : 10, EGL_BLUE_SIZE,
+      floating ? 16 : 10, EGL_ALPHA_SIZE,     floating ? 16 : 2};
+  // Do not pass an extension-only attribute when it is not advertised.
+  if (has("EGL_EXT_pixel_format_float"))
+    attributes.insert(attributes.end(),
+                      {EGL_COLOR_COMPONENT_TYPE_EXT,
+                       floating ? EGL_COLOR_COMPONENT_TYPE_FLOAT_EXT
+                                : EGL_COLOR_COMPONENT_TYPE_FIXED_EXT});
+#ifdef LIGHTHOUSE_IMGUI
+  XWindowAttributes nativeAttributes{};
+  if (!XGetWindowAttributes(
+          static_cast<Display*>(nativeDisplay),
+          static_cast<::Window>(
+              reinterpret_cast<std::uintptr_t>(window.NativeEGLWindowHandle())),
+          &nativeAttributes))
+    return {};
+  attributes.insert(
+      attributes.end(),
+      {EGL_NATIVE_VISUAL_ID,
+       static_cast<EGLint>(XVisualIDFromVisual(nativeAttributes.visual))});
+#endif
+  attributes.push_back(EGL_NONE);
+  EGLint count{};
+  if (!eglChooseConfig(display, attributes.data(), nullptr, 0, &count) ||
+      !count)
+    return {};
+  std::vector<EGLConfig> configs(count);
+  if (!eglChooseConfig(display, attributes.data(), configs.data(), count,
+                       &count))
+    return {};
+  configs.resize(count);
+  return configs;
+}
+
+EGLSurface OpenGLDeviceGroup::CreateWindowSurface(void* nativeWindow,
+                                                  EGLConfig windowConfig,
+                                                  SwapchainFormat format) const
+{
+  const EGLint attributes[]{EGL_GL_COLORSPACE_KHR,
+                            format == SwapchainFormat::HDR10
+                                ? EGL_GL_COLORSPACE_BT2020_PQ_EXT
+                                : EGL_GL_COLORSPACE_SCRGB_LINEAR_EXT,
+                            EGL_NONE};
   const auto surface = eglCreateWindowSurface(
-      display, config, reinterpret_cast<EGLNativeWindowType>(nativeWindow),
-      nullptr);
+      display, windowConfig ? windowConfig : config,
+      reinterpret_cast<EGLNativeWindowType>(nativeWindow),
+      format == SwapchainFormat::SRGB ? nullptr : attributes);
   if (surface == EGL_NO_SURFACE)
-    throw std::runtime_error("Failed to create the EGL window surface");
+    throw std::runtime_error(
+        "Failed to create the requested EGL window surface");
   return surface;
 }
 

@@ -11,8 +11,12 @@ struct OpenGLDeviceGroup
 {
   ~OpenGLDeviceGroup();
   void Initialize(void* nativeDisplay = nullptr);
-  EGLContext CreateSharedContext() const;
-  EGLSurface CreateWindowSurface(void* nativeWindow) const;
+  EGLContext CreateSharedContext(EGLConfig windowConfig = nullptr) const;
+  std::vector<EGLConfig> WindowConfigs(Window& window,
+                                       SwapchainFormat format) const;
+  EGLSurface
+  CreateWindowSurface(void* nativeWindow, EGLConfig windowConfig = nullptr,
+                      SwapchainFormat format = SwapchainFormat::SRGB) const;
 
   std::unique_ptr<WindowManager> platform;
   EGLDisplay display{EGL_NO_DISPLAY};

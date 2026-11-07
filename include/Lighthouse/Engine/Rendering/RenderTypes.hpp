@@ -47,7 +47,9 @@ enum class ImageFormat : std::uint32_t
   RGBA8Srgb,
   Depth16,
   Depth24Stencil8,
-  Depth32
+  Depth32,
+  RGB10A2,
+  BGR10A2
 };
 enum class ImageType : std::uint32_t
 {
@@ -548,10 +550,27 @@ struct AcquiredSwapchainImage
   ImageViewHandle view;
 };
 
+// Presentation encoding, independent of the image's storage format.
+// SRGB uses standard sRGB presentation; HDR10 consumes BT.2020/PQ pixels;
+// ScRGB consumes display-linear extended-sRGB pixels (1.0 = 80 nits).
+enum class SwapchainFormat
+{
+  SRGB,
+  HDR10,
+  ScRGB
+};
+
+struct SwapchainInfo
+{
+  SwapchainFormat format{SwapchainFormat::SRGB};
+  ImageFormat imageFormat{ImageFormat::Undefined};
+};
+
 struct SwapchainConfig
 {
   bool vsync{true};
   std::uint32_t minImageCount{3};
+  SwapchainFormat format{SwapchainFormat::SRGB};
 };
 
 } // namespace Lighthouse

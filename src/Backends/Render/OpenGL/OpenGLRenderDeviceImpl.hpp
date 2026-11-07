@@ -45,6 +45,9 @@ struct OpenGLRenderDevice::Impl
   {
     EGLSurface surface{EGL_NO_SURFACE};
     EGLContext context{EGL_NO_CONTEXT};
+    void* nativeWindow{};
+    std::vector<SwapchainFormat> availableFormats;
+    SwapchainInfo info{SwapchainFormat::SRGB, ImageFormat::RGBA8};
     std::vector<SwapchainImage> images;
     std::uint32_t imageIndex{};
     GLsizei width{}, height{};

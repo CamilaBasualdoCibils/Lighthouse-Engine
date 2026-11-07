@@ -31,6 +31,18 @@ public:
     return false;
   }
 
+  // Queries a real native surface. The result describes presentation support,
+  // not the monitor's peak brightness or whether the desktop has HDR enabled.
+  virtual std::vector<SwapchainFormat>
+  EnumerateAvailableSwapchainFormats(Window&)
+  {
+    return {}; // Backends must explicitly advertise their presentation support.
+  }
+  virtual std::optional<SwapchainInfo> GetSwapchainInfo(SwapchainHandle) const
+  {
+    return std::nullopt;
+  }
+
   virtual SwapchainHandle CreateSwapchain(Window&, const SwapchainConfig&) = 0;
   // Acquires an image for this swapchain. Other swapchains may remain acquired.
   // The returned attachments identify the destination of recorded commands.

@@ -52,6 +52,10 @@ public:
     WindowHandle window;
     SwapchainConfig presentation;
     SwapchainHandle swapchain;
+    SwapchainInfo GetSwapchainInfo() const noexcept
+    {
+      return m_swapchainInfo;
+    }
     Window* GetWindow() const noexcept;
     void BuildGraph(ViewBuildContext& ctx) override;
 
@@ -65,6 +69,7 @@ public:
     friend class Renderer;
     WindowView(WindowHandle window, SwapchainConfig config)
         : IOutputView(), window(window), presentation(config) {}
+    SwapchainInfo m_swapchainInfo;
     WindowManager* m_windows{};
     std::optional<AcquiredSwapchainImage> m_acquiredImage;
     std::optional<RenderGraphResource> m_acquiredImageAsRGResource;

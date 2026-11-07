@@ -59,6 +59,8 @@ vk::Format Format(ImageFormat f)
     F(RG8, eR8G8Unorm);
     F(RGB8, eR8G8B8Unorm);
     F(RGBA8, eR8G8B8A8Unorm);
+    F(RGB10A2, eA2B10G10R10UnormPack32);
+    F(BGR10A2, eA2R10G10B10UnormPack32);
     F(BGRA8, eB8G8R8A8Unorm);
     F(BGRA8Srgb, eB8G8R8A8Srgb);
     F(RGBA8Srgb, eR8G8B8A8Srgb);
@@ -88,8 +90,49 @@ ImageFormat EngineFormat(vk::Format f)
     return ImageFormat::BGRA8;
   if (f == vk::Format::eB8G8R8A8Srgb)
     return ImageFormat::BGRA8Srgb;
+  if (f == vk::Format::eR16G16B16A16Sfloat)
+    return ImageFormat::RGBA16f;
+  if (f == vk::Format::eA2R10G10B10UnormPack32)
+    return ImageFormat::BGR10A2;
+  if (f == vk::Format::eA2B10G10R10UnormPack32)
+    return ImageFormat::RGB10A2;
   throw std::runtime_error("Unsupported presentation format");
 }
+std::optional<vk::SurfaceFormatKHR>
+SelectSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& available,
+                    SwapchainFormat requested)
+{
+  vk::ColorSpaceKHR colorSpace;
+  std::vector<vk::Format> candidates;
+  switch (requested)
+  {
+  case SwapchainFormat::SRGB:
+    colorSpace = vk::ColorSpaceKHR::eSrgbNonlinear;
+    // Preserve the existing display-encoded UNORM presentation contract.
+    candidates = {vk::Format::eR8G8B8A8Unorm, vk::Format::eB8G8R8A8Unorm,
+                  vk::Format::eR8G8B8A8Srgb, vk::Format::eB8G8R8A8Srgb};
+    break;
+  case SwapchainFormat::HDR10:
+    colorSpace = vk::ColorSpaceKHR::eHdr10St2084EXT;
+    candidates = {vk::Format::eA2B10G10R10UnormPack32,
+                  vk::Format::eA2R10G10B10UnormPack32};
+    break;
+  case SwapchainFormat::ScRGB:
+    colorSpace = vk::ColorSpaceKHR::eExtendedSrgbLinearEXT;
+    candidates = {vk::Format::eR16G16B16A16Sfloat};
+    break;
+  default:
+    return std::nullopt;
+  }
+  for (auto format : candidates)
+    for (const auto& supported : available)
+      if (supported.colorSpace == colorSpace &&
+          (supported.format == format ||
+           supported.format == vk::Format::eUndefined))
+        return vk::SurfaceFormatKHR(format, colorSpace);
+  return std::nullopt;
+}
+
 vk::ImageAspectFlags Aspect(ImageFormat f)
 {
   if (f == ImageFormat::Depth24Stencil8)
@@ -487,9 +530,9 @@ void VulkanRenderDevice::Impl::Init(const DeviceConfig& config,
   const auto available =
       vk::enumerateInstanceExtensionProperties(nullptr, dispatch);
   std::vector<const char*> extensions;
-  for (const char* name :
-       {"VK_KHR_surface", "VK_KHR_xlib_surface", "VK_KHR_xcb_surface",
-        "VK_KHR_wayland_surface", "VK_EXT_debug_utils"})
+  for (const char* name : {"VK_KHR_surface", "VK_KHR_xlib_surface",
+                           "VK_KHR_xcb_surface", "VK_KHR_wayland_surface",
+                           "VK_EXT_debug_utils", "VK_EXT_swapchain_colorspace"})
     if (std::any_of(available.begin(), available.end(), [&](const auto& p)
                     { return std::strcmp(p.extensionName, name) == 0; }))
       extensions.push_back(name);
@@ -2142,27 +2185,9 @@ void VulkanRenderDevice::Impl::MakeSwapImages(SwapchainHandle handle)
   const auto caps = physical.getSurfaceCapabilitiesKHR(swap.surface, dispatch);
   const auto formats = physical.getSurfaceFormatsKHR(swap.surface, dispatch);
   Require(!formats.empty(), "Surface has no formats");
-  swap.format = formats.front();
-  // Prefer UNORM to match the engine's existing presentation/gamma contract.
-  // Many X11 surfaces list BGRA sRGB first; choosing it implicitly would
-  // encode the already display-encoded offscreen output a second time.
-  bool chosen = false;
-  for (auto wanted : {vk::Format::eR8G8B8A8Unorm, vk::Format::eB8G8R8A8Unorm,
-                      vk::Format::eR8G8B8A8Srgb, vk::Format::eB8G8R8A8Srgb})
-  {
-    for (auto f : formats)
-      if ((f.format == wanted || f.format == vk::Format::eUndefined) &&
-          f.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
-      {
-        swap.format = f;
-        swap.format.format = wanted;
-        chosen = true;
-        break;
-      }
-    if (chosen)
-      break;
-  }
-  Require(chosen, "Surface has no supported RGBA/BGRA presentation format");
+  const auto selected = SelectSurfaceFormat(formats, swap.config.format);
+  Require(selected.has_value(), "Requested swapchain format is unavailable");
+  swap.format = *selected;
   EngineFormat(swap.format.format);
   int width{}, height{};
   glfwGetFramebufferSize(swap.window, &width, &height);
@@ -2249,6 +2274,53 @@ void VulkanRenderDevice::Impl::MakeSwapImages(SwapchainHandle handle)
     swap.finished.push_back(device.createSemaphore({}, nullptr, dispatch));
   }
 }
+std::vector<SwapchainFormat>
+VulkanRenderDevice::EnumerateAvailableSwapchainFormats(Window& window)
+{
+  auto& d = *m_impl;
+  if (!d.swapchainEnabled)
+    return {};
+  vk::SurfaceKHR surface;
+  const auto result = static_cast<vk::Result>(glfwCreateWindowSurface(
+      static_cast<vk::Instance::CType>(d.instance),
+      static_cast<GLFWwindow*>(window.NativeHandle()), nullptr,
+      reinterpret_cast<vk::SurfaceKHR::CType*>(&surface)));
+  Require(result == vk::Result::eSuccess,
+          "Cannot create surface for swapchain format query");
+  try
+  {
+    std::vector<SwapchainFormat> supported;
+    const auto caps = d.physical.getSurfaceCapabilitiesKHR(surface, d.dispatch);
+    const auto usage = vk::ImageUsageFlagBits::eColorAttachment |
+                       vk::ImageUsageFlagBits::eTransferDst;
+    if (d.physical.getSurfaceSupportKHR(d.family, surface, d.dispatch) &&
+        (caps.supportedUsageFlags & usage) == usage)
+    {
+      const auto formats = d.physical.getSurfaceFormatsKHR(surface, d.dispatch);
+      for (auto format : {SwapchainFormat::SRGB, SwapchainFormat::HDR10,
+                          SwapchainFormat::ScRGB})
+        if (SelectSurfaceFormat(formats, format))
+          supported.push_back(format);
+    }
+    d.instance.destroySurfaceKHR(surface, nullptr, d.dispatch);
+    return supported;
+  }
+  catch (...)
+  {
+    d.instance.destroySurfaceKHR(surface, nullptr, d.dispatch);
+    throw;
+  }
+}
+
+std::optional<SwapchainInfo>
+VulkanRenderDevice::GetSwapchainInfo(SwapchainHandle handle) const
+{
+  const auto* swap = m_impl->Find(handle);
+  if (!swap)
+    return std::nullopt;
+  return SwapchainInfo{swap->config.format, EngineFormat(swap->format.format)};
+}
+
 SwapchainHandle
 VulkanRenderDevice::CreateSwapchain(Window& window,
                                     const SwapchainConfig& config)

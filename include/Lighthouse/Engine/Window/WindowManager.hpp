@@ -7,11 +7,14 @@
 #include <vector>
 
 #include <Lighthouse/Engine/Core/Handle.hpp>
+#include <Lighthouse/Engine/Rendering/RenderTypes.hpp>
 
 struct GLFWwindow;
 
 namespace Lighthouse
 {
+
+enum class CursorMode { Normal, Hidden, Captured };
 
 enum class WindowMode
 {
@@ -53,6 +56,7 @@ struct WindowEvent
 };
 
 class WindowManager;
+class IRenderDevice;
 
 struct FramebufferSize
 {
@@ -157,6 +161,14 @@ public:
   void Initialize();
   void* NativeDisplayHandle();
   WindowHandle CreateWindow(const WindowDesc& desc);
+  // Query an existing window, or create a temporary hidden window using desc.
+  std::vector<SwapchainFormat>
+  EnumerateAvailableSwapchainFormats(WindowHandle window,
+                                     IRenderDevice& device);
+  std::vector<SwapchainFormat>
+  EnumerateAvailableSwapchainFormats(IRenderDevice& device,
+                                     WindowDesc desc = {});
+  void SetCursorMode(WindowHandle window, CursorMode mode);
   void DestroyWindow(WindowHandle window);
   void Shutdown() noexcept;
   Window* GetWindow(WindowHandle window) noexcept;

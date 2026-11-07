@@ -37,6 +37,10 @@ public:
     return true;
   }
 
+  std::vector<SwapchainFormat>
+  EnumerateAvailableSwapchainFormats(Window&) override;
+  std::optional<SwapchainInfo> GetSwapchainInfo(SwapchainHandle) const override;
+
   ImageHandle CreateImage(const ImageDesc& description) override;
   std::vector<std::byte> ReadImage(ImageHandle) override;
   ImageViewHandle CreateImageView(const ImageViewDesc& description) override;

@@ -1,3 +1,4 @@
+#include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
 
 #define GLFW_INCLUDE_NONE
@@ -21,6 +22,38 @@ namespace Lighthouse
 namespace
 {
 unsigned glfwUsers{};
+}
+
+std::vector<SwapchainFormat>
+WindowManager::EnumerateAvailableSwapchainFormats(WindowHandle handle,
+                                                  IRenderDevice& device)
+{
+  RequireMainThread();
+  auto* window = GetWindow(handle);
+  if (!window)
+    throw std::invalid_argument(
+        "Swapchain format query requires a valid window");
+  return device.EnumerateAvailableSwapchainFormats(*window);
+}
+
+std::vector<SwapchainFormat>
+WindowManager::EnumerateAvailableSwapchainFormats(IRenderDevice& device,
+                                                  WindowDesc desc)
+{
+  desc.visible = false;
+  desc.eglSurface = device.RequiresEGLWindow();
+  const auto handle = CreateWindow(desc);
+  try
+  {
+    auto formats = EnumerateAvailableSwapchainFormats(handle, device);
+    DestroyWindow(handle);
+    return formats;
+  }
+  catch (...)
+  {
+    DestroyWindow(handle);
+    throw;
+  }
 }
 
 Window::Window(WindowManager* owner, WindowHandle handle,
@@ -244,6 +277,24 @@ WindowHandle WindowManager::CreateWindow(const WindowDesc& desc)
   slot.window->m_focused =
       glfwGetWindowAttrib(native, GLFW_FOCUSED) == GLFW_TRUE;
   return handle;
+}
+
+void WindowManager::SetCursorMode(WindowHandle handle, CursorMode mode)
+{
+  RequireMainThread();
+  auto* window = GetWindow(handle);
+  if (!window) throw std::invalid_argument("Invalid window for cursor mode");
+  int nativeMode;
+  switch (mode) {
+  case CursorMode::Normal: nativeMode = GLFW_CURSOR_NORMAL; break;
+  case CursorMode::Hidden: nativeMode = GLFW_CURSOR_HIDDEN; break;
+  case CursorMode::Captured: nativeMode = GLFW_CURSOR_DISABLED; break;
+  default: throw std::invalid_argument("Invalid cursor mode");
+  }
+  glfwSetInputMode(window->m_native, GLFW_CURSOR, nativeMode);
+  if (glfwRawMouseMotionSupported())
+    glfwSetInputMode(window->m_native, GLFW_RAW_MOUSE_MOTION,
+                    mode == CursorMode::Captured ? GLFW_TRUE : GLFW_FALSE);
 }
 
 void WindowManager::DestroyWindow(WindowHandle handle)
