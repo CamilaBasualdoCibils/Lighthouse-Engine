@@ -412,6 +412,45 @@ struct VertexLayout
   std::vector<VertexAttribute> attributes;
 };
 
+enum class BlendFactor
+{
+  Zero,
+  One,
+  SourceColor,
+  OneMinusSourceColor,
+  DestinationColor,
+  OneMinusDestinationColor,
+  SourceAlpha,
+  OneMinusSourceAlpha,
+  DestinationAlpha,
+  OneMinusDestinationAlpha,
+  ConstantColor,
+  OneMinusConstantColor,
+  ConstantAlpha,
+  OneMinusConstantAlpha,
+  SourceAlphaSaturate
+};
+enum class BlendOperation
+{
+  Add,
+  Subtract,
+  ReverseSubtract,
+  Min,
+  Max
+};
+struct BlendState
+{
+  bool enabled{};
+  BlendFactor sourceColorFactor{BlendFactor::One};
+  BlendFactor destinationColorFactor{BlendFactor::Zero};
+  BlendOperation colorOperation{BlendOperation::Add};
+  BlendFactor sourceAlphaFactor{BlendFactor::One};
+  BlendFactor destinationAlphaFactor{BlendFactor::Zero};
+  BlendOperation alphaOperation{BlendOperation::Add};
+  // Constant factors use these normalized RGBA values, clamped to [0,1].
+  Vec4 constants{};
+};
+
 struct GraphicsPipelineDesc
 {
   ShaderModuleHandle vertexShader;
@@ -423,6 +462,7 @@ struct GraphicsPipelineDesc
   std::uint32_t sampleCount{1};
   PipelineLayoutHandle layout;
   ShaderModuleHandle computeShader;
+  BlendState blend; // Shared by all color attachments; disabled by default.
 };
 
 // Material hit-group library, linked by the scene tracing pipeline. Shader
@@ -436,7 +476,12 @@ struct RayTracingPipelineDesc
   std::uint32_t maxHitAttributeSize{8};
 };
 
-enum class StencilMode { Disabled, Write, Equal };
+enum class StencilMode
+{
+  Disabled,
+  Write,
+  Equal
+};
 
 struct RenderPassDesc
 {
@@ -445,7 +490,8 @@ struct RenderPassDesc
   ImageViewHandle depthAttachment;
   bool clearColor{};
   Vec3 clearColorValue{};
-  bool clearDepth{}; // Also clears stencil to zero for depth/stencil attachments.
+  bool clearDepth{}; // Also clears stencil to zero for depth/stencil
+                     // attachments.
   std::uint32_t width{};
   std::uint32_t height{};
   std::int32_t offsetX{};
@@ -454,8 +500,10 @@ struct RenderPassDesc
   std::uint32_t layerCount{1};
   // Ordered by fragment output location; existing clear settings apply to all.
   std::vector<ImageViewHandle> colorAttachments;
-  // Preserve depth/stencil for a fullscreen lighting pass; disable depth testing.
+  // Preserve depth/stencil for a fullscreen lighting pass; disable depth
+  // testing.
   bool depthReadOnly{};
+  float clearColorAlpha{1.0f};
 };
 
 struct RenderCapabilities

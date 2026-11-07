@@ -7,6 +7,62 @@ namespace Lighthouse
 {
 namespace
 {
+GLenum ToGLBlendFactor(BlendFactor value)
+{
+  switch (value)
+  {
+  case BlendFactor::Zero:
+    return GL_ZERO;
+  case BlendFactor::One:
+    return GL_ONE;
+  case BlendFactor::SourceColor:
+    return GL_SRC_COLOR;
+  case BlendFactor::OneMinusSourceColor:
+    return GL_ONE_MINUS_SRC_COLOR;
+  case BlendFactor::DestinationColor:
+    return GL_DST_COLOR;
+  case BlendFactor::OneMinusDestinationColor:
+    return GL_ONE_MINUS_DST_COLOR;
+  case BlendFactor::SourceAlpha:
+    return GL_SRC_ALPHA;
+  case BlendFactor::OneMinusSourceAlpha:
+    return GL_ONE_MINUS_SRC_ALPHA;
+  case BlendFactor::DestinationAlpha:
+    return GL_DST_ALPHA;
+  case BlendFactor::OneMinusDestinationAlpha:
+    return GL_ONE_MINUS_DST_ALPHA;
+  case BlendFactor::ConstantColor:
+    return GL_CONSTANT_COLOR;
+  case BlendFactor::OneMinusConstantColor:
+    return GL_ONE_MINUS_CONSTANT_COLOR;
+  case BlendFactor::ConstantAlpha:
+    return GL_CONSTANT_ALPHA;
+  case BlendFactor::OneMinusConstantAlpha:
+    return GL_ONE_MINUS_CONSTANT_ALPHA;
+  case BlendFactor::SourceAlphaSaturate:
+    return GL_SRC_ALPHA_SATURATE;
+  }
+  throw std::invalid_argument("Unsupported BlendFactor");
+}
+
+GLenum ToGLBlendOperation(BlendOperation value)
+{
+  switch (value)
+  {
+  case BlendOperation::Add:
+    return GL_FUNC_ADD;
+  case BlendOperation::Subtract:
+    return GL_FUNC_SUBTRACT;
+  case BlendOperation::ReverseSubtract:
+    return GL_FUNC_REVERSE_SUBTRACT;
+  case BlendOperation::Min:
+    return GL_MIN;
+  case BlendOperation::Max:
+    return GL_MAX;
+  }
+  throw std::invalid_argument("Unsupported BlendOperation");
+}
+
 GLenum ToGLTopology(PrimitiveTopology topology)
 {
   switch (topology)
@@ -193,7 +249,7 @@ void OpenGLCommandList::BeginRenderCommand::Execute(
   if (desc.clearColor)
   {
     const GLfloat color[]{desc.clearColorValue.x, desc.clearColorValue.y,
-                          desc.clearColorValue.z, 1.f};
+                          desc.clearColorValue.z, desc.clearColorAlpha};
     for (size_t i = 0; i < attachments.size(); ++i)
       glClearBufferfv(GL_COLOR, static_cast<GLint>(i), color);
   }
@@ -332,6 +388,21 @@ void OpenGLCommandList::BindPipelineCommand::Execute(
     vao->second = CreateVertexArray(pipeline.layout);
   glBindVertexArray(vao->second);
   glUseProgram(pipeline.program);
+  if (pipeline.blend.enabled)
+  {
+    glEnable(GL_BLEND);
+    const auto& blend = pipeline.blend;
+    glBlendEquationSeparate(ToGLBlendOperation(blend.colorOperation),
+                            ToGLBlendOperation(blend.alphaOperation));
+    glBlendFuncSeparate(ToGLBlendFactor(blend.sourceColorFactor),
+                        ToGLBlendFactor(blend.destinationColorFactor),
+                        ToGLBlendFactor(blend.sourceAlphaFactor),
+                        ToGLBlendFactor(blend.destinationAlphaFactor));
+    glBlendColor(blend.constants.x, blend.constants.y, blend.constants.z,
+                 blend.constants.w);
+  }
+  else
+    glDisable(GL_BLEND);
 }
 void OpenGLCommandList::BindDescriptorSetCommand::Execute(
     OpenGLRenderDevice* device) const

@@ -228,6 +228,7 @@ struct OpenGLRenderDevice::Impl
                        OpenGLHandleHash<SwapchainHandle>>
         vaos;
     PrimitiveTopology topology{PrimitiveTopology::TriangleList};
+    BlendState blend;
   };
   std::unordered_map<GraphicsPipelineHandle, Pipeline,
                      OpenGLHandleHash<GraphicsPipelineHandle>>

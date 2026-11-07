@@ -990,6 +990,7 @@ OpenGLRenderDevice::CreatePipeline(const GraphicsPipelineDesc& desc)
       MakeHandle<GraphicsPipelineHandle>(m_impl->nextPipeline++, DeviceId());
   Impl::Pipeline pipeline{program, desc.vertexLayout, desc.layout, {}};
   pipeline.topology = desc.topology;
+  pipeline.blend = desc.blend;
   m_impl->pipelines.emplace(handle, std::move(pipeline));
   return handle;
 }

@@ -143,6 +143,62 @@ vk::DescriptorType Descriptor(DescriptorType t)
   }
   throw std::invalid_argument("Unknown descriptor type");
 }
+vk::BlendFactor BlendFactorNative(BlendFactor value)
+{
+  switch (value)
+  {
+  case BlendFactor::Zero:
+    return vk::BlendFactor::eZero;
+  case BlendFactor::One:
+    return vk::BlendFactor::eOne;
+  case BlendFactor::SourceColor:
+    return vk::BlendFactor::eSrcColor;
+  case BlendFactor::OneMinusSourceColor:
+    return vk::BlendFactor::eOneMinusSrcColor;
+  case BlendFactor::DestinationColor:
+    return vk::BlendFactor::eDstColor;
+  case BlendFactor::OneMinusDestinationColor:
+    return vk::BlendFactor::eOneMinusDstColor;
+  case BlendFactor::SourceAlpha:
+    return vk::BlendFactor::eSrcAlpha;
+  case BlendFactor::OneMinusSourceAlpha:
+    return vk::BlendFactor::eOneMinusSrcAlpha;
+  case BlendFactor::DestinationAlpha:
+    return vk::BlendFactor::eDstAlpha;
+  case BlendFactor::OneMinusDestinationAlpha:
+    return vk::BlendFactor::eOneMinusDstAlpha;
+  case BlendFactor::ConstantColor:
+    return vk::BlendFactor::eConstantColor;
+  case BlendFactor::OneMinusConstantColor:
+    return vk::BlendFactor::eOneMinusConstantColor;
+  case BlendFactor::ConstantAlpha:
+    return vk::BlendFactor::eConstantAlpha;
+  case BlendFactor::OneMinusConstantAlpha:
+    return vk::BlendFactor::eOneMinusConstantAlpha;
+  case BlendFactor::SourceAlphaSaturate:
+    return vk::BlendFactor::eSrcAlphaSaturate;
+  }
+  throw std::invalid_argument("Unsupported BlendFactor");
+}
+
+vk::BlendOp BlendOperationNative(BlendOperation value)
+{
+  switch (value)
+  {
+  case BlendOperation::Add:
+    return vk::BlendOp::eAdd;
+  case BlendOperation::Subtract:
+    return vk::BlendOp::eSubtract;
+  case BlendOperation::ReverseSubtract:
+    return vk::BlendOp::eReverseSubtract;
+  case BlendOperation::Min:
+    return vk::BlendOp::eMin;
+  case BlendOperation::Max:
+    return vk::BlendOp::eMax;
+  }
+  throw std::invalid_argument("Unsupported BlendOperation");
+}
+
 vk::PrimitiveTopology Topology(PrimitiveTopology t)
 {
   switch (t)
@@ -1604,8 +1660,32 @@ struct VulkanCommandList::Impl
         stencilMode == StencilMode::Equal ? vk::CompareOp::eEqual
                                           : vk::CompareOp::eAlways,
         d.dispatch);
-    const std::vector<vk::Bool32> blend(pass.colorAttachments.size(), false);
+    const std::vector<vk::Bool32> blend(pass.colorAttachments.size(),
+                                        p.desc.blend.enabled);
     command.setColorBlendEnableEXT(0, blend, d.dispatch);
+    if (p.desc.blend.enabled)
+    {
+      vk::ColorBlendEquationEXT equation;
+      equation
+          .setSrcColorBlendFactor(
+              BlendFactorNative(p.desc.blend.sourceColorFactor))
+          .setDstColorBlendFactor(
+              BlendFactorNative(p.desc.blend.destinationColorFactor))
+          .setColorBlendOp(BlendOperationNative(p.desc.blend.colorOperation))
+          .setSrcAlphaBlendFactor(
+              BlendFactorNative(p.desc.blend.sourceAlphaFactor))
+          .setDstAlphaBlendFactor(
+              BlendFactorNative(p.desc.blend.destinationAlphaFactor))
+          .setAlphaBlendOp(BlendOperationNative(p.desc.blend.alphaOperation));
+      const std::vector<vk::ColorBlendEquationEXT> equations(
+          pass.colorAttachments.size(), equation);
+      command.setColorBlendEquationEXT(0, equations, d.dispatch);
+      const auto& value = p.desc.blend.constants;
+      const std::array<float, 4> constants{
+          std::clamp(value.x, 0.f, 1.f), std::clamp(value.y, 0.f, 1.f),
+          std::clamp(value.z, 0.f, 1.f), std::clamp(value.w, 0.f, 1.f)};
+      command.setBlendConstants(constants.data(), d.dispatch);
+    }
     const std::vector<vk::ColorComponentFlags> colors(
         pass.colorAttachments.size(),
         vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
@@ -1727,7 +1807,7 @@ void VulkanCommandList::BeginRendering(const RenderPassDesc& desc)
       c.Transition(view.desc.image, vk::ImageLayout::eTransferDstOptimal, true);
       const vk::ClearColorValue clear(
           std::array<float, 4>{desc.clearColorValue.x, desc.clearColorValue.y,
-                               desc.clearColorValue.z, 1});
+                               desc.clearColorValue.z, desc.clearColorAlpha});
       c.command.clearColorImage(
           attachment.native, vk::ImageLayout::eTransferDstOptimal, clear,
           vk::ImageSubresourceRange(
