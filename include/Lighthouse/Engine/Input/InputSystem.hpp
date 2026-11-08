@@ -24,6 +24,12 @@ public:
     std::shared_ptr<InputActionSet> CreateActionSet(std::string name);
     void RemoveActionSet(const std::shared_ptr<InputActionSet>& set);
     void Update();
+    const auto& GetActionSets() const noexcept { return m_actionSets; }
+    std::vector<IInputBackend*> GetBackends() const {
+        std::vector<IInputBackend*> result;
+        for (const auto& backend : m_backends) result.push_back(backend.get());
+        return result;
+    }
     ~InputSystem() { Shutdown(); }
     bool Initialize(const InputConfig& config, WindowManager& windows, std::string& diagnostic);
     void Shutdown() noexcept;

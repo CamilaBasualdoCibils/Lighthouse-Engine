@@ -140,6 +140,7 @@ private:
 
   RenderGraph m_renderGraph;
   SimpleRenderGraphAllocator m_renderGraphAllocator;
+  
 };
 
 template <typename T> const T& TechniqueBuildContext::GetTechnique(TechniqueRef<T> ref) const {

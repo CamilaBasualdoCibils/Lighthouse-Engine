@@ -314,6 +314,8 @@ struct VulkanRenderDevice::Impl
   VmaAllocator allocator{};
   vk::CommandPool immediatePool;
   vk::Fence fence;
+  std::uint64_t nextCompletionMarker = 1;
+  std::unordered_map<std::uint64_t, vk::Fence> completionMarkers;
   vk::DescriptorPool descriptorPool;
   RenderCapabilities capabilities;
   std::uint64_t owner{};
@@ -782,6 +784,8 @@ VulkanRenderDevice::Impl::~Impl()
       }
     if (immediatePool)
       device.destroyCommandPool(immediatePool, nullptr, dispatch);
+    for (const auto& [_, marker] : completionMarkers)
+      device.destroyFence(marker, nullptr, dispatch);
     if (fence)
       device.destroyFence(fence, nullptr, dispatch);
     if (allocator)
@@ -873,6 +877,69 @@ void VulkanRenderDevice::UpdateBuffer(BufferHandle h, std::uint64_t offset,
               bytes.size());
   AllocationCheck(
       vmaFlushAllocation(d.allocator, b.allocation, offset, bytes.size()));
+}
+std::span<std::byte> VulkanRenderDevice::MapStreamingBuffer(BufferHandle handle)
+{
+  auto& buffer = m_impl->buffers.at(handle);
+  Require(buffer.mapped && (buffer.desc.memory.requiredAccess &
+                            MemoryAccess::CPUWrite) != MemoryAccess::None,
+          "Buffer was not created for CPU streaming");
+  return {static_cast<std::byte*>(buffer.mapped), size_t(buffer.desc.size)};
+}
+std::uint64_t VulkanRenderDevice::StreamingBufferAlignment() const
+{
+  const auto& limits = m_impl->properties.limits;
+  return std::max(std::uint64_t(limits.nonCoherentAtomSize),
+                  std::uint64_t(limits.minUniformBufferOffsetAlignment));
+}
+void VulkanRenderDevice::PublishStreamingWrites(BufferHandle handle,
+                                                std::uint64_t offset,
+                                                std::uint64_t bytes)
+{
+  auto& d = *m_impl;
+  const auto& buffer = d.buffers.at(handle);
+  Require(buffer.mapped && offset <= buffer.desc.size &&
+              bytes <= buffer.desc.size - offset,
+          "Invalid streaming buffer publication");
+  AllocationCheck(
+      vmaFlushAllocation(d.allocator, buffer.allocation, offset, bytes));
+  // Host writes are flushed before subsequent queue submissions. The caller
+  // exclusively owns this atom-aligned range; no previous submission reads it.
+}
+std::uint64_t VulkanRenderDevice::InsertCompletionMarker()
+{
+  auto& d = *m_impl;
+  const auto marker = d.device.createFence({}, nullptr, d.dispatch);
+  try
+  {
+    d.queue.submit2(vk::SubmitInfo2{}, marker, d.dispatch);
+  }
+  catch (...)
+  {
+    d.device.destroyFence(marker, nullptr, d.dispatch);
+    throw;
+  }
+  const auto id = d.nextCompletionMarker++;
+  d.completionMarkers.emplace(id, marker);
+  return id;
+}
+bool VulkanRenderDevice::PollCompletionMarker(std::uint64_t id)
+{
+  auto& d = *m_impl;
+  const auto status =
+      d.device.getFenceStatus(d.completionMarkers.at(id), d.dispatch);
+  Require(status == vk::Result::eSuccess || status == vk::Result::eNotReady,
+          "GPU completion marker failed");
+  return status == vk::Result::eSuccess;
+}
+void VulkanRenderDevice::ReleaseCompletionMarker(std::uint64_t id)
+{
+  auto& d = *m_impl;
+  const auto it = d.completionMarkers.find(id);
+  if (it == d.completionMarkers.end())
+    return;
+  d.device.destroyFence(it->second, nullptr, d.dispatch);
+  d.completionMarkers.erase(it);
 }
 std::optional<BufferMetadata>
 VulkanRenderDevice::GetBufferDesc(BufferHandle h) const noexcept

@@ -43,6 +43,9 @@ class IOutputView : public IRenderView {
 public:
     using IRenderView::IRenderView;
 
+    virtual void BuildGraph(ViewBuildContext& context) override = 0;
+    virtual void PostBuildGraph(ViewBuildContext& context) {}
+
     virtual void Begin(Renderer* renderer)=0;
     virtual void End(Renderer* renderer)=0;
 };

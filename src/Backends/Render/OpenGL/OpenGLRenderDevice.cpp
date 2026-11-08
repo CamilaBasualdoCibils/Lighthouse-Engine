@@ -339,6 +339,9 @@ OpenGLRenderDevice::~OpenGLRenderDevice()
     (void)s;
   for (const auto& [_, sampler] : m_impl->samplers)
     glDeleteSamplers(1, &sampler);
+  for (const auto& [_, fences] : m_impl->completionMarkers)
+    for (auto fence : fences)
+      glDeleteSync(fence);
   for (const auto& [_, b] : m_impl->buffers)
     glDeleteBuffers(1, &b.id);
   for (const auto& [_, v] : m_impl->views)
@@ -592,8 +595,21 @@ BufferHandle OpenGLRenderDevice::CreateBuffer(const BufferDesc& desc)
     throw std::invalid_argument("Buffer initial data exceeds buffer size");
   GLuint id{};
   glCreateBuffers(1, &id);
+  const bool streaming = (desc.memory.requiredAccess &
+                          MemoryAccess::CPUWrite) != MemoryAccess::None;
+  const GLbitfield mapping =
+      GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
   glNamedBufferStorage(id, static_cast<GLsizeiptr>(desc.size), nullptr,
-                       GL_DYNAMIC_STORAGE_BIT);
+                       GL_DYNAMIC_STORAGE_BIT | (streaming ? mapping : 0));
+  void* mapped = streaming
+                     ? glMapNamedBufferRange(
+                           id, 0, static_cast<GLsizeiptr>(desc.size), mapping)
+                     : nullptr;
+  if (streaming && !mapped)
+  {
+    glDeleteBuffers(1, &id);
+    throw std::runtime_error("Persistent streaming buffer mapping failed");
+  }
   if (!desc.initialData.empty())
     glNamedBufferSubData(id, 0,
                          static_cast<GLsizeiptr>(desc.initialData.size()),
@@ -601,9 +617,81 @@ BufferHandle OpenGLRenderDevice::CreateBuffer(const BufferDesc& desc)
   const auto handle =
       MakeHandle<BufferHandle>(m_impl->nextBuffer++, DeviceId());
   m_impl->buffers.emplace(
-      handle, Impl::BufferResource{
-                  id, BufferMetadata{desc.size, desc.usage, desc.memory}});
+      handle,
+      Impl::BufferResource{
+          id, BufferMetadata{desc.size, desc.usage, desc.memory}, mapped});
   return handle;
+}
+std::span<std::byte> OpenGLRenderDevice::MapStreamingBuffer(BufferHandle handle)
+{
+  auto& buffer = m_impl->buffers.at(handle);
+  if (!buffer.mapped)
+    throw std::logic_error("Buffer was not created for CPU streaming");
+  return {static_cast<std::byte*>(buffer.mapped), size_t(buffer.metadata.size)};
+}
+std::uint64_t OpenGLRenderDevice::StreamingBufferAlignment() const
+{
+  m_impl->ActivateContext();
+  GLint alignment = 0;
+  glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &alignment);
+  return std::max<GLint>(256, alignment);
+}
+void OpenGLRenderDevice::PublishStreamingWrites(BufferHandle handle,
+                                                std::uint64_t offset,
+                                                std::uint64_t bytes)
+{
+  const auto& buffer = m_impl->buffers.at(handle);
+  if (!buffer.mapped || offset > buffer.metadata.size ||
+      bytes > buffer.metadata.size - offset)
+    throw std::out_of_range("Invalid streaming buffer publication");
+  m_impl->ActivateContext();
+  glMemoryBarrier(GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
+}
+std::uint64_t OpenGLRenderDevice::InsertCompletionMarker()
+{
+  // Window contexts may have issued reads of the same shared buffer. Capture
+  // all of them, flushing command queues without glFinish or a CPU wait.
+  std::vector<GLsync> fences;
+  m_impl->ActivateContext();
+  fences.push_back(glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0));
+  glFlush();
+  for (const auto& slot : m_impl->swapchains)
+    if (slot.value)
+    {
+      m_impl->ActivateContext(slot.value.get());
+      fences.push_back(glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0));
+      glFlush();
+    }
+  if (m_impl->activeSwapchain)
+    m_impl->ActivateContext(m_impl->FindSwapchain(*m_impl->activeSwapchain));
+  else
+    m_impl->ActivateContext();
+  const auto id = m_impl->nextCompletionMarker++;
+  m_impl->completionMarkers.emplace(id, std::move(fences));
+  return id;
+}
+bool OpenGLRenderDevice::PollCompletionMarker(std::uint64_t id)
+{
+  m_impl->ActivateContext();
+  for (auto fence : m_impl->completionMarkers.at(id))
+  {
+    const auto status = glClientWaitSync(fence, 0, 0);
+    if (status == GL_WAIT_FAILED)
+      throw std::runtime_error("GPU completion marker failed");
+    if (status == GL_TIMEOUT_EXPIRED)
+      return false;
+  }
+  return true;
+}
+void OpenGLRenderDevice::ReleaseCompletionMarker(std::uint64_t id)
+{
+  m_impl->ActivateContext();
+  const auto it = m_impl->completionMarkers.find(id);
+  if (it == m_impl->completionMarkers.end())
+    return;
+  for (auto fence : it->second)
+    glDeleteSync(fence);
+  m_impl->completionMarkers.erase(it);
 }
 std::optional<BufferMetadata>
 OpenGLRenderDevice::GetBufferDesc(BufferHandle handle) const noexcept

@@ -66,6 +66,37 @@ public:
   {
     throw std::logic_error("Buffer updates are unsupported by this backend");
   }
+  // Persistent host mapping for streaming into ranges not read by in-flight
+  // GPU commands. Mapping is established during resource setup. Worker threads
+  // may copy to disjoint mapped ranges without touching the graphics context.
+  virtual std::span<std::byte> MapStreamingBuffer(BufferHandle)
+  {
+    throw std::logic_error("Persistent buffer streaming unsupported");
+  }
+  virtual std::uint64_t StreamingBufferAlignment() const
+  {
+    return 256;
+  }
+  // Publish completed worker writes. Never waits for GPU completion.
+  virtual void PublishStreamingWrites(BufferHandle, std::uint64_t,
+                                      std::uint64_t)
+  {
+    throw std::logic_error("Persistent buffer streaming unsupported");
+  }
+  // Opaque completion marker for all commands previously submitted on this
+  // device. Poll is zero-timeout; release only after completion (or shutdown).
+  virtual std::uint64_t InsertCompletionMarker()
+  {
+    throw std::logic_error("GPU completion markers unsupported");
+  }
+  virtual bool PollCompletionMarker(std::uint64_t)
+  {
+    throw std::logic_error("GPU completion markers unsupported");
+  }
+  virtual void ReleaseCompletionMarker(std::uint64_t)
+  {
+    throw std::logic_error("GPU completion markers unsupported");
+  }
   virtual std::optional<BufferMetadata>
   GetBufferDesc(BufferHandle handle) const noexcept = 0;
   virtual bool IsValid(BufferHandle handle) const noexcept = 0;

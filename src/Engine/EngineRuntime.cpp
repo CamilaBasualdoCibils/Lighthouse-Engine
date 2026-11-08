@@ -57,6 +57,9 @@ bool EngineRuntime::Initialize(const Config& config,
 
 void EngineRuntime::Shutdown() noexcept
 {
+#ifdef LIGHTHOUSE_IMGUI
+  m_toolBox.Clear();
+#endif
   m_input.Shutdown();
   m_renderer.reset();
   m_backend.device.reset();

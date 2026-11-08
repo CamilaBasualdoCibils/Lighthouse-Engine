@@ -1,7 +1,10 @@
 #include <Lighthouse/Engine/Rendering/ImGuiView.hpp>
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
 #include <Lighthouse/Engine/Rendering/IImGuiDevice.hpp>
-#include <Lighthouse/Engine/Scene/Scene.hpp>
+#include <Lighthouse/Engine/Rendering/ImguiSimpleObject.hpp>
+#include <Lighthouse/Engine/Core/EngineRuntime.hpp>
+#include <Lighthouse/Engine/Tools/ISimpleTool.hpp>
+#include <Lighthouse/Engine/Tools/RendererTool.hpp>
 #include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -28,12 +31,9 @@ TEST_F(ImGuiViewTests, IndependentViewportsRestoreContextAndSurviveEngineWindowC
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
     Renderer renderer(backend.CreateDevice({}), &windows);
-    Scene scene("Test");
-    const auto camera = CameraSource{ExplicitCamera{}};
     auto createEngineWindow = [&] {
         const auto handle = renderer.CreateView<WindowView>(RenderWindowDesc{
-            .title = "Engine", .width = 160, .height = 120, .visible = false},
-            RenderViewDesc{.scene = scene.Handle(), .camera = camera});
+            .title = "Engine", .width = 160, .height = 120, .visible = false});
         auto* view = renderer.GetView<WindowView>(handle);
         renderer.AddLambdaTechnique([view](TechniqueBuildContext& ctx) {
             struct Data { RenderGraphResource image; };
@@ -89,7 +89,7 @@ TEST_F(ImGuiViewTests, IndependentViewportsRestoreContextAndSurviveEngineWindowC
     EXPECT_TRUE(io.ConfigFlags & ImGuiConfigFlags_DockingEnable);
     EXPECT_TRUE(io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable);
     EXPECT_TRUE(io.ConfigViewportsNoAutoMerge);
-    EXPECT_FALSE(io.ConfigViewportsNoDecoration);
+    EXPECT_TRUE(io.ConfigViewportsNoDecoration);
     const auto& platform = ImGui::GetPlatformIO();
     ASSERT_GE(platform.Viewports.Size, 3);
     EXPECT_FALSE(glfwGetWindowAttrib(static_cast<GLFWwindow*>(platform.Viewports[0]->PlatformHandle), GLFW_VISIBLE));
@@ -199,27 +199,277 @@ TEST_F(ImGuiViewTests, UiOnlyAndCallbackExceptionRestoreContexts) {
 }
 
 #ifdef LIGHTHOUSE_TEST_VULKAN
-TEST_F(ImGuiViewTests, VulkanReportsExplicitUnsupportedBackendWithoutCreatingWindows) {
+TEST_F(ImGuiViewTests, VulkanGraphFrames) {
     WindowManager windows;
     VulkanBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
     std::unique_ptr<IRenderDevice> device;
-    try {
-        device = backend.CreateDevice({});
-    } catch (const std::runtime_error& error) {
-        GTEST_SKIP() << "Vulkan instance unavailable: " << error.what();
-    }
+    try { device = backend.CreateDevice({}); }
+    catch (const std::runtime_error& error) { GTEST_SKIP() << error.what(); }
     Renderer renderer(std::move(device), &windows);
-    renderer.CreateView<ImGuiView>([] {});
+    int calls = 0;
+    renderer.CreateView<ImGuiView>([&] {
+        ++calls;
+        ImGui::GetIO().IniFilename = nullptr;
+        ImGui::Begin("Vulkan graph UI"); ImGui::TextUnformatted("Graph pass"); ImGui::End();
+    });
     renderer.Compile();
-    try {
-        renderer.Render();
-        FAIL() << "Vulkan ImGuiView must report unsupported";
-    } catch (const std::runtime_error& error) {
-        EXPECT_STREQ(error.what(), "ImGuiView is not supported by the Vulkan backend yet");
-    }
-    EXPECT_FALSE(windows.IsAvailable());
+    EXPECT_EQ(calls, 0);
+    for (int frame=0; frame<3; ++frame) { windows.PollEvents(); renderer.Render(); }
+    EXPECT_EQ(calls, 3);
     EXPECT_EQ(ImGui::GetCurrentContext(), nullptr);
 }
 #endif
+
+namespace {
+class RecordingSimpleObject final : public ImguiSimpleObject {
+public:
+    explicit RecordingSimpleObject(std::vector<int>& events) : events(events) {}
+    void Draw() override {
+        context = ImGui::GetCurrentContext();
+        EXPECT_TRUE(context->WithinFrameScope);
+        ImGui::GetIO().IniFilename = nullptr;
+        events.push_back(1);
+    }
+    std::vector<int>& events;
+    ImGuiContext* context{};
+};
+class RecordingGraphObject final : public ImguiGraphObject {
+public:
+    RecordingGraphObject(std::vector<int>& events, bool& fail) : events(events), fail(fail) {}
+    RenderGraphResource BuildGraph(ImguiBuildContext& context, RenderGraphResource completionFlag) override {
+        ++builds;
+        struct Data { RenderGraphResource completion; };
+        return context.AddPass<Data>("Custom ImGui object",
+            [completionFlag](RenderGraph::Builder& builder, Data& data) { data.completion = builder.Write(completionFlag); },
+            [this](const Data&, FrameGraphPassResources&, RenderGraphExecutePassContext&) {
+                EXPECT_TRUE(ImGui::GetCurrentContext()->WithinFrameScope);
+                events.push_back(2);
+                if (fail) throw std::runtime_error("Graph object failed");
+            }).completion;
+    }
+    int builds{};
+    std::vector<int>& events;
+    bool& fail;
+};
+class RecordingSimpleTool final : public ISimpleTool {
+public:
+    RecordingSimpleTool(EngineRuntime&, std::vector<int>& events) : events(events) {}
+    std::string_view Name() const noexcept override { return "Simple test tool"; }
+    void Draw() override { events.push_back(3); ImGui::TextUnformatted("Simple tool pass"); }
+    std::vector<int>& events;
+};
+class RecordingGraphTool final : public ITool {
+public:
+    RecordingGraphTool(EngineRuntime&, std::vector<int>& events) : events(events) {}
+    std::string_view Name() const noexcept override { return "Custom test tool"; }
+    RenderGraphResource BuildGraph(ImguiBuildContext& context, RenderGraphResource completionFlag) override {
+        struct Data { RenderGraphResource completion; };
+        return context.AddPass<Data>(Name(),
+            [completionFlag](RenderGraph::Builder& builder, Data& data) { data.completion = builder.Write(completionFlag); },
+            [this](const Data&, FrameGraphPassResources&, RenderGraphExecutePassContext&) { events.push_back(4); }).completion;
+    }
+    std::vector<int>& events;
+};
+}
+TEST_F(ImGuiViewTests, GraphObjectOrderRecompileAndFailureRecovery) {
+    WindowManager windows;
+    OpenGLBackend backend;
+    std::string diagnostic;
+    ASSERT_TRUE(backend.Initialize(diagnostic));
+    Renderer renderer(backend.CreateDevice({}), &windows);
+    std::vector<int> events;
+    bool fail = false;
+    auto simple = std::make_shared<RecordingSimpleObject>(events);
+    auto custom = std::make_shared<RecordingGraphObject>(events, fail);
+    auto handle = renderer.CreateView<ImGuiView>();
+    auto* view = renderer.GetView<ImGuiView>(handle);
+    view->AddObject(simple); view->AddObject(custom);
+    EXPECT_THROW(view->AddObject(std::shared_ptr<ImguiGraphObject>{}), std::invalid_argument);
+    renderer.Compile();
+    EXPECT_TRUE(events.empty()); EXPECT_EQ(custom->builds, 1);
+    const auto dot = renderer.GetRenderGraph().Dot();
+    EXPECT_NE(dot.find("Completion"), std::string::npos);
+    EXPECT_NE(dot.find("ImGui NewFrame"), std::string::npos);
+    EXPECT_NE(dot.find("ImGui Render"), std::string::npos);
+    renderer.Render();
+    EXPECT_EQ(events, (std::vector<int>{1, 2}));
+    ASSERT_NE(simple->context, nullptr);
+    EXPECT_FALSE(simple->context->WithinFrameScope);
+    EXPECT_EQ(simple->context->FrameCountRendered, simple->context->FrameCount);
+    EXPECT_EQ(ImGui::GetCurrentContext(), nullptr);
+    events.clear(); renderer.Compile(); EXPECT_TRUE(events.empty());
+    EXPECT_EQ(custom->builds, 2);
+    fail = true;
+    EXPECT_THROW(renderer.Render(), std::runtime_error);
+    EXPECT_EQ(events, (std::vector<int>{1, 2}));
+    EXPECT_EQ(ImGui::GetCurrentContext(), nullptr);
+    EXPECT_EQ(glfwGetCurrentContext(), nullptr);
+    fail = false; events.clear();
+    EXPECT_NO_THROW(renderer.Render());
+    EXPECT_EQ(events, (std::vector<int>{1, 2}));
+}
+TEST_F(ImGuiViewTests, ToolboxChainsCustomAndSimpleToolPasses) {
+    EngineRuntime runtime;
+    auto& toolbox = runtime.GetToolBox();
+    std::vector<int> events;
+    toolbox.AddTool<RecordingSimpleTool>(events);
+    toolbox.AddTool<RecordingGraphTool>(events);
+    WindowManager windows;
+    OpenGLBackend backend;
+    std::string diagnostic;
+    ASSERT_TRUE(backend.Initialize(diagnostic));
+    Renderer renderer(backend.CreateDevice({}), &windows);
+    auto handle = renderer.CreateView<ImGuiView>();
+    auto* view = renderer.GetView<ImGuiView>(handle);
+    view->AddObject(toolbox);
+    renderer.Compile(); EXPECT_TRUE(events.empty());
+    auto dot = renderer.GetRenderGraph().Dot();
+    EXPECT_NE(dot.find("Toolbox Layout"), std::string::npos);
+    EXPECT_NE(dot.find("Simple test tool"), std::string::npos);
+    EXPECT_NE(dot.find("Custom test tool"), std::string::npos);
+    renderer.Render();
+    EXPECT_EQ(events, (std::vector<int>{3, 4}));
+    events.clear(); renderer.Compile(); EXPECT_TRUE(events.empty());
+    renderer.Render(); EXPECT_EQ(events, (std::vector<int>{3, 4}));
+    // An empty object list still runs frame setup and rendering.
+    auto empty = renderer.CreateView<ImGuiView>();
+    renderer.Compile(); EXPECT_NO_THROW(renderer.Render());
+    renderer.DestroyView(empty); renderer.Compile();
+}
+
+TEST_F(ImGuiViewTests, RendererToolUsesItsOwnGraphPassAndNodeEditorContext) {
+    EngineRuntime runtime;
+    auto& toolbox = runtime.GetToolBox();
+    toolbox.AddTool<RendererTool>();
+    WindowManager windows;
+    OpenGLBackend backend;
+    std::string diagnostic;
+    ASSERT_TRUE(backend.Initialize(diagnostic));
+    Renderer renderer(backend.CreateDevice({}), &windows);
+    auto handle = renderer.CreateView<ImGuiView>();
+    auto* view = renderer.GetView<ImGuiView>(handle);
+    view->AddObject(toolbox);
+    std::vector<int> events;
+    auto recorder = std::make_shared<RecordingSimpleObject>(events);
+    view->AddObject(recorder);
+    renderer.Compile();
+    EXPECT_NE(renderer.GetRenderGraph().Dot().find("Renderer"), std::string::npos);
+    for (int frame = 0; frame < 3; ++frame) renderer.Render();
+    ASSERT_NE(recorder->context, nullptr);
+    ImGui::SetCurrentContext(recorder->context);
+    auto* window = ImGui::FindWindowByName("Renderer");
+    ASSERT_NE(window, nullptr);
+    EXPECT_NE(window->DockId, 0u);
+    ImGui::SetCurrentContext(nullptr);
+    // Dropping the compiled snapshot also releases the node editor safely.
+    toolbox.Clear();
+    renderer.Compile();
+    EXPECT_NO_THROW(renderer.Render());
+}
+
+namespace {
+class PostBuildOutput final : public IOutputView {
+public:
+    explicit PostBuildOutput(std::vector<int>& events) : events(events) {}
+    void BuildGraph(ViewBuildContext&) override { events.push_back(1); }
+    void PostBuildGraph(ViewBuildContext&) override { events.push_back(3); }
+    void Begin(Renderer*) override {}
+    void End(Renderer*) override {}
+    std::vector<int>& events;
+};
+class PostBuildProbe final : public ImguiGraphObject {
+public:
+    PostBuildProbe(std::vector<int>& events, RenderGraphResource& output)
+        : events(events), output(output) {}
+    RenderGraphResource BuildGraph(ImguiBuildContext& context, RenderGraphResource completion) override {
+        events.push_back(4);
+        EXPECT_NE(output, kInvalidGraphResource);
+        struct Data { RenderGraphResource completion; };
+        return context.AddPass<Data>("PostBuild probe",
+            [this, completion](RenderGraph::Builder& builder, Data& data) {
+                builder.Read(output);
+                data.completion = builder.Write(completion);
+            }, [](const Data&, FrameGraphPassResources&, RenderGraphExecutePassContext&) {}).completion;
+    }
+    std::vector<int>& events;
+    RenderGraphResource& output;
+};
+}
+TEST_F(ImGuiViewTests, PostBuildRunsAfterAllViewsAndTechniques) {
+    WindowManager windows;
+    OpenGLBackend backend;
+    std::string diagnostic;
+    ASSERT_TRUE(backend.Initialize(diagnostic));
+    Renderer renderer(backend.CreateDevice({}), &windows);
+    std::vector<int> events;
+    RenderGraphResource output = kInvalidGraphResource;
+    renderer.CreateView<PostBuildOutput>(events);
+    auto ui = renderer.CreateView<ImGuiView>();
+    renderer.GetView<ImGuiView>(ui)->AddObject(std::make_shared<PostBuildProbe>(events, output));
+    renderer.AddLambdaTechnique([&](TechniqueBuildContext& context) {
+        events.push_back(2);
+        output = context.graph.Import<ImportedRenderGraphBuffer>("Technique output", {}, {});
+    });
+    renderer.Compile();
+    EXPECT_EQ(events, (std::vector<int>{1, 2, 3, 4}));
+    EXPECT_NE(renderer.GetRenderGraph().Dot().find("PostBuild probe"), std::string::npos);
+    events.clear();
+    renderer.Compile();
+    EXPECT_EQ(events, (std::vector<int>{1, 2, 3, 4}));
+}
+
+TEST_F(ImGuiViewTests, RendererInspectorShowsSceneMetadataWithoutKeepingPassesAlive) {
+    EngineRuntime runtime;
+    auto& toolbox = runtime.GetToolBox();
+    toolbox.AddTool<RendererTool>();
+    WindowManager windows;
+    OpenGLBackend backend;
+    std::string diagnostic;
+    ASSERT_TRUE(backend.Initialize(diagnostic));
+    Renderer renderer(backend.CreateDevice({}), &windows);
+    int sceneExecutions = 0;
+    bool expanded = false;
+    renderer.AddLambdaTechnique([&](TechniqueBuildContext& context) {
+        struct Data { RenderGraphResource image; };
+        context.graph.AddPass<Data>("Visible producer",
+            [](RenderGraph::Builder& builder, Data& data) {
+                data.image = builder.Create<RenderGraphBuffer>("Scene output", {.size = 16});
+            }, [&](const Data&, FrameGraphPassResources&, RenderGraphExecutePassContext&) { ++sceneExecutions; });
+        if (expanded) (void)context.graph.Import<ImportedRenderGraphBuffer>("Extra external resource", {}, {});
+    });
+    auto ui = renderer.CreateView<ImGuiView>();
+    renderer.GetView<ImGuiView>(ui)->AddObject(toolbox);
+    std::vector<int> events;
+    auto recorder = std::make_shared<RecordingSimpleObject>(events);
+    renderer.GetView<ImGuiView>(ui)->AddObject(recorder);
+    renderer.Compile();
+    auto snapshot = renderer.GetRenderGraph().GetInspectionData();
+    ASSERT_EQ(snapshot.passes.size(), 1u); ASSERT_EQ(snapshot.resources.size(), 1u);
+    EXPECT_EQ(snapshot.passes[0].name, "Visible producer");
+    EXPECT_EQ(snapshot.resources[0].name, "Scene output");
+    const auto all = renderer.GetRenderGraph().GetInspectionData(true);
+    EXPECT_GT(all.passes.size(), snapshot.passes.size());
+    bool foundInspector = false;
+    for (const auto& pass : all.passes) if (pass.name == "Renderer") {
+        foundInspector = true; EXPECT_TRUE(pass.hidden);
+        // Only completion is consumed; scene output is inspected as metadata.
+        ASSERT_EQ(pass.reads.size(), 1u);
+        EXPECT_NE(pass.reads[0], snapshot.resources[0].handle);
+    }
+    EXPECT_TRUE(foundInspector);
+    for (int frame = 0; frame < 3; ++frame) renderer.Render();
+    EXPECT_EQ(sceneExecutions, 0); // The unused producer must stay culled.
+    ASSERT_NE(recorder->context, nullptr);
+    ImGui::SetCurrentContext(recorder->context);
+    int vertices = 0;
+    for (auto* viewport : ImGui::GetPlatformIO().Viewports)
+        if (viewport->DrawData) vertices += viewport->DrawData->TotalVtxCount;
+    EXPECT_GT(vertices, 0);
+    ImGui::SetCurrentContext(nullptr);
+    expanded = true; renderer.Compile();
+    EXPECT_EQ(renderer.GetRenderGraph().GetInspectionData().resources.size(), 2u);
+    for (int frame = 0; frame < 3; ++frame) EXPECT_NO_THROW(renderer.Render());
+    EXPECT_EQ(sceneExecutions, 0);
+}

@@ -47,6 +47,13 @@ public:
   BufferHandle CreateBuffer(const BufferDesc& description) override;
   void UpdateBuffer(BufferHandle, std::uint64_t,
                     std::span<const std::byte>) override;
+  std::span<std::byte> MapStreamingBuffer(BufferHandle) override;
+  std::uint64_t StreamingBufferAlignment() const override;
+  void PublishStreamingWrites(BufferHandle, std::uint64_t,
+                              std::uint64_t) override;
+  std::uint64_t InsertCompletionMarker() override;
+  bool PollCompletionMarker(std::uint64_t) override;
+  void ReleaseCompletionMarker(std::uint64_t) override;
   std::optional<BufferMetadata>
   GetBufferDesc(BufferHandle handle) const noexcept override;
   bool IsValid(BufferHandle handle) const noexcept override;

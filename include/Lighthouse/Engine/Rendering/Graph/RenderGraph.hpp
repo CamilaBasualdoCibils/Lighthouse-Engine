@@ -7,6 +7,7 @@
 #include "Lighthouse/Engine/Rendering/IRenderDevice.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <sstream>
@@ -154,6 +155,42 @@ struct ImportedWindowView {
 
 class RenderGraph final {
 public:
+  struct ResourceInfo {
+    RenderGraphResource handle;
+    RenderGraphResource resource;
+    std::string name;
+    std::uint32_t version{1};
+    bool imported{};
+    bool hidden{};
+  };
+  struct PassInfo {
+    std::size_t id;
+    std::string name;
+    std::vector<RenderGraphResource> creates, reads, writes;
+    bool hidden{};
+  };
+  struct InspectionData {
+    std::vector<PassInfo> passes;
+    std::vector<ResourceInfo> resources;
+  };
+  class InspectionScope {
+    friend class RenderGraph;
+    explicit InspectionScope(RenderGraph& graph)
+        : m_graph(graph), m_previous(graph.m_hiddenFromInspector) {
+      graph.m_hiddenFromInspector = true;
+    }
+  public:
+    ~InspectionScope() { m_graph.m_hiddenFromInspector = m_previous; }
+    InspectionScope(const InspectionScope&) = delete;
+    InspectionScope& operator=(const InspectionScope&) = delete;
+  private:
+    RenderGraph& m_graph;
+    bool m_previous;
+  };
+  // Scope only affects inspection metadata, never graph dependencies/execution.
+  [[nodiscard]] InspectionScope HideFromInspector() { return InspectionScope(*this); }
+  [[nodiscard]] InspectionData GetInspectionData(bool includeHidden = false) const;
+
   class Builder final {
     friend class RenderGraph;
 
@@ -161,15 +198,18 @@ public:
     template <typename ResourceType>
     [[nodiscard]] RenderGraphResource
     Create(std::string_view name, const typename ResourceType::Desc &desc) {
-      return m_builder.create<ResourceType>(m_graph.KeepName(name), desc);
+      return m_graph.RecordCreate(m_pass,
+          m_builder.create<ResourceType>(m_graph.KeepName(name), desc), name);
     }
 
     RenderGraphResource Read(RenderGraphResource resource,uint32_t flags = 0) {
-      return m_builder.read(resource, flags);
+      const auto result = m_builder.read(resource, flags);
+      m_graph.RecordRead(m_pass, result);
+      return result;
     }
 
     [[nodiscard]] RenderGraphResource Write(RenderGraphResource resource, uint32_t flags = 0) {
-      return m_builder.write(resource, flags);
+      return m_graph.RecordWrite(m_pass, resource, m_builder.write(resource, flags));
     }
 
     Builder &SetSideEffect() {
@@ -178,10 +218,11 @@ public:
     }
 
   private:
-    explicit Builder(RenderGraph &graph, FrameGraph::Builder &builder)
-        : m_graph(graph), m_builder(builder) {}
+    explicit Builder(RenderGraph &graph, FrameGraph::Builder &builder, std::size_t pass)
+        : m_graph(graph), m_builder(builder), m_pass(pass) {}
     RenderGraph &m_graph;
     FrameGraph::Builder &m_builder;
+    std::size_t m_pass;
   };
 
   RenderGraph();
@@ -200,11 +241,13 @@ public:
   const Data &AddPass(std::string_view name, Setup &&setup, Execute &&execute) {
     if (m_compiled)
       throw std::logic_error("Cannot add render passes after compilation");
+    const auto pass = m_passInfo.size();
+    m_passInfo.push_back({pass, std::string(name), {}, {}, {}, m_hiddenFromInspector});
     return m_graph->addCallbackPass<Data>(
         KeepName(name),
-        [this, setup = std::forward<Setup>(setup)](FrameGraph::Builder &builder,
+        [this, pass, setup = std::forward<Setup>(setup)](FrameGraph::Builder &builder,
                                                    Data &data) mutable {
-          Builder lighthouseBuilder(*this, builder);
+          Builder lighthouseBuilder(*this, builder, pass);
           setup(lighthouseBuilder, data);
         },
         [execute = std::forward<Execute>(execute)](
@@ -233,13 +276,17 @@ public:
     if (m_compiled)
       throw std::logic_error(
           "Cannot import render graph resources after compilation");
-    return m_graph->import<ResourceType>(KeepName(name), desc,
-                                         std::move(resource));
+    return TrackResource(m_graph->import<ResourceType>(
+        KeepName(name), desc, std::move(resource)), name, true);
   }
 
   void Compile();
   void Execute(Renderer *device, IRenderGraphAllocator *allocator);
   void Clear();
+  // Latest handle per resource, including imports, in first-declaration order.
+  [[nodiscard]] const std::vector<RenderGraphResource>& GetResourceNodes() const noexcept {
+    return m_resourceNodes;
+  }
   template <typename T>
   [[nodiscard]] const typename T::Desc &
   getDescriptor(RenderGraphResource id) const {
@@ -258,6 +305,15 @@ public:
   }
 
 private:
+  static void AddUnique(std::vector<RenderGraphResource>& handles, RenderGraphResource handle);
+  RenderGraphResource RecordCreate(std::size_t pass, RenderGraphResource handle, std::string_view name);
+  void RecordRead(std::size_t pass, RenderGraphResource handle);
+  RenderGraphResource RecordWrite(std::size_t pass, RenderGraphResource previous, RenderGraphResource written);
+  RenderGraphResource TrackResource(RenderGraphResource handle, std::string_view name, bool imported);
+  std::vector<PassInfo> m_passInfo;
+  std::vector<ResourceInfo> m_resourceInfo;
+  bool m_hiddenFromInspector{};
+  std::vector<RenderGraphResource> m_resourceNodes;
   std::string_view KeepName(std::string_view name) {
     auto &owned = m_names.emplace_back(std::make_unique<std::string>(name));
     return *owned;

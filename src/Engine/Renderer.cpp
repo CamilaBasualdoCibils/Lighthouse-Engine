@@ -7,6 +7,7 @@
 #include "Lighthouse/Engine/Rendering/RenderView.hpp"
 #include "RenderMeshManager.hpp"
 #include <Lighthouse/Engine/Assets/Mesh.hpp>
+#include <spdlog/spdlog.h>
 #ifdef LIGHTHOUSE_IMGUI
 #include <Lighthouse/Engine/Rendering/ImGuiView.hpp>
 #endif
@@ -28,6 +29,8 @@ Renderer::Renderer(std::unique_ptr<IRenderDevice> device,
   m_ownerId = nextOwner.fetch_add(1, std::memory_order_relaxed);
 }
 Renderer::~Renderer() {
+  // Release graph-owned UI objects before destroying their ImGui contexts.
+  m_renderGraph.Clear();
   m_techniques.clear();
   m_renderMeshManager->Release(*m_device);
 #ifdef LIGHTHOUSE_IMGUI
@@ -210,6 +213,7 @@ bool Renderer::DestroyView(RenderViewHandle handle) {
 }
 
 void Renderer::Compile() {
+  spdlog::info("Compiling Render Graph");
     LIGHTHOUSE_PROFILE_SCOPE("Renderer::Compile");
   RenderGraph graph;
 
@@ -223,6 +227,12 @@ void Renderer::Compile() {
     TechniqueBuildContext context{graph, *this, *m_device};
     GetTechnique(handle)->BuildGraph(context);
   }
+  for (const auto& viewSlot : m_views) {
+    if (auto* output = dynamic_cast<IOutputView*>(viewSlot.value.get())) {
+      ViewBuildContext context{graph, *m_device};
+      output->PostBuildGraph(context);
+    }
+  }
   graph.Compile();
   m_renderGraph = std::move(graph);
 }
@@ -234,7 +244,15 @@ void Renderer::Render() {
       outputView->Begin(this);
     }
   }
-  m_renderGraph.Execute(this, &m_renderGraphAllocator);
+  try {
+    m_renderGraph.Execute(this, &m_renderGraphAllocator);
+  } catch (...) {
+#ifdef LIGHTHOUSE_IMGUI
+    for (const auto& viewSlot : m_views)
+      if (auto* imgui = dynamic_cast<ImGuiView*>(viewSlot.value.get())) imgui->End(this);
+#endif
+    throw;
+  }
   for (const auto &viewSlot : m_views) {
     if (auto *outputView = dynamic_cast<IOutputView *>(viewSlot.value.get())) {
       outputView->End(this);

@@ -32,3 +32,7 @@ gtest_discover_tests(LighthouseEngineTests)
 add_executable(LighthouseRendererTechniqueTests RendererTechniqueTests.cpp)
 target_link_libraries(LighthouseRendererTechniqueTests PRIVATE Lighthouse::Engine)
 add_test(NAME LighthouseRendererTechniqueTests COMMAND LighthouseRendererTechniqueTests)
+
+add_executable(RenderGraphInspectionTests RenderGraphInspectionTests.cpp)
+target_link_libraries(RenderGraphInspectionTests PRIVATE Lighthouse::Engine GTest::gtest_main)
+gtest_discover_tests(RenderGraphInspectionTests)

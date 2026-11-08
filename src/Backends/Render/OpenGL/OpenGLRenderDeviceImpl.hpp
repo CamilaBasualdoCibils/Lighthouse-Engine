@@ -58,10 +58,13 @@ struct OpenGLRenderDevice::Impl
     std::uint32_t generation{1};
     std::unique_ptr<Swapchain> value;
   };
+  std::uint64_t nextCompletionMarker = 1;
+  std::unordered_map<std::uint64_t, std::vector<GLsync>> completionMarkers;
   struct BufferResource
   {
     GLuint id{};
     BufferMetadata metadata;
+    void* mapped = nullptr;
   };
   struct ImageResource
   {

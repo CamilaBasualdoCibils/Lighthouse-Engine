@@ -23,6 +23,9 @@ public:
 
     virtual bool ShouldClose() const;
 
+#ifdef LIGHTHOUSE_IMGUI
+    ToolBox& GetToolBox() { return GetRuntime().GetToolBox(); }
+#endif
     InputSystem& GetInputSystem() { return GetRuntime().GetInputSystem(); }
 
 protected:

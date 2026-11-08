@@ -25,6 +25,12 @@ class InputAction {
 public:
     InputAction(std::string name, InputActionType type) : m_name(std::move(name)), m_type(type) {}
     const std::string& Name() const noexcept { return m_name; }
+    struct BindingInfo { std::shared_ptr<const IInputDevice> device; InputControl control; glm::vec2 direction; };
+    std::vector<BindingInfo> GetBindings() const {
+        std::vector<BindingInfo> result;
+        for (const auto& binding : m_bindings) result.push_back({binding.device, binding.control, binding.direction});
+        return result;
+    }
     // Axis2D bindings contribute along direction; Axis1D uses direction.x.
     void Bind(std::shared_ptr<IInputDevice> device, InputControl control, glm::vec2 direction = {1, 0});
     void BindComposite2D(std::shared_ptr<IInputDevice> device, Key left,
@@ -54,6 +60,7 @@ public:
     std::shared_ptr<InputAction> AddAction(std::string name, InputActionType type);
     void SetEnabled(bool enabled) noexcept { m_enabled = enabled; }
     bool IsEnabled() const noexcept { return m_enabled; }
+    const auto& GetActions() const noexcept { return m_actions; }
 private:
     friend class InputSystem;
     std::string m_name;
