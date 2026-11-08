@@ -1,10 +1,11 @@
+#include "NullSynchronizationDevice.hpp"
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
 #include <cassert>
 using namespace Lighthouse;
 namespace {
-class TestRenderDevice final : public IRenderDevice {
+class TestRenderDevice final : public NullSynchronizationDevice {
 public:
-    SwapchainHandle CreateSwapchain(Window&, const SwapchainConfig&) override { return {}; }
+    SwapchainHandle CreateSwapchain(SurfaceHandle, const SwapchainConfig&) override { return {}; }
     AcquiredSwapchainImage AcquireSwapchainImage(SwapchainHandle) override { return {}; }
     bool DestroySwapchain(SwapchainHandle) override { return false; }
     bool IsValid(SwapchainHandle) const noexcept override { return false; }
@@ -24,7 +25,11 @@ public:
     SamplerHandle CreateSampler(const SamplerDesc&) override { return {}; }
     void UpdateDescriptorSet(DescriptorSetHandle, std::span<const DescriptorWrite>) override {}
     GraphicsPipelineHandle CreatePipeline(const GraphicsPipelineDesc&) override { return {}; }
-    std::unique_ptr<IRenderCommandList> CreateCommandList(QueueType) override { return {}; }
+    std::unique_ptr<IRenderCommandList>
+    CreateCommandList(std::uint32_t queueIndex) override
+    {
+      return {};
+    }
     void DestroyImage(ImageHandle) override {}
     void DestroyImageView(ImageViewHandle) override {}
     void DestroyBuffer(BufferHandle) override {}
@@ -35,8 +40,6 @@ public:
     void DestroyPipelineLayout(PipelineLayoutHandle) override {}
     void DestroySampler(SamplerHandle) override {}
     RenderCapabilities GetCapabilities() const override { return {}; }
-    void Submit(const IRenderCommandList&) override {}
-    void Present(SwapchainHandle) override {}
     void WaitIdle() override {}
 };
 

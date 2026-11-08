@@ -112,10 +112,12 @@ RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc &description,
       .visible = description.visible,
       .decorated = description.decorated,
   });
+  SurfaceHandle surface{};
   SwapchainHandle swapchain{};
   try {
     const auto available =
         m_windows->EnumerateAvailableSwapchainFormats(window, *m_device);
+    surface = m_device->CreateSurface(*m_windows->GetWindow(window));
     std::exception_ptr lastError;
     for (auto format : description.swapchainFormats)
     {
@@ -125,7 +127,7 @@ RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc &description,
       presentation.format = format;
       try
       {
-        swapchain = m_device->CreateSwapchain(*m_windows->GetWindow(window),
+        swapchain = m_device->CreateSwapchain(surface,
                                               presentation);
         if (swapchain)
           break;
@@ -145,6 +147,7 @@ RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc &description,
     auto view =
         std::unique_ptr<WindowView>(new WindowView(window, presentation));
     view->m_windows = m_windows;
+    view->surface = surface;
     view->swapchain = swapchain;
     const auto info = m_device->GetSwapchainInfo(swapchain);
     if (!info)
@@ -155,6 +158,7 @@ RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc &description,
   } catch (...) {
     if (swapchain)
       m_device->DestroySwapchain(swapchain);
+    if (surface) m_device->DestroySurface(surface);
     m_windows->DestroyWindow(window);
     throw;
   }
@@ -203,6 +207,8 @@ bool Renderer::DestroyView(RenderViewHandle handle) {
   const auto window = windowView ? windowView->window : WindowHandle{};
   if (windowView && windowView->swapchain && m_device)
     m_device->DestroySwapchain(windowView->swapchain);
+  if (windowView && windowView->surface && m_device)
+    m_device->DestroySurface(windowView->surface);
   auto &slot = m_views[handle.index];
   slot.value.reset();
   if (window && m_windows)

@@ -74,9 +74,9 @@ GraphicsCapabilities VulkanBackend::Capabilities() const
   return m_capabilities;
 }
 std::unique_ptr<IRenderDevice>
-VulkanBackend::CreateDevice(const DeviceConfig& config)
+VulkanBackend::CreateDevice(const RenderDeviceCreateInfo& config)
 {
-  auto device = std::make_unique<VulkanRenderDevice>(config);
+  auto device = std::make_unique<VulkanRenderDevice>(config, m_surfaces);
   const auto caps = device->GetCapabilities();
   m_capabilities = {.computeShaders = caps.computeShaders,
                     .bindlessResources = caps.bindlessResources,
@@ -88,6 +88,7 @@ VulkanBackend::CreateDevice(const DeviceConfig& config)
 }
 void VulkanBackend::Shutdown() noexcept
 {
+  m_surfaces.clear();
   m_capabilities = {};
 }
 } // namespace Lighthouse

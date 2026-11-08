@@ -12,6 +12,15 @@ class OpenGLRenderDevice;
 
 class OpenGLCommandList final : public IRenderCommandList {
 public:
+  explicit OpenGLCommandList(std::uint64_t owner) : m_owner(owner) {}
+  std::uint64_t Owner() const noexcept
+  {
+    return m_owner;
+  }
+  bool IsRecording() const noexcept
+  {
+    return Begun;
+  }
   void Begin() override {
     if (Begun) throw std::logic_error("Command list has already begun");
     Begun = true;
@@ -72,6 +81,12 @@ public:
         std::int32_t baseVertex{};
         void Execute(OpenGLRenderDevice* device) const;
     };
+    struct CopyBufferCommand
+    {
+      BufferHandle src, dst;
+      std::uint64_t srcOffset, dstOffset, bytes;
+      void Execute(OpenGLRenderDevice*) const;
+    };
     struct DispatchCommand {
         std::uint32_t x, y, z;
         void Execute(OpenGLRenderDevice* device) const;
@@ -88,10 +103,31 @@ public:
         std::uint32_t count;
         void Execute(OpenGLRenderDevice* device) const;
     };
-    using Command = std::variant<StencilCommand, BeginRenderCommand, EndRenderCommand, BindPipelineCommand,
-        BindDescriptorSetCommand,
-        BindVertexBufferCommand, BindIndexBufferCommand, BindTextureCommand,
-        DrawCommand, DrawIndexedCommand, MultiDrawCommand, DispatchCommand, BlitImageCommand>;
+  struct DebugCommand
+  {
+    std::string name;
+    int operation;
+    void Execute(OpenGLRenderDevice*) const;
+  };
+  void PushDebugGroup(std::string_view name, std::array<float, 4>) override
+  {
+    m_commands.emplace_back(DebugCommand{std::string(name), 0});
+  }
+  void PopDebugGroup() override
+  {
+    m_commands.emplace_back(DebugCommand{{}, 1});
+  }
+  void InsertDebugMarker(std::string_view name, std::array<float, 4>) override
+  {
+    m_commands.emplace_back(DebugCommand{std::string(name), 2});
+  }
+    using Command =
+        std::variant<DebugCommand, StencilCommand, BeginRenderCommand, EndRenderCommand,
+                     BindPipelineCommand, BindDescriptorSetCommand,
+                     BindVertexBufferCommand, BindIndexBufferCommand,
+                     BindTextureCommand, DrawCommand, DrawIndexedCommand,
+                     MultiDrawCommand, DispatchCommand, CopyBufferCommand,
+                     BlitImageCommand>;
 
     const std::vector<Command>& Commands() const noexcept { return m_commands; }
     void BeginRendering(const RenderPassDesc& desc) override { m_commands.emplace_back(BeginRenderCommand{desc}); }
@@ -116,6 +152,12 @@ public:
     void MultiDrawIndexedIndirect(BufferHandle buffer, std::uint32_t count) override {
         m_commands.emplace_back(MultiDrawCommand{buffer, count});
     }
+    void CopyBuffer(BufferHandle src, BufferHandle dst, std::uint64_t srcOffset,
+                    std::uint64_t dstOffset, std::uint64_t bytes) override
+    {
+      m_commands.emplace_back(
+          CopyBufferCommand{src, dst, srcOffset, dstOffset, bytes});
+    }
     void Dispatch(std::uint32_t x, std::uint32_t y, std::uint32_t z) override { m_commands.emplace_back(DispatchCommand{x, y, z}); }
   void BlitImage(ImageHandle src, ImageHandle dst, const BlitRegion &region,
                  ImageFilter filter) override {
@@ -124,6 +166,7 @@ public:
 private:
     std::vector<Command> m_commands;
     bool Begun = false;
+    std::uint64_t m_owner;
 };
 
 } // namespace Lighthouse

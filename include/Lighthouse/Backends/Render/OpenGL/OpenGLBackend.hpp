@@ -16,7 +16,9 @@ public:
     std::string_view Name() const noexcept override { return BackendName; }
     bool Initialize(std::string& diagnostic) override;
     GraphicsCapabilities Capabilities() const override;
-    std::unique_ptr<IRenderDevice> CreateDevice(const DeviceConfig& config) override;
+    bool RequiresEGLWindow() const noexcept override { return true; }
+    std::unique_ptr<IRenderDevice>
+    CreateDevice(const RenderDeviceCreateInfo& config) override;
     void Shutdown() noexcept override;
 
 private:

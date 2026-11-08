@@ -179,55 +179,51 @@ void OpenGLCommandList::BeginRenderCommand::Execute(
     throw std::invalid_argument("Too many color attachments");
   for (auto view : attachments)
   {
-    const auto& image = state.images.at(state.views.at(view).image);
+    const auto& image = state.R().images.at(state.R().views.at(view).image);
     if (!image.usage.Contains(ImageUsage::ColorAttachment))
       throw std::invalid_argument("Color attachment usage missing");
   }
-  if (state.activeFramebuffer)
+  if (state.State().activeFramebuffer)
   {
-    glDeleteFramebuffers(1, &state.activeFramebuffer);
-    state.activeFramebuffer = 0;
+    glDeleteFramebuffers(1, &state.State().activeFramebuffer);
+    state.State().activeFramebuffer = 0;
   }
-  if (state.activeSwapchain && attachments.size() == 1 &&
-      attachments.front() == device->AcquiredImageView(*state.activeSwapchain))
-  {
-    auto* target = state.FindSwapchain(*state.activeSwapchain);
-    glBindFramebuffer(GL_FRAMEBUFFER,
-                      target->images[target->imageIndex].framebuffer);
-  }
-  else
   {
     if (!attachments.front())
       throw std::logic_error("Render pass has no color attachment");
-    glCreateFramebuffers(1, &state.activeFramebuffer);
+    glCreateFramebuffers(1, &state.State().activeFramebuffer);
     std::vector<GLenum> drawBuffers;
     for (size_t i = 0; i < attachments.size(); ++i)
     {
       drawBuffers.push_back(GL_COLOR_ATTACHMENT0 + static_cast<GLenum>(i));
-      glNamedFramebufferTexture(state.activeFramebuffer, drawBuffers.back(),
-                                state.views.at(attachments[i]).id, 0);
+      glNamedFramebufferTexture(state.State().activeFramebuffer,
+                                drawBuffers.back(),
+                                state.R().views.at(attachments[i]).id, 0);
     }
-    glNamedFramebufferDrawBuffers(state.activeFramebuffer,
+    glNamedFramebufferDrawBuffers(state.State().activeFramebuffer,
                                   static_cast<GLsizei>(drawBuffers.size()),
                                   drawBuffers.data());
-    if (glCheckNamedFramebufferStatus(
-            state.activeFramebuffer, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    if (glCheckNamedFramebufferStatus(state.State().activeFramebuffer,
+                                      GL_FRAMEBUFFER) !=
+        GL_FRAMEBUFFER_COMPLETE)
     {
-      glDeleteFramebuffers(1, &state.activeFramebuffer);
-      state.activeFramebuffer = 0;
+      glDeleteFramebuffers(1, &state.State().activeFramebuffer);
+      state.State().activeFramebuffer = 0;
       throw std::runtime_error(
           "OpenGL render target framebuffer is incomplete");
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, state.activeFramebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, state.State().activeFramebuffer);
   }
   const bool stencil =
       desc.depthAttachment &&
-      state.images.at(state.views.at(desc.depthAttachment).image).format ==
-          ImageFormat::Depth24Stencil8;
+      state.R()
+              .images.at(state.R().views.at(desc.depthAttachment).image)
+              .format == ImageFormat::Depth24Stencil8;
   glFramebufferTexture(
       GL_FRAMEBUFFER,
       stencil ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT,
-      desc.depthAttachment ? state.views.at(desc.depthAttachment).id : 0, 0);
+      desc.depthAttachment ? state.R().views.at(desc.depthAttachment).id : 0,
+      0);
   glDisable(GL_STENCIL_TEST);
   glStencilMask(0xff);
   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
@@ -260,9 +256,9 @@ void OpenGLCommandList::BeginRenderCommand::Execute(
     glClear(GL_DEPTH_BUFFER_BIT | (stencil ? GL_STENCIL_BUFFER_BIT : 0));
   }
   for (auto view : attachments)
-    state.RecordWrite(state.views.at(view).image);
+    state.RecordWrite(state.R().views.at(view).image);
   if (desc.depthAttachment)
-    state.RecordWrite(state.views.at(desc.depthAttachment).image);
+    state.RecordWrite(state.R().views.at(desc.depthAttachment).image);
 }
 void OpenGLCommandList::StencilCommand::Execute(OpenGLRenderDevice*) const
 {
@@ -288,7 +284,7 @@ void OpenGLCommandList::EndRenderCommand::Execute(
   glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, 0, 0);
   glDisable(GL_DEPTH_TEST);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
-  auto& framebuffer = device->m_impl->activeFramebuffer;
+  auto& framebuffer = device->m_impl->State().activeFramebuffer;
   if (framebuffer)
   {
     glDeleteFramebuffers(1, &framebuffer);
@@ -298,27 +294,29 @@ void OpenGLCommandList::EndRenderCommand::Execute(
 void OpenGLCommandList::BindPipelineCommand::Execute(
     OpenGLRenderDevice* device) const
 {
-  auto found = device->m_impl->pipelines.find(handle);
-  if (found == device->m_impl->pipelines.end())
+  auto found = device->m_impl->R().pipelines.find(handle);
+  if (found == device->m_impl->R().pipelines.end())
     throw std::invalid_argument("Invalid pipeline handle");
   auto& pipeline = found->second;
   auto& state = *device->m_impl;
-  if (state.activePipeline)
+  if (state.State().activePipeline)
   {
-    const auto old = state.pipelines.find(*state.activePipeline);
+    const auto old = state.R().pipelines.find(*state.State().activePipeline);
     const auto oldLayout =
-        old == state.pipelines.end()
-            ? state.pipelineLayouts.end()
-            : state.pipelineLayouts.find(old->second.pipelineLayout);
-    const auto newLayout = state.pipelineLayouts.find(pipeline.pipelineLayout);
+        old == state.R().pipelines.end()
+            ? state.R().pipelineLayouts.end()
+            : state.R().pipelineLayouts.find(old->second.pipelineLayout);
+    const auto newLayout =
+        state.R().pipelineLayouts.find(pipeline.pipelineLayout);
     auto layoutsCompatible =
         [&](DescriptorSetLayoutHandle a, DescriptorSetLayoutHandle b)
     {
       if (a == b)
         return true;
-      const auto left = state.setLayouts.find(a),
-                 right = state.setLayouts.find(b);
-      if (left == state.setLayouts.end() || right == state.setLayouts.end() ||
+      const auto left = state.R().setLayouts.find(a),
+                 right = state.R().setLayouts.find(b);
+      if (left == state.R().setLayouts.end() ||
+          right == state.R().setLayouts.end() ||
           left->second.bindings.size() != right->second.bindings.size())
         return false;
       return std::equal(left->second.bindings.begin(),
@@ -332,12 +330,13 @@ void OpenGLCommandList::BindPipelineCommand::Execute(
                                  x.second.stages == y.second.stages;
                         });
     };
-    for (auto it = state.boundSets.begin(); it != state.boundSets.end();)
+    for (auto it = state.State().boundSets.begin();
+         it != state.State().boundSets.end();)
     {
       const auto setIndex = it->first;
       const bool compatible =
-          oldLayout != state.pipelineLayouts.end() &&
-          newLayout != state.pipelineLayouts.end() &&
+          oldLayout != state.R().pipelineLayouts.end() &&
+          newLayout != state.R().pipelineLayouts.end() &&
           setIndex < oldLayout->second.sets.size() &&
           setIndex < newLayout->second.sets.size() &&
           layoutsCompatible(oldLayout->second.sets[setIndex],
@@ -347,19 +346,19 @@ void OpenGLCommandList::BindPipelineCommand::Execute(
         ++it;
         continue;
       }
-      const auto oldSet = state.sets.find(it->second);
-      if (oldSet != state.sets.end())
+      const auto oldSet = state.R().sets.find(it->second);
+      if (oldSet != state.R().sets.end())
       {
         const auto descriptorLayout =
-            state.setLayouts.find(oldSet->second.layout);
-        if (descriptorLayout != state.setLayouts.end())
+            state.R().setLayouts.find(oldSet->second.layout);
+        if (descriptorLayout != state.R().setLayouts.end())
           for (const auto& [binding, desc] : descriptorLayout->second.bindings)
           {
             const auto location =
-                oldLayout == state.pipelineLayouts.end()
+                oldLayout == state.R().pipelineLayouts.end()
                     ? DescriptorBindingLocations::const_iterator{}
                     : oldLayout->second.locations.find({setIndex, binding});
-            if (oldLayout == state.pipelineLayouts.end() ||
+            if (oldLayout == state.R().pipelineLayouts.end() ||
                 location == oldLayout->second.locations.end())
               continue;
             for (std::uint32_t element = 0; element < desc.count; ++element)
@@ -377,13 +376,11 @@ void OpenGLCommandList::BindPipelineCommand::Execute(
             }
           }
       }
-      it = state.boundSets.erase(it);
+      it = state.State().boundSets.erase(it);
     }
   }
-  state.activePipeline = handle;
-  const auto context =
-      device->m_impl->activeSwapchain.value_or(SwapchainHandle{});
-  auto [vao, inserted] = pipeline.vaos.try_emplace(context, 0);
+  state.State().activePipeline = handle;
+  auto [vao, inserted] = state.State().vaos.try_emplace(handle, 0);
   if (inserted)
     vao->second = CreateVertexArray(pipeline.layout);
   glBindVertexArray(vao->second);
@@ -408,22 +405,22 @@ void OpenGLCommandList::BindDescriptorSetCommand::Execute(
     OpenGLRenderDevice* device) const
 {
   auto& state = *device->m_impl;
-  if (!state.activePipeline)
+  if (!state.State().activePipeline)
     throw std::logic_error(
         "Bind a graphics pipeline before binding descriptor sets");
-  const auto pipeline = state.pipelines.find(*state.activePipeline);
-  const auto set = state.sets.find(handle);
-  if (pipeline == state.pipelines.end() || set == state.sets.end())
+  const auto pipeline = state.R().pipelines.find(*state.State().activePipeline);
+  const auto set = state.R().sets.find(handle);
+  if (pipeline == state.R().pipelines.end() || set == state.R().sets.end())
     throw std::invalid_argument("Invalid pipeline or descriptor set handle");
   const auto pipelineLayout =
-      state.pipelineLayouts.find(pipeline->second.pipelineLayout);
-  if (pipelineLayout == state.pipelineLayouts.end() ||
+      state.R().pipelineLayouts.find(pipeline->second.pipelineLayout);
+  if (pipelineLayout == state.R().pipelineLayouts.end() ||
       setIndex >= pipelineLayout->second.sets.size() ||
       pipelineLayout->second.sets[setIndex] != set->second.layout)
     throw std::invalid_argument(
         "Descriptor set layout is incompatible with the bound pipeline");
-  const auto layout = state.setLayouts.find(set->second.layout);
-  if (layout == state.setLayouts.end())
+  const auto layout = state.R().setLayouts.find(set->second.layout);
+  if (layout == state.R().setLayouts.end())
     throw std::invalid_argument("Descriptor set layout has been destroyed");
   for (const auto& [binding, info] : layout->second.bindings)
   {
@@ -444,8 +441,8 @@ void OpenGLCommandList::BindDescriptorSetCommand::Execute(
           info.type == DescriptorType::StorageBuffer)
       {
         const auto& bufferInfo = std::get<DescriptorBufferInfo>(resource);
-        const auto buffer = state.buffers.find(bufferInfo.buffer);
-        if (buffer == state.buffers.end())
+        const auto buffer = state.R().buffers.find(bufferInfo.buffer);
+        if (buffer == state.R().buffers.end())
           throw std::invalid_argument(
               "Descriptor references a destroyed buffer");
         glBindBufferRange(info.type == DescriptorType::UniformBuffer
@@ -458,9 +455,10 @@ void OpenGLCommandList::BindDescriptorSetCommand::Execute(
       else
       {
         const auto& imageInfo = std::get<DescriptorImageInfo>(resource);
-        const auto image = state.views.find(imageInfo.image);
-        const auto sampler = state.samplers.find(imageInfo.sampler);
-        if (image == state.views.end() || sampler == state.samplers.end())
+        const auto image = state.R().views.find(imageInfo.image);
+        const auto sampler = state.R().samplers.find(imageInfo.sampler);
+        if (image == state.R().views.end() ||
+            sampler == state.R().samplers.end())
           throw std::invalid_argument(
               "Descriptor references a destroyed image view or sampler");
         glBindTextureUnit(point, image->second.id);
@@ -468,23 +466,24 @@ void OpenGLCommandList::BindDescriptorSetCommand::Execute(
       }
     }
   }
-  state.boundSets[setIndex] = handle;
+  state.State().boundSets[setIndex] = handle;
 }
 void OpenGLCommandList::BindVertexBufferCommand::Execute(
     OpenGLRenderDevice* device) const
 {
-  glBindVertexBuffer(0, device->m_impl->buffers.at(handle).id, 0,
+  glBindVertexBuffer(0, device->m_impl->R().buffers.at(handle).id, 0,
                      static_cast<GLsizei>(stride));
 }
 void OpenGLCommandList::BindIndexBufferCommand::Execute(
     OpenGLRenderDevice* device) const
 {
-  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, device->m_impl->buffers.at(handle).id);
+  glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,
+               device->m_impl->R().buffers.at(handle).id);
 }
 void OpenGLCommandList::BindTextureCommand::Execute(
     OpenGLRenderDevice* device) const
 {
-  glBindTextureUnit(slot, device->m_impl->images.at(handle).id);
+  glBindTextureUnit(slot, device->m_impl->R().images.at(handle).id);
 }
 void OpenGLCommandList::DrawCommand::Execute(OpenGLRenderDevice*) const
 {
@@ -497,20 +496,59 @@ void OpenGLCommandList::DrawIndexedCommand::Execute(
     OpenGLRenderDevice* device) const
 {
   glDrawElementsBaseVertex(
-      ToGLTopology(device->m_impl->pipelines.at(*device->m_impl->activePipeline)
+      ToGLTopology(device->m_impl->R()
+                       .pipelines.at(*device->m_impl->State().activePipeline)
                        .topology),
       static_cast<GLsizei>(count), GL_UNSIGNED_INT,
       reinterpret_cast<const void*>(static_cast<std::uintptr_t>(firstIndex) *
                                     sizeof(std::uint32_t)),
       baseVertex);
 }
-void OpenGLCommandList::MultiDrawCommand::Execute(OpenGLRenderDevice* device) const
+void OpenGLCommandList::MultiDrawCommand::Execute(
+    OpenGLRenderDevice* device) const
 {
-  glBindBuffer(GL_DRAW_INDIRECT_BUFFER, device->m_impl->buffers.at(buffer).id);
+  glBindBuffer(GL_DRAW_INDIRECT_BUFFER,
+               device->m_impl->R().buffers.at(buffer).id);
   glMultiDrawElementsIndirect(
-      ToGLTopology(device->m_impl->pipelines.at(*device->m_impl->activePipeline).topology),
+      ToGLTopology(device->m_impl->R()
+                       .pipelines.at(*device->m_impl->State().activePipeline)
+                       .topology),
       GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(count), 20);
   glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
+}
+void OpenGLCommandList::DebugCommand::Execute(OpenGLRenderDevice* device) const
+{
+  if (operation == 0)
+  {
+    glPushDebugGroup(GL_DEBUG_SOURCE_APPLICATION, 0,
+                     static_cast<GLsizei>(name.size()), name.data());
+    device->m_impl->State().debugGroups.push_back(name);
+  }
+  else if (operation == 1)
+  {
+    glPopDebugGroup();
+    if (!device->m_impl->State().debugGroups.empty())
+      device->m_impl->State().debugGroups.pop_back();
+  }
+  else
+    glDebugMessageInsert(GL_DEBUG_SOURCE_APPLICATION, GL_DEBUG_TYPE_MARKER, 0,
+                         GL_DEBUG_SEVERITY_NOTIFICATION,
+                         static_cast<GLsizei>(name.size()), name.data());
+}
+void OpenGLCommandList::CopyBufferCommand::Execute(
+    OpenGLRenderDevice* device) const
+{
+  auto& a = device->m_impl->R().buffers.at(src);
+  auto& b = device->m_impl->R().buffers.at(dst);
+  if (src == dst || bytes == 0 || ((srcOffset | dstOffset | bytes) & 3) ||
+      !a.metadata.usage.Contains(BufferUsage::TransferSrc) ||
+      !b.metadata.usage.Contains(BufferUsage::TransferDst) ||
+      srcOffset > a.metadata.size || bytes > a.metadata.size - srcOffset ||
+      dstOffset > b.metadata.size || bytes > b.metadata.size - dstOffset)
+    throw std::invalid_argument("Invalid buffer copy");
+  glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+  glCopyNamedBufferSubData(a.id, b.id, srcOffset, dstOffset, bytes);
+  glMemoryBarrier(GL_ALL_BARRIER_BITS);
 }
 void OpenGLCommandList::DispatchCommand::Execute(OpenGLRenderDevice*) const
 {
@@ -524,9 +562,9 @@ void OpenGLCommandList::BlitImageCommand::Execute(
   // FBOs are context-local, even though their texture attachments are shared.
   if (!state.ActivateImage(dst))
     state.ActivateImage(src);
-  const auto srcImage = state.images.find(src);
-  const auto dstImage = state.images.find(dst);
-  if (srcImage == state.images.end() || dstImage == state.images.end())
+  const auto srcImage = state.R().images.find(src);
+  const auto dstImage = state.R().images.find(dst);
+  if (srcImage == state.R().images.end() || dstImage == state.R().images.end())
     throw std::invalid_argument("Invalid image handle in blit command");
 
   const auto aspects = region.srcSubresource.aspectMask;

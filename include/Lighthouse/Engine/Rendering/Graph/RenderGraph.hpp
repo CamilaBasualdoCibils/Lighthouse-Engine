@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -30,6 +31,14 @@ constexpr RenderGraphResource kInvalidGraphResource = -1;
 
 struct RenderGraphExecutePassContext {
   IRenderCommandList *commandList;
+  std::vector<std::function<void()>>* retirements{};
+  std::function<void()> afterSubmit;
+  std::vector<SemaphoreSubmitInfo> waits, signals;
+  FenceHandle fence;
+  void Defer(std::function<void()> release)
+  {
+    retirements->push_back(std::move(release));
+  }
 };
 struct RenderGraphExecuteContext {
 public:
@@ -38,6 +47,7 @@ public:
   Renderer *renderer;
   IRenderDevice *device;
   std::vector<std::unique_ptr<IRenderCommandList>> commandLists;
+  std::vector<std::function<void()>> retirements;
 
   IRenderCommandList *MakeCommandList();
 };
@@ -75,7 +85,7 @@ struct RenderGraphBuffer {
     IRenderGraphAllocator *alloc =
         static_cast<IRenderGraphAllocator *>(allocator);
     RenderGraphBufferAllocation allocation = alloc->AllocateBuffer(desc);
-
+    handle = allocation.buffer;
   }
   void destroy(const Desc &desc, void *allocator) {
     IRenderGraphAllocator *alloc =
@@ -226,6 +236,8 @@ public:
   };
 
   RenderGraph();
+  // Complete outstanding executions before graph rebuild or destruction.
+  void Drain();
   ~RenderGraph();
   RenderGraph(const RenderGraph &) = delete;
   RenderGraph &operator=(const RenderGraph &) = delete;
@@ -245,27 +257,34 @@ public:
     m_passInfo.push_back({pass, std::string(name), {}, {}, {}, m_hiddenFromInspector});
     return m_graph->addCallbackPass<Data>(
         KeepName(name),
-        [this, pass, setup = std::forward<Setup>(setup)](FrameGraph::Builder &builder,
-                                                   Data &data) mutable {
+        [this, pass, setup = std::forward<Setup>(setup)](
+            FrameGraph::Builder& builder, Data& data) mutable
+        {
           Builder lighthouseBuilder(*this, builder, pass);
           setup(lighthouseBuilder, data);
         },
         [execute = std::forward<Execute>(execute)](
-            const Data &data, FrameGraphPassResources &resources,
-            void *context) mutable {
+            const Data& data, FrameGraphPassResources& resources,
+            void* context) mutable
+        {
           RenderGraphExecuteContext *executeContext =
               static_cast<RenderGraphExecuteContext *>(context);
           assert(executeContext);
           RenderGraphExecutePassContext executePassContext{
-              .commandList = executeContext->MakeCommandList()};
+              .commandList = executeContext->MakeCommandList(),
+              .retirements = &executeContext->retirements,
+              .afterSubmit = {}};
 
           execute(data, resources, executePassContext);
 
-          executeContext->device->Submit(*executePassContext.commandList);
-          // FrameGraph can destroy transient resources as soon as this callback
-          // returns. Complete their GPU use first on every backend; asynchronous
-          // submission will require fence-based deferred resource retirement.
-          executeContext->device->WaitIdle();
+          const IRenderCommandList* commands = executePassContext.commandList;
+          executeContext->device->GetQueue(0)->Submit(
+              QueueSubmitInfo{.commandLists = {&commands, 1},
+                              .waits = executePassContext.waits,
+                              .signals = executePassContext.signals},
+              executePassContext.fence);
+          if (executePassContext.afterSubmit)
+            executePassContext.afterSubmit();
         });
   }
 
@@ -305,6 +324,9 @@ public:
   }
 
 private:
+  struct ExecutionState;
+  std::unique_ptr<ExecutionState> m_execution;
+
   static void AddUnique(std::vector<RenderGraphResource>& handles, RenderGraphResource handle);
   RenderGraphResource RecordCreate(std::size_t pass, RenderGraphResource handle, std::string_view name);
   void RecordRead(std::size_t pass, RenderGraphResource handle);

@@ -30,7 +30,14 @@ TEST_F(ImGuiViewTests, IndependentViewportsRestoreContextAndSurviveEngineWindowC
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(backend.CreateDevice({}), &windows);
+    Renderer renderer(
+        backend.CreateDevice(
+            {.queues = {{.capabilities =
+                             Lighthouse::RenderQueueCapability::Graphics |
+                             Lighthouse::RenderQueueCapability::Compute |
+                             Lighthouse::RenderQueueCapability::Transfer,
+                         .minCount = 1}}}),
+        &windows);
     auto createEngineWindow = [&] {
         const auto handle = renderer.CreateView<WindowView>(RenderWindowDesc{
             .title = "Engine", .width = 160, .height = 120, .visible = false});
@@ -75,13 +82,15 @@ TEST_F(ImGuiViewTests, IndependentViewportsRestoreContextAndSurviveEngineWindowC
         }
     });
     renderer.Compile();
+    const auto callerContext = eglGetCurrentContext();
     for (int frame = 0; frame < 4; ++frame) {
         windows.PollEvents();
         renderer.Render();
         EXPECT_EQ(ImGui::GetCurrentContext(), nullptr);
         EXPECT_EQ(glfwGetCurrentContext(), nullptr);
-        EXPECT_NE(eglGetCurrentContext(), EGL_NO_CONTEXT);
-        EXPECT_EQ(glGetError(), GL_NO_ERROR);
+        EXPECT_EQ(eglGetCurrentContext(), callerContext);
+        if (callerContext != EGL_NO_CONTEXT)
+          EXPECT_EQ(glGetError(), GL_NO_ERROR);
     }
     EXPECT_EQ(callbacks, 4);
     ImGui::SetCurrentContext(uiContext);
@@ -175,7 +184,14 @@ TEST_F(ImGuiViewTests, UiOnlyAndCallbackExceptionRestoreContexts) {
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(backend.CreateDevice({}), &windows);
+    Renderer renderer(
+        backend.CreateDevice(
+            {.queues = {{.capabilities =
+                             Lighthouse::RenderQueueCapability::Graphics |
+                             Lighthouse::RenderQueueCapability::Compute |
+                             Lighthouse::RenderQueueCapability::Transfer,
+                         .minCount = 1}}}),
+        &windows);
     bool fail = true;
     const auto ui = renderer.CreateView<ImGuiView>([&] {
         ImGui::GetIO().IniFilename = nullptr;
@@ -205,7 +221,15 @@ TEST_F(ImGuiViewTests, VulkanGraphFrames) {
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
     std::unique_ptr<IRenderDevice> device;
-    try { device = backend.CreateDevice({}); }
+    try
+    {
+      device = backend.CreateDevice(
+          {.queues = {
+               {.capabilities = Lighthouse::RenderQueueCapability::Graphics |
+                                Lighthouse::RenderQueueCapability::Compute |
+                                Lighthouse::RenderQueueCapability::Transfer,
+                .minCount = 1}}});
+    }
     catch (const std::runtime_error& error) { GTEST_SKIP() << error.what(); }
     Renderer renderer(std::move(device), &windows);
     int calls = 0;
@@ -278,7 +302,14 @@ TEST_F(ImGuiViewTests, GraphObjectOrderRecompileAndFailureRecovery) {
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(backend.CreateDevice({}), &windows);
+    Renderer renderer(
+        backend.CreateDevice(
+            {.queues = {{.capabilities =
+                             Lighthouse::RenderQueueCapability::Graphics |
+                             Lighthouse::RenderQueueCapability::Compute |
+                             Lighthouse::RenderQueueCapability::Transfer,
+                         .minCount = 1}}}),
+        &windows);
     std::vector<int> events;
     bool fail = false;
     auto simple = std::make_shared<RecordingSimpleObject>(events);
@@ -320,7 +351,14 @@ TEST_F(ImGuiViewTests, ToolboxChainsCustomAndSimpleToolPasses) {
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(backend.CreateDevice({}), &windows);
+    Renderer renderer(
+        backend.CreateDevice(
+            {.queues = {{.capabilities =
+                             Lighthouse::RenderQueueCapability::Graphics |
+                             Lighthouse::RenderQueueCapability::Compute |
+                             Lighthouse::RenderQueueCapability::Transfer,
+                         .minCount = 1}}}),
+        &windows);
     auto handle = renderer.CreateView<ImGuiView>();
     auto* view = renderer.GetView<ImGuiView>(handle);
     view->AddObject(toolbox);
@@ -347,7 +385,14 @@ TEST_F(ImGuiViewTests, RendererToolUsesItsOwnGraphPassAndNodeEditorContext) {
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(backend.CreateDevice({}), &windows);
+    Renderer renderer(
+        backend.CreateDevice(
+            {.queues = {{.capabilities =
+                             Lighthouse::RenderQueueCapability::Graphics |
+                             Lighthouse::RenderQueueCapability::Compute |
+                             Lighthouse::RenderQueueCapability::Transfer,
+                         .minCount = 1}}}),
+        &windows);
     auto handle = renderer.CreateView<ImGuiView>();
     auto* view = renderer.GetView<ImGuiView>(handle);
     view->AddObject(toolbox);
@@ -402,7 +447,14 @@ TEST_F(ImGuiViewTests, PostBuildRunsAfterAllViewsAndTechniques) {
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(backend.CreateDevice({}), &windows);
+    Renderer renderer(
+        backend.CreateDevice(
+            {.queues = {{.capabilities =
+                             Lighthouse::RenderQueueCapability::Graphics |
+                             Lighthouse::RenderQueueCapability::Compute |
+                             Lighthouse::RenderQueueCapability::Transfer,
+                         .minCount = 1}}}),
+        &windows);
     std::vector<int> events;
     RenderGraphResource output = kInvalidGraphResource;
     renderer.CreateView<PostBuildOutput>(events);
@@ -428,7 +480,14 @@ TEST_F(ImGuiViewTests, RendererInspectorShowsSceneMetadataWithoutKeepingPassesAl
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(backend.CreateDevice({}), &windows);
+    Renderer renderer(
+        backend.CreateDevice(
+            {.queues = {{.capabilities =
+                             Lighthouse::RenderQueueCapability::Graphics |
+                             Lighthouse::RenderQueueCapability::Compute |
+                             Lighthouse::RenderQueueCapability::Transfer,
+                         .minCount = 1}}}),
+        &windows);
     int sceneExecutions = 0;
     bool expanded = false;
     renderer.AddLambdaTechnique([&](TechniqueBuildContext& context) {

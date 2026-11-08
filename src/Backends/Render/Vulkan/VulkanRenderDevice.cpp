@@ -1,6 +1,6 @@
-#include <Lighthouse/Engine/Window/WindowManager.hpp>
 #include <Lighthouse/Backends/Render/Vulkan/VulkanCommandList.hpp>
 #include <Lighthouse/Backends/Render/Vulkan/VulkanRenderDevice.hpp>
+#include <Lighthouse/Engine/Window/WindowManager.hpp>
 #include <vulkan/vulkan.hpp>
 #define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
@@ -302,6 +302,27 @@ vk::SampleCountFlagBits Samples(unsigned n)
 }
 } // namespace
 
+class VulkanRenderDevice::Queue final : public IRenderQueue
+{
+  VulkanRenderDevice& device;
+
+public:
+  vk::Queue native;
+  std::uint32_t family;
+  Flags<RenderQueueCapability> capabilities;
+
+public:
+  Queue(VulkanRenderDevice& d, vk::Queue q, std::uint32_t f,
+        Flags<RenderQueueCapability> caps)
+      : device(d), native(q), family(f), capabilities(caps)
+  {
+  }
+  Flags<RenderQueueCapability> GetCapabilities() const noexcept override;
+  void Submit(const QueueSubmitInfo&, FenceHandle) override;
+  void Present(SwapchainHandle, std::span<const SemaphoreHandle>) override;
+  void WaitIdle() override;
+};
+
 struct VulkanRenderDevice::Impl
 {
   vk::detail::DispatchLoaderDynamic dispatch{vkGetInstanceProcAddr};
@@ -310,12 +331,28 @@ struct VulkanRenderDevice::Impl
   vk::PhysicalDeviceProperties properties;
   vk::Device device;
   vk::Queue queue;
+  struct QueueEntry
+  {
+    vk::Queue native;
+    std::uint32_t family;
+    Flags<RenderQueueCapability> capabilities;
+  };
+  std::vector<QueueEntry> queues;
+  std::vector<std::uint32_t> queueFamilies;
+  struct Surface
+  {
+    vk::SurfaceKHR native;
+    GLFWwindow* window;
+  };
+  Map<SurfaceHandle, Surface> surfaces;
+  unsigned nextSurface = 1;
   std::uint32_t family{};
   VmaAllocator allocator{};
   vk::CommandPool immediatePool;
   vk::Fence fence;
-  std::uint64_t nextCompletionMarker = 1;
-  std::unordered_map<std::uint64_t, vk::Fence> completionMarkers;
+  unsigned nextFence = 1, nextSemaphore = 1;
+  Map<FenceHandle, vk::Fence> fences;
+  Map<SemaphoreHandle, vk::Semaphore> semaphores;
   vk::DescriptorPool descriptorPool;
   RenderCapabilities capabilities;
   std::uint64_t owner{};
@@ -327,7 +364,6 @@ struct VulkanRenderDevice::Impl
   {
     vk::Buffer native;
     VmaAllocation allocation{};
-    void* mapped{};
     BufferMetadata desc;
   };
   struct Image
@@ -375,12 +411,15 @@ struct VulkanRenderDevice::Impl
   {
     GLFWwindow* window{};
     vk::SurfaceKHR surface;
+    SurfaceHandle surfaceHandle;
     vk::SwapchainKHR native;
     vk::SurfaceFormatKHR format;
     vk::Extent2D extent;
     std::vector<ImageHandle> images;
     std::vector<ImageViewHandle> views;
     vk::Semaphore available;
+    vk::CommandBuffer presentCommand;
+    vk::Fence presentFence;
     std::vector<vk::Semaphore> finished;
     std::uint32_t current{}, generation{1};
     bool acquired{}, waitPending{}, ready{};
@@ -419,7 +458,8 @@ struct VulkanRenderDevice::Impl
     auto& slot = swaps[h.index];
     return slot.generation == h.generation ? slot.value.get() : nullptr;
   }
-  void Init(const DeviceConfig& config, std::uint64_t ownerId);
+  void Init(const RenderDeviceCreateInfo& config, std::uint64_t ownerId,
+            std::span<const std::pair<SurfaceHandle, Window*>> targets);
   ~Impl();
   void Run(const std::function<void(vk::CommandBuffer)>& record,
            const std::vector<vk::Semaphore>& waits = {},
@@ -519,8 +559,54 @@ struct VulkanRenderDevice::Impl
   }
 };
 
-void VulkanRenderDevice::Impl::Init(const DeviceConfig& config,
-                                    std::uint64_t ownerId)
+Flags<RenderQueueCapability>
+VulkanRenderDevice::Queue::GetCapabilities() const noexcept
+{
+  return capabilities;
+}
+IRenderQueue* VulkanRenderDevice::GetQueue(std::uint32_t index)
+{
+  return index < m_queues.size() ? m_queues[index].get() : nullptr;
+}
+SurfaceHandle VulkanRenderDevice::CreateSurface(Window& window)
+{
+  auto& d = *m_impl;
+  Impl::Surface surface{{}, static_cast<GLFWwindow*>(window.NativeHandle())};
+  const auto result = static_cast<vk::Result>(glfwCreateWindowSurface(
+      static_cast<vk::Instance::CType>(d.instance), surface.window, nullptr,
+      reinterpret_cast<vk::SurfaceKHR::CType*>(&surface.native)));
+  Require(result == vk::Result::eSuccess,
+          "GLFW Vulkan surface creation failed");
+  const auto h = d.Handle<SurfaceHandle>(d.nextSurface);
+  try
+  {
+    d.surfaces.emplace(h, surface);
+  }
+  catch (...)
+  {
+    d.instance.destroySurfaceKHR(surface.native, nullptr, d.dispatch);
+    throw;
+  }
+  return h;
+}
+void VulkanRenderDevice::DestroySurface(SurfaceHandle h)
+{
+  auto& d = *m_impl;
+  for (const auto& slot : d.swaps)
+    Require(!slot.value || slot.value->surfaceHandle != h,
+            "Destroy swapchains before their surface");
+  d.instance.destroySurfaceKHR(d.surfaces.at(h).native, nullptr, d.dispatch);
+  d.surfaces.erase(h);
+}
+
+void VulkanRenderDevice::Queue::WaitIdle()
+{
+  native.waitIdle(device.m_impl->dispatch);
+}
+
+void VulkanRenderDevice::Impl::Init(
+    const RenderDeviceCreateInfo& config, std::uint64_t ownerId,
+    std::span<const std::pair<SurfaceHandle, Window*>> targets)
 {
   owner = ownerId;
   // GLFW must use the same loader that owns this Hpp instance (vcpkg and
@@ -563,6 +649,34 @@ void VulkanRenderDevice::Impl::Init(const DeviceConfig& config,
       .setPEnabledLayerNames(layers);
   instance = vk::createInstance(instanceInfo, nullptr, dispatch);
   dispatch.init(instance);
+  for (auto [handle, window] : targets)
+  {
+    Surface surface{{}, static_cast<GLFWwindow*>(window->NativeHandle())};
+    const auto result = static_cast<vk::Result>(glfwCreateWindowSurface(
+        static_cast<vk::Instance::CType>(instance), surface.window, nullptr,
+        reinterpret_cast<vk::SurfaceKHR::CType*>(&surface.native)));
+    Require(result == vk::Result::eSuccess,
+            "Cannot create requested presentation surface");
+    try
+    {
+      surfaces.emplace(handle, surface);
+    }
+    catch (...)
+    {
+      instance.destroySurfaceKHR(surface.native, nullptr, dispatch);
+      throw;
+    }
+  }
+  for (const auto& request : config.queues)
+  {
+    Require(request.minCount <= request.preferredCount,
+            "Queue minimum exceeds preferred count");
+    if (request.preferredCount &&
+        (static_cast<std::uint32_t>(request.capabilities) &
+         static_cast<std::uint32_t>(RenderQueueCapability::Present)) != 0)
+      Require(surfaces.contains(request.presentSurface),
+              "Presentation queue request needs a backend-created surface");
+  }
   std::string failures;
   auto candidates = instance.enumeratePhysicalDevices(dispatch);
   std::stable_sort(candidates.begin(), candidates.end(),
@@ -620,8 +734,8 @@ void VulkanRenderDevice::Impl::Init(const DeviceConfig& config,
         shaderObject.pNext = &meshShaders;
     }
     candidate.getFeatures2(&features, dispatch);
-    if (!f13.dynamicRendering || !f13.synchronization2 ||
-        !shaderObject.shaderObject ||
+    if (!f12.timelineSemaphore || !f13.dynamicRendering ||
+        !f13.synchronization2 || !shaderObject.shaderObject ||
         !f12.descriptorBindingUniformBufferUpdateAfterBind ||
         !f12.descriptorBindingStorageBufferUpdateAfterBind ||
         !f12.descriptorBindingSampledImageUpdateAfterBind)
@@ -630,19 +744,129 @@ void VulkanRenderDevice::Impl::Init(const DeviceConfig& config,
       continue;
     }
     auto families = candidate.getQueueFamilyProperties(dispatch);
-    auto q =
-        std::find_if(families.begin(), families.end(),
-                     [](const auto& p)
-                     {
-                       return p.queueCount &&
-                              (p.queueFlags & vk::QueueFlagBits::eGraphics) &&
-                              (p.queueFlags & vk::QueueFlagBits::eCompute);
-                     });
-    if (q == families.end())
+    // Match native queue slots to requests. Augmenting assignments allow a
+    // constrained request to displace a flexible one without losing its count.
+    struct Slot
+    {
+      std::uint32_t family;
+      int request = -1;
+    };
+    std::vector<Slot> slots;
+    for (std::uint32_t f = 0; f < families.size(); ++f)
+      for (std::uint32_t i = 0; i < families[f].queueCount; ++i)
+        slots.push_back({f});
+    const auto supports =
+        [&](std::uint32_t f, const RenderQueueRequest& request)
+    {
+      const auto bits = static_cast<std::uint32_t>(request.capabilities);
+      const Flags<RenderQueueCapability> required{request.capabilities};
+      const auto nativeFlags = families[f].queueFlags;
+      if (required.Contains(RenderQueueCapability::Graphics) &&
+          !(nativeFlags & vk::QueueFlagBits::eGraphics))
+        return false;
+      if (required.Contains(RenderQueueCapability::Compute) &&
+          !(nativeFlags & vk::QueueFlagBits::eCompute))
+        return false;
+      if (required.Contains(RenderQueueCapability::Transfer) &&
+          !(nativeFlags &
+            (vk::QueueFlagBits::eTransfer | vk::QueueFlagBits::eGraphics |
+             vk::QueueFlagBits::eCompute)))
+        return false;
+      if (required.Contains(RenderQueueCapability::Present) &&
+          (!has("VK_KHR_swapchain") ||
+           !candidate.getSurfaceSupportKHR(
+               f, surfaces.at(request.presentSurface).native, dispatch)))
+        return false;
+      return (bits & ~15u) == 0;
+    };
+    std::vector<std::vector<size_t>> candidatesByRequest(config.queues.size());
+    for (size_t request = 0; request < config.queues.size(); ++request)
+    {
+      if (!config.queues[request].preferredCount)
+        continue;
+      for (size_t slot = 0; slot < slots.size(); ++slot)
+        if (supports(slots[slot].family, config.queues[request]))
+          candidatesByRequest[request].push_back(slot);
+      // Prefer dedicated families when the request needs fewer capabilities.
+      const auto cost = [&](size_t slot)
+      {
+        const auto flags = families[slots[slot].family].queueFlags;
+        const Flags<RenderQueueCapability> requested{
+            config.queues[request].capabilities};
+        unsigned extras = 0;
+        if ((flags & vk::QueueFlagBits::eGraphics) &&
+            !requested.Contains(RenderQueueCapability::Graphics))
+          ++extras;
+        if ((flags & vk::QueueFlagBits::eCompute) &&
+            !requested.Contains(RenderQueueCapability::Compute))
+          ++extras;
+        return extras;
+      };
+      std::stable_sort(candidatesByRequest[request].begin(),
+                       candidatesByRequest[request].end(),
+                       [&](size_t a, size_t b) { return cost(a) < cost(b); });
+    }
+    std::function<bool(std::uint32_t, std::vector<bool>&)> assign;
+    assign = [&](std::uint32_t request, std::vector<bool>& visited)
+    {
+      for (size_t slot : candidatesByRequest[request])
+      {
+        if (visited[slot])
+          continue;
+        visited[slot] = true;
+        if (slots[slot].request < 0 || assign(slots[slot].request, visited))
+        {
+          slots[slot].request = static_cast<int>(request);
+          return true;
+        }
+      }
+      return false;
+    };
+    bool requiredAvailable = true;
+    for (std::uint32_t request = 0;
+         request < config.queues.size() && requiredAvailable; ++request)
+    {
+      if (config.queues[request].minCount > slots.size())
+      {
+        requiredAvailable = false;
+        break;
+      }
+      for (std::uint32_t i = 0; i < config.queues[request].minCount; ++i)
+      {
+        std::vector<bool> visited(slots.size());
+        if (!assign(request, visited))
+        {
+          requiredAvailable = false;
+          break;
+        }
+      }
+    }
+    if (!requiredAvailable)
+    {
+      failures += "Queue minimum counts unavailable; ";
       continue;
+    }
+    for (std::uint32_t request = 0; request < config.queues.size(); ++request)
+    {
+      auto count = static_cast<std::uint32_t>(
+          std::count_if(slots.begin(), slots.end(), [request](const Slot& slot)
+                        { return slot.request == static_cast<int>(request); }));
+      while (count < config.queues[request].preferredCount)
+      {
+        std::vector<bool> visited(slots.size());
+        if (!assign(request, visited))
+          break;
+        ++count;
+      }
+    }
+    if (std::none_of(slots.begin(), slots.end(),
+                     [](const Slot& slot) { return slot.request >= 0; }))
+    {
+      failures += "No queues requested or available; ";
+      continue;
+    }
     physical = candidate;
     properties = props;
-    family = static_cast<unsigned>(q - families.begin());
     swapchainEnabled = has("VK_KHR_swapchain");
     std::vector<const char*> enabled{"VK_EXT_shader_object"};
     if (swapchainEnabled)
@@ -653,6 +877,7 @@ void VulkanRenderDevice::Impl::Init(const DeviceConfig& config,
     // VUID-vkCmdDraw-None-10772 forbids multiview with shader objects.
     enabled11.multiview = false;
     vk::PhysicalDeviceVulkan12Features enabled12;
+    enabled12.timelineSemaphore = true;
     enabled12.descriptorBindingUniformBufferUpdateAfterBind = true;
     enabled12.descriptorBindingStorageBufferUpdateAfterBind = true;
     enabled12.descriptorBindingSampledImageUpdateAfterBind = true;
@@ -672,16 +897,58 @@ void VulkanRenderDevice::Impl::Init(const DeviceConfig& config,
     vk::PhysicalDeviceFeatures enabledBase;
     enabledBase.multiDrawIndirect = features.features.multiDrawIndirect;
     enabledBase.samplerAnisotropy = features.features.samplerAnisotropy;
-    const float priority = 1;
-    vk::DeviceQueueCreateInfo queueInfo({}, family, 1, &priority);
+    std::vector<std::vector<float>> priorities(families.size());
+    for (const auto& slot : slots)
+      if (slot.request >= 0)
+        priorities[slot.family].push_back(1.f);
+    std::vector<vk::DeviceQueueCreateInfo> queueInfos;
+    for (std::uint32_t f = 0; f < families.size(); ++f)
+      if (!priorities[f].empty())
+        queueInfos.emplace_back(vk::DeviceQueueCreateFlags{}, f, priorities[f]);
     vk::DeviceCreateInfo create;
-    create.setQueueCreateInfos(queueInfo)
+    create.setQueueCreateInfos(queueInfos)
         .setPEnabledExtensionNames(enabled)
         .setPEnabledFeatures(&enabledBase)
         .setPNext(&enabled11);
     device = physical.createDevice(create, nullptr, dispatch);
     dispatch.init(device);
-    queue = device.getQueue(family, 0, dispatch);
+    std::vector<std::uint32_t> used(families.size());
+    for (std::uint32_t request = 0; request < config.queues.size(); ++request)
+      for (const auto& slot : slots)
+      {
+        if (slot.request != static_cast<int>(request))
+          continue;
+        Flags<RenderQueueCapability> caps;
+        const auto flags = families[slot.family].queueFlags;
+        if (flags & vk::QueueFlagBits::eGraphics)
+          caps |= RenderQueueCapability::Graphics;
+        if (flags & vk::QueueFlagBits::eCompute)
+          caps |= RenderQueueCapability::Compute;
+        if (flags &
+            (vk::QueueFlagBits::eTransfer | vk::QueueFlagBits::eGraphics |
+             vk::QueueFlagBits::eCompute))
+          caps |= RenderQueueCapability::Transfer;
+        if (swapchainEnabled)
+          caps |= RenderQueueCapability::Present;
+        queues.push_back(
+            {device.getQueue(slot.family, used[slot.family]++, dispatch),
+             slot.family, caps});
+      }
+    auto primary = std::find_if(
+        queues.begin(), queues.end(), [](const QueueEntry& q)
+        { return q.capabilities.Contains(RenderQueueCapability::Graphics); });
+    if (primary == queues.end())
+      primary = std::find_if(
+          queues.begin(), queues.end(), [](const QueueEntry& q)
+          { return q.capabilities.Contains(RenderQueueCapability::Transfer); });
+    Require(primary != queues.end(), "Lighthouse requires a command-capable "
+                                     "queue for resource initialization");
+    queue = primary->native;
+    family = primary->family;
+    for (const auto& q : queues)
+      if (std::find(queueFamilies.begin(), queueFamilies.end(), q.family) ==
+          queueFamilies.end())
+        queueFamilies.push_back(q.family);
     capabilities.deviceName = properties.deviceName.data();
     capabilities.apiVersion = props.apiVersion;
     capabilities.headless = true;
@@ -773,33 +1040,42 @@ VulkanRenderDevice::Impl::~Impl()
       if (slot.value)
       {
         auto& s = *slot.value;
+        if (s.presentFence)
+          device.destroyFence(s.presentFence, nullptr, dispatch);
         if (s.native)
           device.destroySwapchainKHR(s.native, nullptr, dispatch);
         if (s.available)
           device.destroySemaphore(s.available, nullptr, dispatch);
         for (auto semaphore : s.finished)
           device.destroySemaphore(semaphore, nullptr, dispatch);
-        if (s.surface)
-          instance.destroySurfaceKHR(s.surface, nullptr, dispatch);
       }
     if (immediatePool)
       device.destroyCommandPool(immediatePool, nullptr, dispatch);
-    for (const auto& [_, marker] : completionMarkers)
+    for (const auto& [_, marker] : fences)
       device.destroyFence(marker, nullptr, dispatch);
+    for (const auto& [_, semaphore] : semaphores)
+      device.destroySemaphore(semaphore, nullptr, dispatch);
     if (fence)
       device.destroyFence(fence, nullptr, dispatch);
     if (allocator)
       vmaDestroyAllocator(allocator);
     device.destroy(nullptr, dispatch);
   }
+  for (auto [_, surface] : surfaces)
+    instance.destroySurfaceKHR(surface.native, nullptr, dispatch);
   if (instance)
     instance.destroy(nullptr, dispatch);
 }
 
-VulkanRenderDevice::VulkanRenderDevice(const DeviceConfig& config)
+VulkanRenderDevice::VulkanRenderDevice(
+    const RenderDeviceCreateInfo& config,
+    std::span<const std::pair<SurfaceHandle, Window*>> surfaces)
     : m_impl(std::make_unique<Impl>())
 {
-  m_impl->Init(config, DeviceId());
+  m_impl->Init(config, DeviceId(), surfaces);
+  for (const auto& q : m_impl->queues)
+    m_queues.push_back(
+        std::make_unique<Queue>(*this, q.native, q.family, q.capabilities));
 }
 VulkanRenderDevice::~VulkanRenderDevice() = default;
 RenderCapabilities VulkanRenderDevice::GetCapabilities() const
@@ -830,10 +1106,26 @@ BufferHandle VulkanRenderDevice::CreateBuffer(const BufferDesc& desc)
   if (desc.usage.Contains(BufferUsage::Indirect))
     usage |= vk::BufferUsageFlagBits::eIndirectBuffer;
   vk::BufferCreateInfo info({}, desc.size, usage, vk::SharingMode::eExclusive);
+  if (d.queueFamilies.size() > 1)
+    info.setSharingMode(vk::SharingMode::eConcurrent)
+        .setQueueFamilyIndices(d.queueFamilies);
   VmaAllocationCreateInfo allocation{};
   allocation.usage = VMA_MEMORY_USAGE_AUTO;
-  allocation.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
+  const bool readable = (desc.memory.requiredAccess & MemoryAccess::CPURead) !=
+                        MemoryAccess::None;
+  const bool writable = (desc.memory.requiredAccess & MemoryAccess::CPUWrite) !=
+                        MemoryAccess::None;
+  if (readable || writable)
+  {
+    allocation.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+    allocation.flags =
+        (readable ? VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT
+                  : VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+  }
+  else
+  {
+    allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+  }
   vk::Buffer::CType native{};
   Impl::Buffer buffer;
   VmaAllocationInfo mapped{};
@@ -842,17 +1134,48 @@ BufferHandle VulkanRenderDevice::CreateBuffer(const BufferDesc& desc)
       reinterpret_cast<const vk::BufferCreateInfo::NativeType*>(&info),
       &allocation, &native, &buffer.allocation, &mapped));
   buffer.native = vk::Buffer(native);
-  buffer.mapped = mapped.pMappedData;
   buffer.desc = {desc.size, desc.usage, desc.memory};
   auto handle = d.Handle<BufferHandle>(d.nextBuffer);
   try
   {
     if (!desc.initialData.empty())
     {
-      std::memcpy(buffer.mapped, desc.initialData.data(),
-                  desc.initialData.size());
-      AllocationCheck(vmaFlushAllocation(d.allocator, buffer.allocation, 0,
-                                         desc.initialData.size()));
+      if (readable || writable)
+      {
+        void* initialMapping{};
+        AllocationCheck(
+            vmaMapMemory(d.allocator, buffer.allocation, &initialMapping));
+        std::memcpy(initialMapping, desc.initialData.data(),
+                    desc.initialData.size());
+        const auto flushed = vmaFlushAllocation(d.allocator, buffer.allocation,
+                                                0, desc.initialData.size());
+        vmaUnmapMemory(d.allocator, buffer.allocation);
+        AllocationCheck(flushed);
+      }
+      else
+      {
+        const auto staging = CreateBuffer(
+            {.size = desc.initialData.size(),
+             .usage = BufferUsage::TransferSrc,
+             .initialData = desc.initialData,
+             .memory = {.requiredAccess = MemoryAccess::CPUWrite}});
+        try
+        {
+          d.Run(
+              [&](vk::CommandBuffer cmd)
+              {
+                cmd.copyBuffer(d.buffers.at(staging).native, buffer.native,
+                               vk::BufferCopy(0, 0, desc.initialData.size()),
+                               d.dispatch);
+              });
+        }
+        catch (...)
+        {
+          DestroyBuffer(staging);
+          throw;
+        }
+        DestroyBuffer(staging);
+      }
     }
     d.buffers.emplace(handle, buffer);
   }
@@ -863,83 +1186,99 @@ BufferHandle VulkanRenderDevice::CreateBuffer(const BufferDesc& desc)
   }
   return handle;
 }
-void VulkanRenderDevice::UpdateBuffer(BufferHandle h, std::uint64_t offset,
-                                      std::span<const std::byte> bytes)
+std::span<std::byte> VulkanRenderDevice::MapMemory(BufferHandle h)
 {
-  auto& d = *m_impl;
-  auto& b = d.buffers.at(h);
-  Require(offset <= b.desc.size && bytes.size() <= b.desc.size - offset,
-          "Buffer update exceeds allocation");
-  if (bytes.empty())
-    return;
-  WaitIdle();
-  std::memcpy(static_cast<std::byte*>(b.mapped) + offset, bytes.data(),
-              bytes.size());
-  AllocationCheck(
-      vmaFlushAllocation(d.allocator, b.allocation, offset, bytes.size()));
+  auto& b = m_impl->buffers.at(h);
+  void* mapped{};
+  AllocationCheck(vmaMapMemory(m_impl->allocator, b.allocation, &mapped));
+  return {static_cast<std::byte*>(mapped), size_t(b.desc.size)};
 }
-std::span<std::byte> VulkanRenderDevice::MapStreamingBuffer(BufferHandle handle)
+void VulkanRenderDevice::UnmapMemory(BufferHandle h)
 {
-  auto& buffer = m_impl->buffers.at(handle);
-  Require(buffer.mapped && (buffer.desc.memory.requiredAccess &
-                            MemoryAccess::CPUWrite) != MemoryAccess::None,
-          "Buffer was not created for CPU streaming");
-  return {static_cast<std::byte*>(buffer.mapped), size_t(buffer.desc.size)};
+  vmaUnmapMemory(m_impl->allocator, m_impl->buffers.at(h).allocation);
 }
-std::uint64_t VulkanRenderDevice::StreamingBufferAlignment() const
-{
-  const auto& limits = m_impl->properties.limits;
-  return std::max(std::uint64_t(limits.nonCoherentAtomSize),
-                  std::uint64_t(limits.minUniformBufferOffsetAlignment));
-}
-void VulkanRenderDevice::PublishStreamingWrites(BufferHandle handle,
+void VulkanRenderDevice::FlushMappedMemoryRange(BufferHandle h,
                                                 std::uint64_t offset,
-                                                std::uint64_t bytes)
+                                                std::uint64_t size)
 {
-  auto& d = *m_impl;
-  const auto& buffer = d.buffers.at(handle);
-  Require(buffer.mapped && offset <= buffer.desc.size &&
-              bytes <= buffer.desc.size - offset,
-          "Invalid streaming buffer publication");
-  AllocationCheck(
-      vmaFlushAllocation(d.allocator, buffer.allocation, offset, bytes));
-  // Host writes are flushed before subsequent queue submissions. The caller
-  // exclusively owns this atom-aligned range; no previous submission reads it.
+  AllocationCheck(vmaFlushAllocation(
+      m_impl->allocator, m_impl->buffers.at(h).allocation, offset, size));
 }
-std::uint64_t VulkanRenderDevice::InsertCompletionMarker()
+void VulkanRenderDevice::InvalidateMappedMemoryRange(BufferHandle h,
+                                                     std::uint64_t offset,
+                                                     std::uint64_t size)
 {
-  auto& d = *m_impl;
-  const auto marker = d.device.createFence({}, nullptr, d.dispatch);
-  try
-  {
-    d.queue.submit2(vk::SubmitInfo2{}, marker, d.dispatch);
-  }
-  catch (...)
-  {
-    d.device.destroyFence(marker, nullptr, d.dispatch);
-    throw;
-  }
-  const auto id = d.nextCompletionMarker++;
-  d.completionMarkers.emplace(id, marker);
-  return id;
+  AllocationCheck(vmaInvalidateAllocation(
+      m_impl->allocator, m_impl->buffers.at(h).allocation, offset, size));
 }
-bool VulkanRenderDevice::PollCompletionMarker(std::uint64_t id)
+FenceHandle VulkanRenderDevice::CreateFence(bool signaled)
 {
   auto& d = *m_impl;
-  const auto status =
-      d.device.getFenceStatus(d.completionMarkers.at(id), d.dispatch);
-  Require(status == vk::Result::eSuccess || status == vk::Result::eNotReady,
-          "GPU completion marker failed");
-  return status == vk::Result::eSuccess;
+  auto h = d.Handle<FenceHandle>(d.nextFence);
+  d.fences.emplace(
+      h, d.device.createFence(
+             vk::FenceCreateInfo(signaled ? vk::FenceCreateFlagBits::eSignaled
+                                          : vk::FenceCreateFlags{}),
+             nullptr, d.dispatch));
+  return h;
 }
-void VulkanRenderDevice::ReleaseCompletionMarker(std::uint64_t id)
+void VulkanRenderDevice::DestroyFence(FenceHandle h)
+{
+  m_impl->device.destroyFence(m_impl->fences.at(h), nullptr, m_impl->dispatch);
+  m_impl->fences.erase(h);
+}
+void VulkanRenderDevice::ResetFence(FenceHandle h)
+{
+  m_impl->device.resetFences(m_impl->fences.at(h), m_impl->dispatch);
+}
+bool VulkanRenderDevice::GetFenceStatus(FenceHandle h)
+{
+  return m_impl->device.getFenceStatus(
+             m_impl->fences.at(h), m_impl->dispatch) == vk::Result::eSuccess;
+}
+bool VulkanRenderDevice::WaitForFence(FenceHandle h, std::uint64_t timeout)
+{
+  return m_impl->device.waitForFences(m_impl->fences.at(h), true, timeout,
+                                      m_impl->dispatch) == vk::Result::eSuccess;
+}
+SemaphoreHandle VulkanRenderDevice::CreateSemaphore(SemaphoreType type,
+                                                    std::uint64_t initialValue)
 {
   auto& d = *m_impl;
-  const auto it = d.completionMarkers.find(id);
-  if (it == d.completionMarkers.end())
-    return;
-  d.device.destroyFence(it->second, nullptr, d.dispatch);
-  d.completionMarkers.erase(it);
+  auto h = d.Handle<SemaphoreHandle>(d.nextSemaphore);
+  vk::SemaphoreTypeCreateInfo kind(type == SemaphoreType::Timeline
+                                       ? vk::SemaphoreType::eTimeline
+                                       : vk::SemaphoreType::eBinary,
+                                   initialValue);
+  vk::SemaphoreCreateInfo info;
+  info.pNext = &kind;
+  d.semaphores.emplace(h, d.device.createSemaphore(info, nullptr, d.dispatch));
+  return h;
+}
+void VulkanRenderDevice::DestroySemaphore(SemaphoreHandle h)
+{
+  m_impl->device.destroySemaphore(m_impl->semaphores.at(h), nullptr,
+                                  m_impl->dispatch);
+  m_impl->semaphores.erase(h);
+}
+std::uint64_t VulkanRenderDevice::GetSemaphoreCounterValue(SemaphoreHandle h)
+{
+  return m_impl->device.getSemaphoreCounterValue(m_impl->semaphores.at(h),
+                                                 m_impl->dispatch);
+}
+void VulkanRenderDevice::SignalSemaphore(SemaphoreHandle h, std::uint64_t value)
+{
+  m_impl->device.signalSemaphore(
+      vk::SemaphoreSignalInfo(m_impl->semaphores.at(h), value),
+      m_impl->dispatch);
+}
+bool VulkanRenderDevice::WaitSemaphore(SemaphoreHandle h, std::uint64_t value,
+                                       std::uint64_t timeout)
+{
+  auto semaphore = m_impl->semaphores.at(h);
+  return m_impl->device.waitSemaphores(
+             vk::SemaphoreWaitInfo({}, 1, &semaphore, &value), timeout,
+             m_impl->dispatch) == vk::Result::eSuccess;
 }
 std::optional<BufferMetadata>
 VulkanRenderDevice::GetBufferDesc(BufferHandle h) const noexcept
@@ -958,7 +1297,6 @@ void VulkanRenderDevice::DestroyBuffer(BufferHandle h)
   auto it = d.buffers.find(h);
   if (it == d.buffers.end())
     return;
-  WaitIdle();
   vmaDestroyBuffer(d.allocator,
                    static_cast<vk::Buffer::CType>(it->second.native),
                    it->second.allocation);
@@ -1000,6 +1338,9 @@ ImageHandle VulkanRenderDevice::CreateImage(const ImageDesc& desc)
       .setTiling(vk::ImageTiling::eOptimal)
       .setUsage(usage)
       .setSharingMode(vk::SharingMode::eExclusive);
+  if (d.queueFamilies.size() > 1)
+    info.setSharingMode(vk::SharingMode::eConcurrent)
+        .setQueueFamilyIndices(d.queueFamilies);
   VmaAllocationCreateInfo allocation{};
   allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
   vk::Image::CType native{};
@@ -1118,7 +1459,6 @@ void VulkanRenderDevice::DestroyImageView(ImageViewHandle h)
     return;
   Require(!d.images.at(it->second.desc.image).swap,
           "Swapchain owns this image view");
-  WaitIdle();
   d.device.destroyImageView(it->second.native, nullptr, d.dispatch);
   d.views.erase(it);
 }
@@ -1129,7 +1469,6 @@ void VulkanRenderDevice::DestroyImage(ImageHandle h)
   if (it == d.images.end())
     return;
   Require(!it->second.swap, "Swapchain owns this image");
-  WaitIdle();
   for (auto v = d.views.begin(); v != d.views.end();)
     if (v->second.desc.image == h)
     {
@@ -1163,7 +1502,10 @@ std::vector<std::byte> VulkanRenderDevice::ReadImage(ImageHandle h)
   const auto size =
       static_cast<std::size_t>(image.desc.width) * image.desc.height * 4;
   auto staging =
-      CreateBuffer({.size = size, .usage = BufferUsage::TransferDst});
+      CreateBuffer({.size = size,
+                    .usage = BufferUsage::TransferDst,
+                    .memory = {.requiredAccess = MemoryAccess::CPURead |
+                                                 MemoryAccess::GPUWrite}});
   std::vector<std::byte> result(size);
   try
   {
@@ -1189,7 +1531,9 @@ std::vector<std::byte> VulkanRenderDevice::ReadImage(ImageHandle h)
     auto& buffer = d.buffers.at(staging);
     AllocationCheck(
         vmaInvalidateAllocation(d.allocator, buffer.allocation, 0, size));
-    std::memcpy(result.data(), buffer.mapped, size);
+    auto mapped = MapMemory(staging);
+    std::memcpy(result.data(), mapped.data(), size);
+    UnmapMemory(staging);
     DestroyBuffer(staging);
   }
   catch (...)
@@ -1328,7 +1672,6 @@ void VulkanRenderDevice::UpdateDescriptorSet(
   auto& d = *m_impl;
   auto& set = d.sets.at(h);
   const auto& layout = d.setLayouts.at(set.layout);
-  WaitIdle();
   for (const auto& write : writes)
   {
     const auto& binding = layout.bindings.at(write.binding);
@@ -1470,7 +1813,6 @@ void VulkanRenderDevice::DestroyPipeline(GraphicsPipelineHandle h)
   auto it = d.pipelines.find(h);
   if (it == d.pipelines.end())
     return;
-  WaitIdle();
   for (auto shader : it->second.shaders)
     if (shader)
       d.device.destroyShaderEXT(shader, nullptr, d.dispatch);
@@ -1482,7 +1824,6 @@ void VulkanRenderDevice::DestroyDescriptorSet(DescriptorSetHandle h)
   auto it = d.sets.find(h);
   if (it == d.sets.end())
     return;
-  WaitIdle();
   d.device.freeDescriptorSets(d.descriptorPool, it->second.native, d.dispatch);
   d.sets.erase(it);
 }
@@ -1492,7 +1833,6 @@ void VulkanRenderDevice::DestroyDescriptorSetLayout(DescriptorSetLayoutHandle h)
   auto it = d.setLayouts.find(h);
   if (it == d.setLayouts.end())
     return;
-  WaitIdle();
   d.device.destroyDescriptorSetLayout(it->second.native, nullptr, d.dispatch);
   d.setLayouts.erase(it);
 }
@@ -1502,7 +1842,6 @@ void VulkanRenderDevice::DestroyPipelineLayout(PipelineLayoutHandle h)
   auto it = d.layouts.find(h);
   if (it == d.layouts.end())
     return;
-  WaitIdle();
   d.device.destroyPipelineLayout(it->second.native, nullptr, d.dispatch);
   d.layouts.erase(it);
 }
@@ -1512,7 +1851,6 @@ void VulkanRenderDevice::DestroySampler(SamplerHandle h)
   auto it = d.samplers.find(h);
   if (it == d.samplers.end())
     return;
-  WaitIdle();
   d.device.destroySampler(it->second, nullptr, d.dispatch);
   d.samplers.erase(it);
 }
@@ -1538,6 +1876,7 @@ struct VulkanCommandList::Impl
   VulkanRenderDevice* owner;
   VulkanRenderDevice::Impl& d;
   vk::CommandPool pool;
+  std::uint32_t family;
   vk::CommandBuffer command;
   bool recording{}, complete{}, logicalRendering{}, nativeRendering{};
   RenderPassDesc pass;
@@ -1558,11 +1897,13 @@ struct VulkanCommandList::Impl
   SamplerHandle legacySampler;
   DescriptorSetHandle legacySet;
   GraphicsPipelineHandle legacyPipeline;
-  explicit Impl(VulkanRenderDevice& device) : owner(&device), d(*device.m_impl)
+  explicit Impl(VulkanRenderDevice& device, std::uint32_t queueIndex)
+      : owner(&device), d(*device.m_impl),
+        family(d.queues.at(queueIndex).family)
   {
     pool = d.device.createCommandPool(
         vk::CommandPoolCreateInfo(
-            vk::CommandPoolCreateFlagBits::eResetCommandBuffer, d.family),
+            vk::CommandPoolCreateFlagBits::eResetCommandBuffer, family),
         nullptr, d.dispatch);
     try
     {
@@ -1822,8 +2163,9 @@ struct VulkanCommandList::Impl
   }
 };
 
-VulkanCommandList::VulkanCommandList(VulkanRenderDevice& device)
-    : m_impl(std::make_unique<Impl>(device))
+VulkanCommandList::VulkanCommandList(VulkanRenderDevice& device,
+                                     std::uint32_t queueIndex)
+    : m_impl(std::make_unique<Impl>(device, queueIndex))
 {
 }
 VulkanCommandList::~VulkanCommandList() = default;
@@ -2059,7 +2401,8 @@ void VulkanCommandList::DrawIndexedRange(std::uint32_t count,
   c.GraphicsState(c.d.pipelines.at(c.pipeline).desc.topology);
   c.command.drawIndexed(count, 1, first, base, 0, c.d.dispatch);
 }
-void VulkanCommandList::MultiDrawIndexedIndirect(BufferHandle buffer, std::uint32_t count)
+void VulkanCommandList::MultiDrawIndexedIndirect(BufferHandle buffer,
+                                                 std::uint32_t count)
 {
   auto& c = *m_impl;
   c.RequireRecording();
@@ -2067,12 +2410,14 @@ void VulkanCommandList::MultiDrawIndexedIndirect(BufferHandle buffer, std::uint3
   c.GraphicsState(c.d.pipelines.at(c.pipeline).desc.topology);
   const auto native = c.d.buffers.at(buffer).native;
   const auto features = c.d.physical.getFeatures(c.d.dispatch);
-  const auto limit = c.d.physical.getProperties(c.d.dispatch).limits.maxDrawIndirectCount;
+  const auto limit =
+      c.d.physical.getProperties(c.d.dispatch).limits.maxDrawIndirectCount;
   const std::uint32_t batch = features.multiDrawIndirect ? limit : 1;
   for (std::uint32_t first = 0; first < count;)
   {
     const auto n = std::min(batch, count - first);
-    c.command.drawIndexedIndirect(native, vk::DeviceSize(first) * 20, n, 20, c.d.dispatch);
+    c.command.drawIndexedIndirect(native, vk::DeviceSize(first) * 20, n, 20,
+                                  c.d.dispatch);
     first += n;
   }
 }
@@ -2084,6 +2429,38 @@ void VulkanCommandList::Dispatch(std::uint32_t x, std::uint32_t y,
   Require(!c.logicalRendering && c.d.pipelines.at(c.pipeline).compute,
           "Dispatch requires compute shaders outside rendering");
   c.command.dispatch(x, y, z, c.d.dispatch);
+}
+void VulkanCommandList::CopyBuffer(BufferHandle src, BufferHandle dst,
+                                   std::uint64_t srcOffset,
+                                   std::uint64_t dstOffset, std::uint64_t bytes)
+{
+  auto& c = *m_impl;
+  c.RequireRecording();
+  const auto& a = c.d.buffers.at(src);
+  const auto& b = c.d.buffers.at(dst);
+  Require(!c.logicalRendering && src != dst && bytes &&
+              !((srcOffset | dstOffset | bytes) & 3) &&
+              a.desc.usage.Contains(BufferUsage::TransferSrc) &&
+              b.desc.usage.Contains(BufferUsage::TransferDst) &&
+              srcOffset <= a.desc.size && bytes <= a.desc.size - srcOffset &&
+              dstOffset <= b.desc.size && bytes <= b.desc.size - dstOffset,
+          "Invalid buffer copy");
+  c.buffersUsed.insert(src);
+  c.buffersUsed.insert(dst);
+  c.command.copyBuffer(a.native, b.native,
+                       vk::BufferCopy(srcOffset, dstOffset, bytes),
+                       c.d.dispatch);
+  vk::MemoryBarrier2 barrier;
+  barrier.setSrcStageMask(vk::PipelineStageFlagBits2::eTransfer)
+      .setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite)
+      .setDstStageMask(vk::PipelineStageFlagBits2::eAllCommands |
+                       vk::PipelineStageFlagBits2::eHost)
+      .setDstAccessMask(vk::AccessFlagBits2::eMemoryRead |
+                        vk::AccessFlagBits2::eMemoryWrite |
+                        vk::AccessFlagBits2::eHostRead);
+  vk::DependencyInfo dep;
+  dep.setMemoryBarriers(barrier);
+  c.command.pipelineBarrier2(dep, c.d.dispatch);
 }
 void VulkanCommandList::BlitImage(ImageHandle src, ImageHandle dst,
                                   const BlitRegion& region, ImageFilter filter)
@@ -2200,49 +2577,108 @@ void VulkanCommandList::BindTexture(std::uint32_t slot, ImageHandle image)
       DescriptorImageInfo{existing->first, c.legacySampler};
   BindDescriptorSet(0, c.legacySet);
 }
-std::unique_ptr<IRenderCommandList>
-VulkanRenderDevice::CreateCommandList(QueueType)
+void VulkanCommandList::PushDebugGroup(std::string_view name,
+                                       std::array<float, 4> color)
 {
-  return std::make_unique<VulkanCommandList>(*this);
+  auto& c = *m_impl;
+  if (!c.d.dispatch.vkCmdBeginDebugUtilsLabelEXT)
+    return;
+  const std::string label(name);
+  c.command.beginDebugUtilsLabelEXT(
+      vk::DebugUtilsLabelEXT(label.c_str(), color), c.d.dispatch);
 }
-void VulkanRenderDevice::Submit(const IRenderCommandList& list)
+void VulkanCommandList::PopDebugGroup()
 {
-  const auto* native = dynamic_cast<const VulkanCommandList*>(&list);
-  Require(native && native->m_impl->owner == this, "Cross-device command list");
-  auto& c = *native->m_impl;
-  auto& d = *m_impl;
-  Require(c.complete && !c.recording,
-          "Submit requires completed native recording");
-  for (const auto& [h, state] : c.states)
-    Require(d.images.contains(h) && d.images.at(h).layout == state.initial,
-            "Image changed after command recording; record command lists in "
-            "submission order");
-  for (auto h : c.buffersUsed)
-    Require(d.buffers.contains(h), "Recorded buffer was destroyed");
-  for (auto h : c.pipelinesUsed)
-    Require(d.pipelines.contains(h), "Recorded shaders were destroyed");
-  for (auto h : c.setsUsed)
+  auto& c = *m_impl;
+  if (c.d.dispatch.vkCmdEndDebugUtilsLabelEXT)
+    c.command.endDebugUtilsLabelEXT(c.d.dispatch);
+}
+void VulkanCommandList::InsertDebugMarker(std::string_view name,
+                                          std::array<float, 4> color)
+{
+  auto& c = *m_impl;
+  if (!c.d.dispatch.vkCmdInsertDebugUtilsLabelEXT)
+    return;
+  const std::string label(name);
+  c.command.insertDebugUtilsLabelEXT(
+      vk::DebugUtilsLabelEXT(label.c_str(), color), c.d.dispatch);
+}
+std::unique_ptr<IRenderCommandList>
+VulkanRenderDevice::CreateCommandList(std::uint32_t queueIndex)
+{
+  return std::make_unique<VulkanCommandList>(*this, queueIndex);
+}
+void VulkanRenderDevice::Queue::Submit(const QueueSubmitInfo& submission,
+                                       FenceHandle fence)
+{
+  auto& d = *device.m_impl;
+  Map<ImageHandle, vk::ImageLayout> layouts;
+  std::unordered_set<SwapchainHandle> consumed, written;
+  std::vector<vk::CommandBufferSubmitInfo> commandInfos;
+  std::vector<vk::SemaphoreSubmitInfo> waitInfos, signalInfos;
+  for (const auto& w : submission.waits)
+    waitInfos.emplace_back(
+        d.semaphores.at(w.semaphore), w.value,
+        vk::PipelineStageFlags2(static_cast<VkPipelineStageFlags2>(w.stage)));
+  for (const auto& w : submission.signals)
+    signalInfos.emplace_back(
+        d.semaphores.at(w.semaphore), w.value,
+        vk::PipelineStageFlags2(static_cast<VkPipelineStageFlags2>(w.stage)));
+  for (const auto* list : submission.commandLists)
   {
-    const auto& set = d.sets.at(h);
-    for (const auto& [binding, desc] : d.setLayouts.at(set.layout).bindings)
-      for (unsigned i = 0; i < desc.count; ++i)
-        Require(set.resources.contains({binding, i}),
-                "Descriptor contains an uninitialized binding");
+    const auto* native = dynamic_cast<const VulkanCommandList*>(list);
+    Require(native && native->m_impl->owner == &device,
+            "Cross-device command list");
+    auto& c = *native->m_impl;
+    Require(c.family == family,
+            "Command list pool belongs to another queue family");
+    Require(c.complete && !c.recording,
+            "Submit requires completed native recording");
+    for (const auto& [h, state] : c.states)
+      Require(
+          d.images.contains(h) &&
+              (layouts.contains(h) ? layouts.at(h) : d.images.at(h).layout) ==
+                  state.initial,
+          "Image changed after command recording; record command lists in "
+          "submission order");
+    for (auto h : c.buffersUsed)
+      Require(d.buffers.contains(h), "Recorded buffer was destroyed");
+    for (auto h : c.pipelinesUsed)
+      Require(d.pipelines.contains(h), "Recorded shaders were destroyed");
+    for (auto h : c.setsUsed)
+    {
+      const auto& set = d.sets.at(h);
+      for (const auto& [binding, desc] : d.setLayouts.at(set.layout).bindings)
+        for (unsigned i = 0; i < desc.count; ++i)
+          Require(set.resources.contains({binding, i}),
+                  "Descriptor contains an uninitialized binding");
+    }
+    std::vector<vk::Semaphore> waits;
+    for (auto h : c.touched)
+    {
+      auto* swap = d.Find(h);
+      Require(swap && swap->acquired, "Acquired swapchain was destroyed");
+      if (swap->waitPending && consumed.insert(h).second)
+        waits.push_back(swap->available);
+    }
+    for (auto semaphore : waits)
+      waitInfos.emplace_back(semaphore, 0,
+                             vk::PipelineStageFlagBits2::eAllCommands);
+    commandInfos.emplace_back(c.command);
+    for (const auto& [h, state] : c.states)
+      layouts[h] = state.current;
+    written.insert(c.written.begin(), c.written.end());
   }
-  std::vector<vk::Semaphore> waits;
-  for (auto h : c.touched)
-  {
-    auto* swap = d.Find(h);
-    Require(swap && swap->acquired, "Acquired swapchain was destroyed");
-    if (swap->waitPending)
-      waits.push_back(swap->available);
-  }
-  d.Execute(c.command, waits);
-  for (const auto& [h, state] : c.states)
-    d.images.at(h).layout = state.current;
-  for (auto h : c.touched)
+  vk::SubmitInfo2 submit;
+  submit.setWaitSemaphoreInfos(waitInfos)
+      .setCommandBufferInfos(commandInfos)
+      .setSignalSemaphoreInfos(signalInfos);
+  native.submit2(submit, fence ? d.fences.at(fence) : vk::Fence{}, d.dispatch);
+  for (auto [h, layout] : layouts)
+    d.images.at(h).layout = layout;
+  for (auto h : consumed)
     d.Find(h)->waitPending = false;
-  for (auto h : c.written)
+  for (auto h : written)
     d.Find(h)->ready = true;
 }
 
@@ -2309,6 +2745,9 @@ void VulkanRenderDevice::Impl::MakeSwapImages(SwapchainHandle handle)
       .setPresentMode(mode)
       .setClipped(true)
       .setOldSwapchain(swap.native);
+  if (queueFamilies.size() > 1)
+    create.setImageSharingMode(vk::SharingMode::eConcurrent)
+        .setQueueFamilyIndices(queueFamilies);
   auto replacement = device.createSwapchainKHR(create, nullptr, dispatch);
   DropSwapImages(swap);
   if (swap.native)
@@ -2360,7 +2799,12 @@ VulkanRenderDevice::EnumerateAvailableSwapchainFormats(Window& window)
     const auto caps = d.physical.getSurfaceCapabilitiesKHR(surface, d.dispatch);
     const auto usage = vk::ImageUsageFlagBits::eColorAttachment |
                        vk::ImageUsageFlagBits::eTransferDst;
-    if (d.physical.getSurfaceSupportKHR(d.family, surface, d.dispatch) &&
+    if (std::any_of(d.queues.begin(), d.queues.end(),
+                    [&](const auto& q)
+                    {
+                      return d.physical.getSurfaceSupportKHR(q.family, surface,
+                                                             d.dispatch);
+                    }) &&
         (caps.supportedUsageFlags & usage) == usage)
     {
       const auto formats = d.physical.getSurfaceFormatsKHR(surface, d.dispatch);
@@ -2389,22 +2833,18 @@ VulkanRenderDevice::GetSwapchainInfo(SwapchainHandle handle) const
 }
 
 SwapchainHandle
-VulkanRenderDevice::CreateSwapchain(Window& window,
+VulkanRenderDevice::CreateSwapchain(SurfaceHandle surface,
                                     const SwapchainConfig& config)
 {
   auto& d = *m_impl;
   Require(d.swapchainEnabled && config.minImageCount > 0,
           "Vulkan swapchain unavailable or invalid image count");
   auto state = std::make_unique<Impl::Swap>();
-  state->window = static_cast<GLFWwindow*>(window.NativeHandle());
+  const auto& target = d.surfaces.at(surface);
+  state->window = target.window;
+  state->surface = target.native;
+  state->surfaceHandle = surface;
   state->config = config;
-  // The platform adapter exposes a C signature; the surface itself is Hpp.
-  const auto result = static_cast<vk::Result>(glfwCreateWindowSurface(
-      static_cast<vk::Instance::CType>(d.instance), state->window, nullptr,
-      reinterpret_cast<vk::SurfaceKHR::CType*>(&state->surface)));
-  Require(result == vk::Result::eSuccess,
-          ("GLFW Vulkan surface creation failed: " + vk::to_string(result))
-              .c_str());
   unsigned index = 0;
   while (index < d.swaps.size() && d.swaps[index].value)
     ++index;
@@ -2415,8 +2855,13 @@ VulkanRenderDevice::CreateSwapchain(Window& window,
   try
   {
     auto& swap = *d.Find(handle);
-    Require(d.physical.getSurfaceSupportKHR(d.family, swap.surface, d.dispatch),
-            "The single graphics queue cannot present to this surface");
+    Require(std::any_of(d.queues.begin(), d.queues.end(),
+                        [&](const auto& q)
+                        {
+                          return d.physical.getSurfaceSupportKHR(
+                              q.family, swap.surface, d.dispatch);
+                        }),
+            "No created queue can present to this surface");
     swap.available = d.device.createSemaphore({}, nullptr, d.dispatch);
     d.MakeSwapImages(handle);
   }
@@ -2433,6 +2878,12 @@ VulkanRenderDevice::AcquireSwapchainImage(SwapchainHandle handle)
   auto& d = *m_impl;
   auto* swap = d.Find(handle);
   Require(swap && !swap->acquired, "Invalid or already acquired swapchain");
+  // Reuse the acquire semaphore and transition command only after the previous
+  // submission consumed acquisition and completed its presentation transition.
+  if (swap->presentFence)
+    Require(d.device.waitForFences(swap->presentFence, true, UINT64_MAX,
+                                   d.dispatch) == vk::Result::eSuccess,
+            "Presentation transition did not complete");
   int width{}, height{};
   glfwGetFramebufferSize(swap->window, &width, &height);
   Require(width > 0 && height > 0, "Cannot acquire minimized swapchain");
@@ -2470,12 +2921,16 @@ bool VulkanRenderDevice::DestroySwapchain(SwapchainHandle handle)
   if (swap->waitPending)
     d.Run([](auto) {}, {swap->available});
   d.DropSwapImages(*swap);
+  if (swap->presentCommand)
+    d.device.freeCommandBuffers(d.immediatePool, swap->presentCommand,
+                                d.dispatch);
+  if (swap->presentFence)
+    d.device.destroyFence(swap->presentFence, nullptr, d.dispatch);
   if (swap->native)
     d.device.destroySwapchainKHR(swap->native, nullptr, d.dispatch);
   if (swap->available)
     d.device.destroySemaphore(swap->available, nullptr, d.dispatch);
-  if (swap->surface)
-    d.instance.destroySurfaceKHR(swap->surface, nullptr, d.dispatch);
+
   auto& slot = d.swaps[handle.index];
   slot.value.reset();
   if (++slot.generation == 0)
@@ -2486,21 +2941,55 @@ bool VulkanRenderDevice::IsValid(SwapchainHandle h) const noexcept
 {
   return m_impl->Find(h) != nullptr;
 }
-void VulkanRenderDevice::Present(SwapchainHandle handle)
+void VulkanRenderDevice::Queue::Present(
+    SwapchainHandle handle, std::span<const SemaphoreHandle> waitSemaphores)
 {
-  auto& d = *m_impl;
+  auto& d = *device.m_impl;
   auto* swap = d.Find(handle);
   Require(swap && swap->acquired && swap->ready,
           "Present requires submitted swapchain work");
+  Require(d.physical.getSurfaceSupportKHR(family, swap->surface, d.dispatch),
+          "Queue cannot present to this surface");
   auto image = swap->images[swap->current];
   auto& state = d.images.at(image);
   std::vector<vk::Semaphore> waits;
+  for (auto semaphore : waitSemaphores)
+    waits.push_back(d.semaphores.at(semaphore));
   if (swap->waitPending)
     waits.push_back(swap->available);
-  d.Run(
-      [&](auto cmd)
-      { d.Barrier(cmd, image, state.layout, vk::ImageLayout::ePresentSrcKHR); },
-      waits, {swap->finished.at(swap->current)});
+  if (!swap->presentFence)
+  {
+    swap->presentFence = d.device.createFence(
+        vk::FenceCreateInfo(vk::FenceCreateFlagBits::eSignaled), nullptr,
+        d.dispatch);
+    swap->presentCommand =
+        d.device
+            .allocateCommandBuffers(
+                vk::CommandBufferAllocateInfo(
+                    d.immediatePool, vk::CommandBufferLevel::ePrimary, 1),
+                d.dispatch)
+            .front();
+  }
+  auto cmd = swap->presentCommand;
+  cmd.reset({}, d.dispatch);
+  cmd.begin(vk::CommandBufferBeginInfo(
+                vk::CommandBufferUsageFlagBits::eOneTimeSubmit),
+            d.dispatch);
+  d.Barrier(cmd, image, state.layout, vk::ImageLayout::ePresentSrcKHR);
+  cmd.end(d.dispatch);
+  std::vector<vk::SemaphoreSubmitInfo> waitInfos;
+  for (auto semaphore : waits)
+    waitInfos.emplace_back(semaphore, 0,
+                           vk::PipelineStageFlagBits2::eAllCommands);
+  vk::CommandBufferSubmitInfo commandInfo(cmd);
+  vk::SemaphoreSubmitInfo signal(swap->finished.at(swap->current), 0,
+                                 vk::PipelineStageFlagBits2::eAllCommands);
+  vk::SubmitInfo2 submit;
+  submit.setWaitSemaphoreInfos(waitInfos)
+      .setCommandBufferInfos(commandInfo)
+      .setSignalSemaphoreInfos(signal);
+  d.device.resetFences(swap->presentFence, d.dispatch);
+  d.queue.submit2(submit, swap->presentFence, d.dispatch);
   state.layout = vk::ImageLayout::ePresentSrcKHR;
   swap->waitPending = false;
   vk::PresentInfoKHR present;
@@ -2510,18 +2999,20 @@ void VulkanRenderDevice::Present(SwapchainHandle handle)
   bool outOfDate = false;
   try
   {
-    const auto result = d.queue.presentKHR(present, d.dispatch);
+    const auto result = native.presentKHR(present, d.dispatch);
     outOfDate = result == vk::Result::eSuboptimalKHR;
   }
   catch (const vk::OutOfDateKHRError&)
   {
     outOfDate = true;
   }
-  d.queue.waitIdle(d.dispatch);
   swap->acquired = false;
   swap->ready = false;
   if (outOfDate)
+  {
+    d.device.waitIdle(d.dispatch);
     d.MakeSwapImages(handle);
+  }
 }
 
 #ifdef LIGHTHOUSE_IMGUI

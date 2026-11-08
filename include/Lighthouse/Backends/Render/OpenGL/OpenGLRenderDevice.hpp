@@ -26,8 +26,10 @@ class OpenGLRenderDevice final : public IRenderDevice
 {
 public:
   using IRenderDevice::CreateShaderModule;
-  explicit OpenGLRenderDevice(std::shared_ptr<Detail::OpenGLDeviceGroup> group,
-                              const DeviceConfig& config = {});
+  explicit OpenGLRenderDevice(
+      std::shared_ptr<Detail::OpenGLDeviceGroup> group,
+      const RenderDeviceCreateInfo& config,
+      std::span<const std::pair<SurfaceHandle, Window*>> surfaces = {});
   ~OpenGLRenderDevice() override;
   OpenGLRenderDevice(const OpenGLRenderDevice&) = delete;
   OpenGLRenderDevice& operator=(const OpenGLRenderDevice&) = delete;
@@ -45,15 +47,25 @@ public:
   std::vector<std::byte> ReadImage(ImageHandle) override;
   ImageViewHandle CreateImageView(const ImageViewDesc& description) override;
   BufferHandle CreateBuffer(const BufferDesc& description) override;
-  void UpdateBuffer(BufferHandle, std::uint64_t,
-                    std::span<const std::byte>) override;
-  std::span<std::byte> MapStreamingBuffer(BufferHandle) override;
-  std::uint64_t StreamingBufferAlignment() const override;
-  void PublishStreamingWrites(BufferHandle, std::uint64_t,
-                              std::uint64_t) override;
-  std::uint64_t InsertCompletionMarker() override;
-  bool PollCompletionMarker(std::uint64_t) override;
-  void ReleaseCompletionMarker(std::uint64_t) override;
+  IRenderQueue* GetQueue(std::uint32_t index) override;
+  FenceHandle CreateFence(bool signaled = false) override;
+  void DestroyFence(FenceHandle) override;
+  void ResetFence(FenceHandle) override;
+  bool GetFenceStatus(FenceHandle) override;
+  bool WaitForFence(FenceHandle, std::uint64_t timeout = UINT64_MAX) override;
+  SemaphoreHandle CreateSemaphore(SemaphoreType type = SemaphoreType::Binary,
+                                  std::uint64_t initialValue = 0) override;
+  void DestroySemaphore(SemaphoreHandle) override;
+  std::uint64_t GetSemaphoreCounterValue(SemaphoreHandle) override;
+  void SignalSemaphore(SemaphoreHandle, std::uint64_t value) override;
+  bool WaitSemaphore(SemaphoreHandle, std::uint64_t value,
+                     std::uint64_t timeout = UINT64_MAX) override;
+  std::span<std::byte> MapMemory(BufferHandle) override;
+  void UnmapMemory(BufferHandle) override;
+  void FlushMappedMemoryRange(BufferHandle, std::uint64_t offset,
+                              std::uint64_t size) override;
+  void InvalidateMappedMemoryRange(BufferHandle, std::uint64_t offset,
+                                   std::uint64_t size) override;
   std::optional<BufferMetadata>
   GetBufferDesc(BufferHandle handle) const noexcept override;
   bool IsValid(BufferHandle handle) const noexcept override;
@@ -75,7 +87,7 @@ public:
   GraphicsPipelineHandle
   CreatePipeline(const GraphicsPipelineDesc& description) override;
   std::unique_ptr<IRenderCommandList>
-  CreateCommandList(QueueType type) override;
+  CreateCommandList(std::uint32_t queueIndex) override;
   void DestroyImage(ImageHandle handle) override;
   void DestroyImageView(ImageViewHandle handle) override;
   void DestroyBuffer(BufferHandle handle) override;
@@ -86,13 +98,14 @@ public:
   void DestroyPipelineLayout(PipelineLayoutHandle handle) override;
   void DestroySampler(SamplerHandle handle) override;
   RenderCapabilities GetCapabilities() const override;
-  SwapchainHandle CreateSwapchain(Window& window,
+  SurfaceHandle CreateSurface(Window&) override;
+  void DestroySurface(SurfaceHandle) override;
+  SwapchainHandle CreateSwapchain(SurfaceHandle surface,
                                   const SwapchainConfig& config) override;
   AcquiredSwapchainImage AcquireSwapchainImage(SwapchainHandle) override;
   bool DestroySwapchain(SwapchainHandle swapchain) override;
   bool IsValid(SwapchainHandle swapchain) const noexcept override;
-  void Submit(const IRenderCommandList& commandList) override;
-  void Present(SwapchainHandle swapchain) override;
+
   void WaitIdle() override;
   ImageViewHandle AcquiredImageView(SwapchainHandle swapchain) const noexcept;
 #ifdef LIGHTHOUSE_IMGUI
@@ -104,6 +117,8 @@ public:
 #endif
 
 private:
+  class Queue;
+  std::vector<std::unique_ptr<IRenderQueue>> m_queues;
   friend class OpenGLCommandList;
   struct Impl;
   std::unique_ptr<Impl> m_impl;

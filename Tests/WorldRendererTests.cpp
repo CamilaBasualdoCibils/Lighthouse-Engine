@@ -1,3 +1,4 @@
+#include "NullSynchronizationDevice.hpp"
 #include <Lighthouse/Engine/Engine.hpp>
 
 #include <gtest/gtest.h>
@@ -49,8 +50,8 @@ TEST(WorldRendererTests, RegisteredSystemsCanBePreparedAndDispatched) {
         void DrawIndexed(std::uint32_t) override {}
         void Dispatch(std::uint32_t, std::uint32_t, std::uint32_t) override {}
     } commands;
-    struct Device final : IRenderDevice {
-        SwapchainHandle CreateSwapchain(Window&, const SwapchainConfig&) override { return {}; }
+    struct Device final : NullSynchronizationDevice {
+        SwapchainHandle CreateSwapchain(SurfaceHandle, const SwapchainConfig&) override { return {}; }
         AcquiredSwapchainImage AcquireSwapchainImage(SwapchainHandle) override { return {}; }
         bool DestroySwapchain(SwapchainHandle) override { return false; }
         bool IsValid(SwapchainHandle) const noexcept override { return false; }
@@ -70,7 +71,11 @@ TEST(WorldRendererTests, RegisteredSystemsCanBePreparedAndDispatched) {
         SamplerHandle CreateSampler(const SamplerDesc&) override { return {}; }
         void UpdateDescriptorSet(DescriptorSetHandle, std::span<const DescriptorWrite>) override {}
         GraphicsPipelineHandle CreatePipeline(const GraphicsPipelineDesc&) override { return {}; }
-        std::unique_ptr<IRenderCommandList> CreateCommandList(QueueType) override { return {}; }
+        std::unique_ptr<IRenderCommandList>
+        CreateCommandList(std::uint32_t queueIndex) override
+        {
+          return {};
+        }
         void Destroy(ImageHandle) override {}
         void Destroy(ImageViewHandle) override {}
         void Destroy(BufferHandle) override {}
@@ -81,8 +86,6 @@ TEST(WorldRendererTests, RegisteredSystemsCanBePreparedAndDispatched) {
         void Destroy(PipelineLayoutHandle) override {}
         void Destroy(SamplerHandle) override {}
         RenderCapabilities GetCapabilities() const override { return {}; }
-        void Submit(const IRenderCommandList&) override {}
-        void Present(SwapchainHandle) override {}
     } device;
     WorldDrawContext context{device};
     renderer.Run(scene, commands, context);

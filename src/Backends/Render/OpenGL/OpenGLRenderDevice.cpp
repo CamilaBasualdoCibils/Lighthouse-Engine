@@ -1,12 +1,15 @@
 #include "OpenGLCommandList.hpp"
+#include "OpenGLContextExecutor.hpp"
 #include "OpenGLDeviceGroup.hpp"
 #include "OpenGLRenderDeviceImpl.hpp"
 #include "OpenGLShaderTranslator.hpp"
+#include <Lighthouse/Backends/Render/OpenGL/OpenGLRenderDevice.hpp>
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 #include <Lighthouse/Engine/Rendering/Detail/ImGuiGlfwRouting.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
-#include <Lighthouse/Backends/Render/OpenGL/OpenGLRenderDevice.hpp>
+#include <chrono>
 #include <spirv_cross/spirv_glsl.hpp>
+#include <thread>
 
 #define GL_GLEXT_PROTOTYPES
 #include <EGL/egl.h>
@@ -37,6 +40,171 @@
 
 namespace Lighthouse
 {
+class OpenGLRenderDevice::Queue final : public IRenderQueue
+{
+  OpenGLRenderDevice& device;
+  Impl::ContextState state;
+  Impl::Execution execution;
+  SurfaceHandle presentSurface;
+  struct Flight
+  {
+    Impl::SyncPtr sync;
+    std::shared_ptr<Impl::Snapshot> snapshot;
+  };
+  std::deque<Flight> flights;
+  std::exception_ptr pendingFailure;
+  Detail::OpenGLContextExecutor worker;
+
+  void Collect()
+  {
+    while (!flights.empty())
+    {
+      const auto status = glClientWaitSync(flights.front().sync->native, 0, 0);
+      if (status == GL_WAIT_FAILED)
+        throw std::runtime_error("OpenGL completion query failed");
+      if (status == GL_TIMEOUT_EXPIRED)
+        break;
+      flights.pop_front();
+    }
+    device.m_impl->deletions->Drain();
+  }
+  void DrainGPU()
+  {
+    auto sync = device.m_impl->InsertSync();
+    if (glClientWaitSync(sync->native, 0, GL_TIMEOUT_IGNORED) == GL_WAIT_FAILED)
+      throw std::runtime_error("OpenGL queue completion wait failed");
+    flights.clear();
+    device.m_impl->deletions->Drain();
+  }
+  static void WaitPoint(const std::shared_ptr<Impl::Point>& point)
+  {
+    // Only CPU publication is coordinated here, never GPU completion. The
+    // producing submission was already reserved before this wait was accepted.
+    const auto sync = point->AwaitIssue();
+    if (sync)
+      glWaitSync(sync->native, 0, GL_TIMEOUT_IGNORED);
+  }
+
+public:
+  explicit Queue(OpenGLRenderDevice& d, SurfaceHandle surface)
+      : device(d), execution{d.m_impl.get(), &state}, presentSurface(surface),
+        worker(
+            d.m_impl->group, [this] { Impl::executing = &execution; },
+            [this]
+            {
+              try
+              {
+                DrainGPU();
+              }
+              catch (...)
+              {
+                flights.clear();
+              }
+              state.Clear();
+              device.m_impl->deletions->Drain();
+              Impl::executing = nullptr;
+            })
+  {
+  }
+  ~Queue() override
+  {
+    worker.Stop();
+  }
+  Flags<RenderQueueCapability> GetCapabilities() const noexcept override
+  {
+    Flags<RenderQueueCapability> caps{RenderQueueCapability::Graphics,
+                                      RenderQueueCapability::Compute,
+                                      RenderQueueCapability::Transfer};
+    if (device.m_impl->group->nativeDisplay)
+      caps |= RenderQueueCapability::Present;
+    return caps;
+  }
+  void CollectLater()
+  {
+    try
+    {
+      worker.Post([this] { Collect(); });
+    }
+    catch (const std::logic_error&)
+    {
+    } // Shutdown drains all retained work.
+    catch (const std::bad_alloc&)
+    {
+    } // Best-effort retirement must not change fence status.
+  }
+  void StopAccepting()
+  {
+    worker.StopAccepting();
+  }
+  void Stop()
+  {
+    worker.Stop();
+  }
+  void RetirePipeline(GraphicsPipelineHandle h)
+  {
+    worker.Post(
+        [this, h]
+        {
+          const auto found = state.vaos.find(h);
+          if (found != state.vaos.end())
+          {
+            glDeleteVertexArrays(1, &found->second);
+            state.vaos.erase(found);
+          }
+        });
+  }
+  Impl::SyncPtr Handoff()
+  {
+    return worker.Invoke(
+        [this]
+        {
+          worker.RethrowFailure();
+          Collect();
+          return device.m_impl->InsertSync();
+        });
+  }
+  void Submit(const QueueSubmitInfo&, FenceHandle) override;
+  void Present(SwapchainHandle, std::span<const SemaphoreHandle>) override;
+  void WaitIdle() override
+  {
+    worker.Invoke(
+        [this]
+        {
+          worker.RethrowFailure();
+          DrainGPU();
+          auto error = std::exchange(pendingFailure, {});
+          if (error)
+            std::rethrow_exception(error);
+        });
+  }
+};
+
+IRenderQueue* OpenGLRenderDevice::GetQueue(std::uint32_t index)
+{
+  return index < m_queues.size() ? m_queues[index].get() : nullptr;
+}
+SurfaceHandle OpenGLRenderDevice::CreateSurface(Window& window)
+{
+  Impl::Scope resourceScope(*m_impl);
+  if (!window.NativeDisplayHandle() || !window.NativeEGLWindowHandle())
+    throw std::invalid_argument(
+        "OpenGL surfaces require an EGL-enabled window");
+  m_impl->group->Initialize(window.NativeDisplayHandle());
+  if (m_impl->group->nativeDisplay != window.NativeDisplayHandle())
+    throw std::invalid_argument("Surface belongs to another EGL display");
+  const SurfaceHandle h{m_impl->nextSurface++, 1, DeviceId()};
+  m_impl->surfaces.emplace(h, &window);
+  return h;
+}
+void OpenGLRenderDevice::DestroySurface(SurfaceHandle h)
+{
+  Impl::Scope resourceScope(*m_impl);
+  for (const auto& slot : m_impl->swapchains)
+    if (slot.value && slot.value->surfaceHandle == h)
+      throw std::logic_error("Destroy swapchains before their surface");
+  m_impl->surfaces.erase(h);
+}
+
 namespace
 {
 
@@ -182,18 +350,17 @@ void OpenGLRenderDevice::Impl::DestroySwapchainImages(Swapchain& swapchain)
   ActivateContext(&swapchain);
   for (const auto& image : swapchain.images)
   {
-    glDeleteFramebuffers(1, &image.framebuffer);
-    if (const auto view = views.find(image.view); view != views.end())
+    if (const auto view = resources.views.find(image.view);
+        view != resources.views.end())
     {
-      glDeleteTextures(1, &view->second.id);
-      views.erase(view);
+      resources.views.erase(view);
     }
-    if (const auto texture = images.find(image.image); texture != images.end())
+    if (const auto texture = resources.images.find(image.image);
+        texture != resources.images.end())
     {
-      glDeleteTextures(1, &texture->second.id);
-      images.erase(texture);
+      resources.images.erase(texture);
     }
-    for (auto& [_, set] : sets)
+    for (auto& [_, set] : resources.sets)
       for (auto& [__, values] : set.resources)
         for (auto& value : values)
           if (auto info = std::get_if<DescriptorImageInfo>(&value);
@@ -222,7 +389,7 @@ void OpenGLRenderDevice::Impl::CreateSwapchainImages(Swapchain& swapchain,
       GLuint texture{}, view{};
       glCreateTextures(GL_TEXTURE_2D, 1, &texture);
       image.image = MakeHandle<ImageHandle>(nextImage++, owner);
-      images.emplace(
+      resources.images.emplace(
           image.image,
           ImageResource{
               texture,
@@ -234,19 +401,13 @@ void OpenGLRenderDevice::Impl::CreateSwapchainImages(Swapchain& swapchain,
                          swapchain.width, swapchain.height);
       glGenTextures(1, &view);
       image.view = MakeHandle<ImageViewHandle>(nextView++, owner);
-      views.emplace(image.view, ImageViewResource{view, image.image});
+      resources.views.emplace(image.view, ImageViewResource{view, image.image});
+      resources.images.at(image.image).lifetime =
+          Keep([texture] { glDeleteTextures(1, &texture); });
+      resources.views.at(image.view).lifetime =
+          Keep([view] { glDeleteTextures(1, &view); });
       glTextureView(view, GL_TEXTURE_2D, texture,
                     ToGLImageFormat(swapchain.info.imageFormat), 0, 1, 0, 1);
-      glCreateFramebuffers(1, &image.framebuffer);
-      glNamedFramebufferTexture(image.framebuffer, GL_COLOR_ATTACHMENT0, view,
-                                0);
-      glNamedFramebufferReadBuffer(image.framebuffer, GL_COLOR_ATTACHMENT0);
-      constexpr GLenum attachment = GL_COLOR_ATTACHMENT0;
-      glNamedFramebufferDrawBuffers(image.framebuffer, 1, &attachment);
-      if (glCheckNamedFramebufferStatus(image.framebuffer, GL_FRAMEBUFFER) !=
-          GL_FRAMEBUFFER_COMPLETE)
-        throw std::runtime_error(
-            "OpenGL swapchain image framebuffer is incomplete");
     }
   }
   catch (...)
@@ -260,10 +421,12 @@ void OpenGLRenderDevice::Impl::CreateSwapchainImages(Swapchain& swapchain,
 AcquiredSwapchainImage
 OpenGLRenderDevice::AcquireSwapchainImage(SwapchainHandle swapchain)
 {
+  Impl::Scope resourceScope(*m_impl);
   auto* target = m_impl->FindSwapchain(swapchain);
   if (!target)
     throw std::invalid_argument(
         "OpenGL acquire received an invalid swapchain handle");
+  std::unique_lock targetLock(target->mutex);
   if (target->acquired)
     throw std::logic_error("An OpenGL swapchain image is already acquired");
   m_impl->ActivateContext(target);
@@ -282,7 +445,6 @@ OpenGLRenderDevice::AcquireSwapchainImage(SwapchainHandle swapchain)
     // intact.
     Impl::Swapchain replacement;
     replacement.surface = target->surface;
-    replacement.context = target->context;
     replacement.info = target->info;
     m_impl->CreateSwapchainImages(replacement, count);
     m_impl->DestroySwapchainImages(*target);
@@ -291,7 +453,7 @@ OpenGLRenderDevice::AcquireSwapchainImage(SwapchainHandle swapchain)
     target->height = replacement.height;
     target->imageIndex = 0;
   }
-  m_impl->activeSwapchain = swapchain;
+  m_impl->State().activeSwapchain = swapchain;
   target->acquired = true;
   target->frameReady = false;
   const auto& image = target->images.at(target->imageIndex);
@@ -299,70 +461,146 @@ OpenGLRenderDevice::AcquireSwapchainImage(SwapchainHandle swapchain)
 }
 
 OpenGLRenderDevice::OpenGLRenderDevice(
-    std::shared_ptr<Detail::OpenGLDeviceGroup> group, const DeviceConfig&)
+    std::shared_ptr<Detail::OpenGLDeviceGroup> group,
+    const RenderDeviceCreateInfo& config,
+    std::span<const std::pair<SurfaceHandle, Window*>> surfaces)
     : m_impl(std::make_unique<Impl>(std::move(group), DeviceId()))
 {
-  m_impl->group->Initialize();
-  m_impl->ActivateContext();
+  Impl::Scope scope(*m_impl);
+  for (auto [surface, window] : surfaces)
+    m_impl->surfaces.emplace(surface, window);
+  // EGL has no maximum-context-count query. Bound dedicated worker allocation
+  // rather than attempting an unbounded preferred count.
+  constexpr std::uint32_t WorkerBudget = 64;
+  std::uint64_t minimum = 0;
+  std::vector<bool> supported;
+  for (const auto& request : config.queues)
+  {
+    if (request.minCount > request.preferredCount)
+      throw std::invalid_argument("Queue minimum exceeds preferred count");
+    minimum += request.minCount;
+    const auto bits = static_cast<std::uint32_t>(request.capabilities);
+    bool available = (bits & ~15u) == 0;
+    if (request.preferredCount &&
+        (bits & static_cast<std::uint32_t>(RenderQueueCapability::Present)))
+    {
+      const auto target = m_impl->surfaces.find(request.presentSurface);
+      if (target == m_impl->surfaces.end())
+        throw std::invalid_argument(
+            "Presentation request needs a backend-created surface");
+      available = available &&
+                  !EnumerateAvailableSwapchainFormats(*target->second).empty();
+    }
+    if (request.minCount && !available)
+      throw std::runtime_error(
+          "Required OpenGL queue capabilities unavailable");
+    supported.push_back(available);
+  }
+  if (minimum > WorkerBudget)
+    throw std::runtime_error(
+        "Required OpenGL queue count exceeds the 64-worker device budget");
+  std::vector<std::vector<std::unique_ptr<IRenderQueue>>> queues(
+      config.queues.size());
+  std::uint32_t count = 0;
+  const auto create = [&](size_t request)
+  {
+    const auto surface =
+        (static_cast<std::uint32_t>(config.queues[request].capabilities) & 8u)
+            ? config.queues[request].presentSurface
+            : SurfaceHandle{};
+    queues[request].push_back(std::make_unique<Queue>(*this, surface));
+    ++count;
+  };
+  try
+  {
+    for (size_t request = 0; request < config.queues.size(); ++request)
+      for (std::uint32_t i = 0; i < config.queues[request].minCount; ++i)
+        create(request);
+    for (size_t request = 0; request < config.queues.size(); ++request)
+    {
+      if (!supported[request])
+        continue;
+      while (queues[request].size() < config.queues[request].preferredCount &&
+             count < WorkerBudget)
+      {
+        try
+        {
+          create(request);
+        }
+        catch (const std::runtime_error&)
+        {
+          break;
+        }
+        catch (const std::bad_alloc&)
+        {
+          break;
+        }
+      }
+    }
+    m_queues.reserve(count);
+    for (auto& requested : queues)
+      for (auto& queue : requested)
+        m_queues.push_back(std::move(queue));
+  }
+  catch (...)
+  {
+    // These workers have no submitted work and need no device metadata to stop.
+    for (auto& queue : m_queues)
+      static_cast<Queue&>(*queue).StopAccepting();
+    for (auto& requested : queues)
+      for (auto& queue : requested)
+        if (queue)
+          static_cast<Queue&>(*queue).StopAccepting();
+    m_queues.clear();
+    for (auto& requested : queues)
+      requested.clear();
+    throw;
+  }
 }
 OpenGLRenderDevice::~OpenGLRenderDevice()
 {
-  if (!m_impl || !m_impl->group || m_impl->group->display == EGL_NO_DISPLAY)
-    return;
-  m_impl->ActivateContext();
-  for (const auto& [_, p] : m_impl->pipelines)
+  for (auto& queue : m_queues)
+    static_cast<Queue&>(*queue).StopAccepting();
+  for (auto& queue : m_queues)
+    static_cast<Queue&>(*queue).Stop();
+  m_queues.clear();
+  try
   {
-    if (const auto vao = p.vaos.find(SwapchainHandle{}); vao != p.vaos.end())
-      glDeleteVertexArrays(1, &vao->second);
-    glDeleteProgram(p.program);
-  }
-  for (std::uint32_t i = 0; i < m_impl->swapchains.size(); ++i)
-  {
-    auto& slot = m_impl->swapchains[i];
-    if (!slot.value)
-      continue;
-    m_impl->ActivateContext(slot.value.get());
-    m_impl->DestroySwapchainImages(*slot.value);
-    const SwapchainHandle handle{i, slot.generation, DeviceId()};
-    for (auto& [_, pipeline] : m_impl->pipelines)
+    Impl::Scope scope(*m_impl, false);
+    auto resourceCompletion = m_impl->InsertSync();
+    if (glClientWaitSync(resourceCompletion->native, 0, GL_TIMEOUT_IGNORED) ==
+        GL_WAIT_FAILED)
+      throw std::runtime_error("Resource-context shutdown wait failed");
+    for (auto& slot : m_impl->swapchains)
     {
-      if (const auto vao = pipeline.vaos.find(handle);
-          vao != pipeline.vaos.end())
-      {
-        glDeleteVertexArrays(1, &vao->second);
-        pipeline.vaos.erase(vao);
-      }
-    }
-  }
-  m_impl->ActivateContext();
-  for (const auto& [_, s] : m_impl->shaders)
-    (void)s;
-  for (const auto& [_, sampler] : m_impl->samplers)
-    glDeleteSamplers(1, &sampler);
-  for (const auto& [_, fences] : m_impl->completionMarkers)
-    for (auto fence : fences)
-      glDeleteSync(fence);
-  for (const auto& [_, b] : m_impl->buffers)
-    glDeleteBuffers(1, &b.id);
-  for (const auto& [_, v] : m_impl->views)
-    glDeleteTextures(1, &v.id);
-  for (const auto& [_, i] : m_impl->images)
-    glDeleteTextures(1, &i.id);
-  for (auto& slot : m_impl->swapchains)
-    if (slot.value)
-    {
-      if (eglGetCurrentContext() == slot.value->context)
-        eglMakeCurrent(m_impl->group->display, m_impl->group->pbuffer,
-                       m_impl->group->pbuffer, m_impl->group->shareContext);
-      eglDestroyContext(m_impl->group->display, slot.value->context);
+      if (!slot.value)
+        continue;
+      m_impl->ActivateContext();
       eglDestroySurface(m_impl->group->display, slot.value->surface);
       slot.value.reset();
     }
+    m_impl->hostState.Clear();
+    m_impl->resources = {};
+    m_impl->fences.clear();
+    m_impl->semaphores.clear();
+    m_impl->deletions->Drain();
+  }
+  catch (...)
+  {
+    // Context loss must not leave threads or native window surfaces alive.
+    for (auto& slot : m_impl->swapchains)
+      if (slot.value)
+      {
+        eglDestroySurface(m_impl->group->display, slot.value->surface);
+        slot.value.reset();
+      }
+  }
 }
 
 std::vector<SwapchainFormat>
 OpenGLRenderDevice::EnumerateAvailableSwapchainFormats(Window& window)
 {
+  Impl::Scope resourceScope(*m_impl);
   if (!window.NativeDisplayHandle() || !window.NativeEGLWindowHandle())
     throw std::invalid_argument(
         "OpenGL format query requires an EGL-enabled window");
@@ -401,14 +639,17 @@ OpenGLRenderDevice::EnumerateAvailableSwapchainFormats(Window& window)
 std::optional<SwapchainInfo>
 OpenGLRenderDevice::GetSwapchainInfo(SwapchainHandle handle) const
 {
+  Impl::ReadScope metadataRead(*m_impl);
   const auto* swap = m_impl->FindSwapchain(handle);
   return swap ? std::optional(swap->info) : std::nullopt;
 }
 
 SwapchainHandle
-OpenGLRenderDevice::CreateSwapchain(Window& window,
+OpenGLRenderDevice::CreateSwapchain(SurfaceHandle surface,
                                     const SwapchainConfig& config)
 {
+  Impl::Scope resourceScope(*m_impl);
+  auto& window = *m_impl->surfaces.at(surface);
   if (config.minImageCount == 0)
     throw std::invalid_argument("Swapchain minImageCount must be at least one");
   if (!window.NativeDisplayHandle() || !window.NativeEGLWindowHandle())
@@ -418,7 +659,9 @@ OpenGLRenderDevice::CreateSwapchain(Window& window,
   if (m_impl->group->nativeDisplay != window.NativeDisplayHandle())
     throw std::invalid_argument(
         "All swapchains on an OpenGL device must use the same EGL display");
-  auto state = std::make_unique<Impl::Swapchain>();
+  auto state = std::make_shared<Impl::Swapchain>();
+  state->surfaceHandle = surface;
+  state->vsync = config.vsync;
   state->nativeWindow = window.NativeEGLWindowHandle();
   state->availableFormats = EnumerateAvailableSwapchainFormats(window);
   state->info = {config.format, config.format == SwapchainFormat::ScRGB
@@ -432,7 +675,6 @@ OpenGLRenderDevice::CreateSwapchain(Window& window,
     {
       state->surface = m_impl->group->CreateWindowSurface(
           window.NativeEGLWindowHandle(), nativeConfig, config.format);
-      state->context = m_impl->group->CreateSharedContext(nativeConfig);
       break;
     }
     catch (const std::runtime_error&)
@@ -447,20 +689,10 @@ OpenGLRenderDevice::CreateSwapchain(Window& window,
         "Requested OpenGL swapchain format is unavailable for this window");
   try
   {
-    m_impl->ActivateContext(state.get());
-    if (eglSwapInterval(m_impl->group->display, config.vsync ? 1 : 0) !=
-        EGL_TRUE)
-      throw std::runtime_error("Failed to configure EGL swap interval");
     m_impl->CreateSwapchainImages(*state, config.minImageCount);
   }
   catch (...)
   {
-    if (state->context != EGL_NO_CONTEXT)
-    {
-      eglMakeCurrent(m_impl->group->display, EGL_NO_SURFACE, EGL_NO_SURFACE,
-                     EGL_NO_CONTEXT);
-      eglDestroyContext(m_impl->group->display, state->context);
-    }
     eglDestroySurface(m_impl->group->display, state->surface);
     throw;
   }
@@ -476,28 +708,21 @@ OpenGLRenderDevice::CreateSwapchain(Window& window,
 
 bool OpenGLRenderDevice::DestroySwapchain(SwapchainHandle handle)
 {
+  Impl::Scope resourceScope(*m_impl);
   if (!handle || handle.owner != DeviceId() ||
       handle.index >= m_impl->swapchains.size())
     return false;
   auto& slot = m_impl->swapchains[handle.index];
+  auto retained = slot.value;
   if (!slot.value || slot.generation != handle.generation)
     return false;
-  if (m_impl->activeSwapchain == handle)
-    m_impl->activeSwapchain.reset();
+  std::unique_lock targetLock(slot.value->mutex);
+  slot.value->dead = true;
+  if (m_impl->State().activeSwapchain == handle)
+    m_impl->State().activeSwapchain.reset();
   m_impl->ActivateContext(slot.value.get());
   m_impl->DestroySwapchainImages(*slot.value);
-  for (auto& [_, pipeline] : m_impl->pipelines)
-  {
-    if (const auto vao = pipeline.vaos.find(handle); vao != pipeline.vaos.end())
-    {
-      glDeleteVertexArrays(1, &vao->second);
-      pipeline.vaos.erase(vao);
-    }
-  }
-  if (eglGetCurrentContext() == slot.value->context)
-    eglMakeCurrent(m_impl->group->display, m_impl->group->pbuffer,
-                   m_impl->group->pbuffer, m_impl->group->shareContext);
-  eglDestroyContext(m_impl->group->display, slot.value->context);
+
   eglDestroySurface(m_impl->group->display, slot.value->surface);
   slot.value.reset();
   if (++slot.generation == 0)
@@ -506,11 +731,13 @@ bool OpenGLRenderDevice::DestroySwapchain(SwapchainHandle handle)
 }
 bool OpenGLRenderDevice::IsValid(SwapchainHandle handle) const noexcept
 {
+  Impl::ReadScope metadataRead(*m_impl);
   return m_impl->FindSwapchain(handle) != nullptr;
 }
 
 ImageHandle OpenGLRenderDevice::CreateImage(const ImageDesc& desc)
 {
+  Impl::Scope resourceScope(*m_impl);
   m_impl->ActivateContext();
   const auto target = ToGLImageType(desc.type);
   const auto format = ToGLImageFormat(desc.format);
@@ -539,15 +766,26 @@ ImageHandle OpenGLRenderDevice::CreateImage(const ImageDesc& desc)
                         static_cast<GLsizei>(desc.height), GL_RGBA,
                         GL_UNSIGNED_BYTE, desc.initialData.data());
   const auto handle = MakeHandle<ImageHandle>(m_impl->nextImage++, DeviceId());
-  m_impl->images.emplace(
-      handle, Impl::ImageResource{texture, desc.usage, desc.type, desc.format});
+  m_impl->resources.images.emplace(
+      handle,
+      Impl::ImageResource{
+          texture, desc.usage, desc.type, desc.format,
+          m_impl->Keep([texture] { glDeleteTextures(1, &texture); })});
   return handle;
 }
 std::vector<std::byte> OpenGLRenderDevice::ReadImage(ImageHandle handle)
 {
-  WaitIdle();
+  std::vector<Impl::SyncPtr> producers;
+  for (auto& queue : m_queues)
+    producers.push_back(static_cast<Queue&>(*queue).Handoff());
+  Impl::Scope resourceScope(*m_impl);
+  for (const auto& producer : producers)
+    glWaitSync(producer->native, 0, GL_TIMEOUT_IGNORED);
+  glMemoryBarrier(GL_ALL_BARRIER_BITS);
+  // glGetTextureImage provides the blocking readback; context handoffs order
+  // producers.
   m_impl->ActivateContext();
-  const auto& image = m_impl->images.at(handle);
+  const auto& image = m_impl->resources.images.at(handle);
   if (image.type != ImageType::Image2D)
     throw std::invalid_argument("ReadImage expects a 2D image");
   GLint width{}, height{};
@@ -560,8 +798,9 @@ std::vector<std::byte> OpenGLRenderDevice::ReadImage(ImageHandle handle)
 }
 ImageViewHandle OpenGLRenderDevice::CreateImageView(const ImageViewDesc& desc)
 {
+  Impl::Scope resourceScope(*m_impl);
   m_impl->ActivateContext();
-  const auto source = m_impl->images.at(desc.image).id;
+  const auto source = m_impl->resources.images.at(desc.image).id;
   GLuint view{};
   glGenTextures(1, &view);
   glTextureView(view, ToGLImageType(desc.type), source,
@@ -569,163 +808,327 @@ ImageViewHandle OpenGLRenderDevice::CreateImageView(const ImageViewDesc& desc)
                 desc.mipLevelCount, desc.baseArrayLayer, desc.arrayLayerCount);
   const auto handle =
       MakeHandle<ImageViewHandle>(m_impl->nextView++, DeviceId());
-  m_impl->views.emplace(handle, Impl::ImageViewResource{view, desc.image});
+  m_impl->resources.views.emplace(
+      handle,
+      Impl::ImageViewResource{
+          view, desc.image,
+          m_impl->Keep([view] { glDeleteTextures(1, &view); })});
   return handle;
-}
-
-void OpenGLRenderDevice::UpdateBuffer(BufferHandle handle, std::uint64_t offset,
-                                      std::span<const std::byte> bytes)
-{
-  if (!IsValid(handle))
-    throw std::invalid_argument("Invalid buffer for update");
-  auto& buffer = m_impl->buffers.at(handle);
-  if (offset > buffer.metadata.size ||
-      bytes.size() > buffer.metadata.size - offset)
-    throw std::out_of_range("Buffer update exceeds allocation");
-  WaitIdle();
-  m_impl->ActivateContext();
-  glNamedBufferSubData(buffer.id, static_cast<GLintptr>(offset),
-                       static_cast<GLsizeiptr>(bytes.size()), bytes.data());
 }
 
 BufferHandle OpenGLRenderDevice::CreateBuffer(const BufferDesc& desc)
 {
+  Impl::Scope resourceScope(*m_impl);
   m_impl->ActivateContext();
   if (desc.initialData.size_bytes() > desc.size)
     throw std::invalid_argument("Buffer initial data exceeds buffer size");
   GLuint id{};
   glCreateBuffers(1, &id);
-  const bool streaming = (desc.memory.requiredAccess &
-                          MemoryAccess::CPUWrite) != MemoryAccess::None;
-  const GLbitfield mapping =
-      GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+  const bool writable = (desc.memory.requiredAccess & MemoryAccess::CPUWrite) !=
+                        MemoryAccess::None;
+  const bool readable = (desc.memory.requiredAccess & MemoryAccess::CPURead) !=
+                        MemoryAccess::None;
+  const bool hostVisible = writable || readable;
+  const GLbitfield mapping = GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT |
+                             (writable ? GL_MAP_WRITE_BIT : 0) |
+                             (readable ? GL_MAP_READ_BIT : 0);
   glNamedBufferStorage(id, static_cast<GLsizeiptr>(desc.size), nullptr,
-                       GL_DYNAMIC_STORAGE_BIT | (streaming ? mapping : 0));
-  void* mapped = streaming
-                     ? glMapNamedBufferRange(
-                           id, 0, static_cast<GLsizeiptr>(desc.size), mapping)
-                     : nullptr;
-  if (streaming && !mapped)
-  {
-    glDeleteBuffers(1, &id);
-    throw std::runtime_error("Persistent streaming buffer mapping failed");
-  }
+                       GL_DYNAMIC_STORAGE_BIT | (hostVisible ? mapping : 0));
   if (!desc.initialData.empty())
     glNamedBufferSubData(id, 0,
                          static_cast<GLsizeiptr>(desc.initialData.size()),
                          desc.initialData.data());
   const auto handle =
       MakeHandle<BufferHandle>(m_impl->nextBuffer++, DeviceId());
-  m_impl->buffers.emplace(
+  m_impl->resources.buffers.emplace(
       handle,
-      Impl::BufferResource{
-          id, BufferMetadata{desc.size, desc.usage, desc.memory}, mapped});
+      Impl::BufferResource{id,
+                           BufferMetadata{desc.size, desc.usage, desc.memory},
+                           m_impl->Keep([id] { glDeleteBuffers(1, &id); })});
   return handle;
 }
-std::span<std::byte> OpenGLRenderDevice::MapStreamingBuffer(BufferHandle handle)
+std::span<std::byte> OpenGLRenderDevice::MapMemory(BufferHandle h)
 {
-  auto& buffer = m_impl->buffers.at(handle);
-  if (!buffer.mapped)
-    throw std::logic_error("Buffer was not created for CPU streaming");
-  return {static_cast<std::byte*>(buffer.mapped), size_t(buffer.metadata.size)};
-}
-std::uint64_t OpenGLRenderDevice::StreamingBufferAlignment() const
-{
+  Impl::Scope resourceScope(*m_impl);
   m_impl->ActivateContext();
-  GLint alignment = 0;
-  glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &alignment);
-  return std::max<GLint>(256, alignment);
+  const auto& b = m_impl->resources.buffers.at(h);
+  const auto access = b.metadata.memory.requiredAccess;
+  const GLbitfield flags =
+      GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT |
+      ((access & MemoryAccess::CPUWrite) != MemoryAccess::None
+           ? GL_MAP_WRITE_BIT
+           : 0) |
+      ((access & MemoryAccess::CPURead) != MemoryAccess::None ? GL_MAP_READ_BIT
+                                                              : 0);
+  auto* mapped = glMapNamedBufferRange(b.id, 0, b.metadata.size, flags);
+  return {static_cast<std::byte*>(mapped), size_t(b.metadata.size)};
 }
-void OpenGLRenderDevice::PublishStreamingWrites(BufferHandle handle,
-                                                std::uint64_t offset,
-                                                std::uint64_t bytes)
+void OpenGLRenderDevice::UnmapMemory(BufferHandle h)
 {
-  const auto& buffer = m_impl->buffers.at(handle);
-  if (!buffer.mapped || offset > buffer.metadata.size ||
-      bytes > buffer.metadata.size - offset)
-    throw std::out_of_range("Invalid streaming buffer publication");
+  Impl::Scope resourceScope(*m_impl);
   m_impl->ActivateContext();
-  glMemoryBarrier(GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
+  glUnmapNamedBuffer(m_impl->resources.buffers.at(h).id);
 }
-std::uint64_t OpenGLRenderDevice::InsertCompletionMarker()
+void OpenGLRenderDevice::FlushMappedMemoryRange(BufferHandle, std::uint64_t,
+                                                std::uint64_t)
 {
-  // Window contexts may have issued reads of the same shared buffer. Capture
-  // all of them, flushing command queues without glFinish or a CPU wait.
-  std::vector<GLsync> fences;
-  m_impl->ActivateContext();
-  fences.push_back(glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0));
-  glFlush();
-  for (const auto& slot : m_impl->swapchains)
-    if (slot.value)
-    {
-      m_impl->ActivateContext(slot.value.get());
-      fences.push_back(glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0));
-      glFlush();
-    }
-  if (m_impl->activeSwapchain)
-    m_impl->ActivateContext(m_impl->FindSwapchain(*m_impl->activeSwapchain));
-  else
-    m_impl->ActivateContext();
-  const auto id = m_impl->nextCompletionMarker++;
-  m_impl->completionMarkers.emplace(id, std::move(fences));
-  return id;
+  Impl::Scope resourceScope(*m_impl);
+  // GL_MAP_COHERENT_BIT makes host writes visible to subsequent commands.
 }
-bool OpenGLRenderDevice::PollCompletionMarker(std::uint64_t id)
+void OpenGLRenderDevice::InvalidateMappedMemoryRange(BufferHandle,
+                                                     std::uint64_t,
+                                                     std::uint64_t)
 {
-  m_impl->ActivateContext();
-  for (auto fence : m_impl->completionMarkers.at(id))
+  Impl::Scope resourceScope(*m_impl);
+  // Coherent mappings require completion synchronization, no invalidation.
+}
+FenceHandle OpenGLRenderDevice::CreateFence(bool signaled)
+{
+  std::lock_guard lock(m_impl->syncMutex);
+  const auto handle = MakeHandle<FenceHandle>(m_impl->nextFence++, DeviceId());
+  auto fence = std::make_shared<Impl::Fence>();
+  fence->initiallySignaled = signaled;
+  m_impl->fences.emplace(handle, std::move(fence));
+  return handle;
+}
+void OpenGLRenderDevice::DestroyFence(FenceHandle handle)
+{
+  std::lock_guard lock(m_impl->syncMutex);
+  m_impl->fences.erase(handle);
+}
+void OpenGLRenderDevice::ResetFence(FenceHandle handle)
+{
+  auto fresh = std::make_shared<Impl::Fence>();
+  std::lock_guard lock(m_impl->syncMutex);
+  m_impl->fences.at(handle) = std::move(fresh);
+}
+bool OpenGLRenderDevice::GetFenceStatus(FenceHandle handle)
+{
+  return WaitForFence(handle, 0);
+}
+bool OpenGLRenderDevice::WaitForFence(FenceHandle handle, std::uint64_t timeout)
+{
+  std::shared_ptr<Impl::Fence> fence;
   {
-    const auto status = glClientWaitSync(fence, 0, 0);
+    std::lock_guard lock(m_impl->syncMutex);
+    fence = m_impl->fences.at(handle);
+  }
+  if (fence->initiallySignaled)
+    return true;
+  const auto start = std::chrono::steady_clock::now();
+  Impl::SyncPtr sync;
+  {
+    std::unique_lock lock(fence->point->mutex);
+    if (timeout == UINT64_MAX)
+      fence->point->issued.wait(lock, [&] { return fence->point->published; });
+    else if (!fence->point->issued.wait_for(
+                 lock,
+                 std::chrono::nanoseconds(
+                     std::min(timeout, std::uint64_t(INT64_MAX))),
+                 [&] { return fence->point->published; }))
+      return false;
+    sync = fence->point->sync;
+  }
+  if (sync)
+  {
+    Impl::WaitScope context(*m_impl);
+    const auto elapsed = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start)
+            .count());
+    const auto remaining = timeout == UINT64_MAX ? timeout
+                           : timeout > elapsed   ? timeout - elapsed
+                                                 : 0;
+    const auto status = glClientWaitSync(sync->native, 0, remaining);
     if (status == GL_WAIT_FAILED)
-      throw std::runtime_error("GPU completion marker failed");
+      throw std::runtime_error("OpenGL host fence wait failed");
     if (status == GL_TIMEOUT_EXPIRED)
       return false;
   }
+  std::exception_ptr failure;
+  {
+    std::lock_guard lock(fence->point->mutex);
+    failure = std::exchange(fence->point->failure, {});
+  }
+  for (auto& queue : m_queues)
+    static_cast<Queue&>(*queue).CollectLater();
+  if (failure)
+    std::rethrow_exception(failure);
   return true;
 }
-void OpenGLRenderDevice::ReleaseCompletionMarker(std::uint64_t id)
+SemaphoreHandle OpenGLRenderDevice::CreateSemaphore(SemaphoreType type,
+                                                    std::uint64_t initialValue)
 {
-  m_impl->ActivateContext();
-  const auto it = m_impl->completionMarkers.find(id);
-  if (it == m_impl->completionMarkers.end())
-    return;
-  for (auto fence : it->second)
-    glDeleteSync(fence);
-  m_impl->completionMarkers.erase(it);
+  auto semaphore = std::make_shared<Impl::Semaphore>();
+  semaphore->type = type;
+  semaphore->counter = semaphore->lastSignal = initialValue;
+  std::lock_guard lock(m_impl->syncMutex);
+  const auto handle =
+      MakeHandle<SemaphoreHandle>(m_impl->nextSemaphore++, DeviceId());
+  m_impl->semaphores.emplace(handle, std::move(semaphore));
+  return handle;
 }
+void OpenGLRenderDevice::DestroySemaphore(SemaphoreHandle handle)
+{
+  std::lock_guard lock(m_impl->syncMutex);
+  m_impl->semaphores.erase(handle);
+}
+std::uint64_t
+OpenGLRenderDevice::GetSemaphoreCounterValue(SemaphoreHandle handle)
+{
+  std::shared_ptr<Impl::Semaphore> semaphore;
+  std::vector<std::pair<std::uint64_t, std::shared_ptr<Impl::Point>>> points;
+  {
+    std::lock_guard lock(m_impl->syncMutex);
+    semaphore = m_impl->semaphores.at(handle);
+    if (semaphore->type != SemaphoreType::Timeline)
+      throw std::logic_error("Binary semaphores have no host counter");
+    points.assign(semaphore->signals.begin(), semaphore->signals.end());
+  }
+  bool completed = false;
+  Impl::WaitScope context(*m_impl);
+  for (const auto& [value, point] : points)
+  {
+    Impl::SyncPtr sync;
+    {
+      std::lock_guard lock(point->mutex);
+      if (!point->published)
+        break;
+      if (point->failure)
+        std::rethrow_exception(point->failure);
+      sync = point->sync;
+    }
+    if (sync)
+    {
+      const auto result = glClientWaitSync(sync->native, 0, 0);
+      if (result == GL_WAIT_FAILED)
+        throw std::runtime_error("OpenGL timeline query failed");
+      if (result == GL_TIMEOUT_EXPIRED)
+        break;
+    }
+    std::lock_guard lock(m_impl->syncMutex);
+    semaphore->counter = std::max(semaphore->counter, value);
+    semaphore->signals.erase(value);
+    completed = true;
+  }
+  std::uint64_t value;
+  {
+    std::lock_guard lock(m_impl->syncMutex);
+    value = semaphore->counter;
+  }
+  if (completed)
+    for (auto& queue : m_queues)
+      static_cast<Queue&>(*queue).CollectLater();
+  return value;
+}
+void OpenGLRenderDevice::SignalSemaphore(SemaphoreHandle handle,
+                                         std::uint64_t value)
+{
+  GetSemaphoreCounterValue(handle);
+  std::lock_guard lock(m_impl->syncMutex);
+  auto semaphore = m_impl->semaphores.at(handle);
+  if (!semaphore->signals.empty())
+    throw std::logic_error(
+        "Host signaling while GPU timeline signals are pending is unsupported");
+  if (value <= std::max(semaphore->counter, semaphore->lastSignal))
+    throw std::logic_error("Timeline signal values must increase");
+  semaphore->counter = semaphore->lastSignal = value;
+}
+bool OpenGLRenderDevice::WaitSemaphore(SemaphoreHandle handle,
+                                       std::uint64_t value,
+                                       std::uint64_t timeout)
+{
+  if (GetSemaphoreCounterValue(handle) >= value)
+    return true;
+  std::shared_ptr<Impl::Point> point;
+  {
+    std::lock_guard lock(m_impl->syncMutex);
+    const auto semaphore = m_impl->semaphores.at(handle);
+    const auto found = semaphore->signals.lower_bound(value);
+    if (found == semaphore->signals.end())
+    {
+      if (!timeout)
+        return false;
+      throw std::logic_error("GLsync fallback cannot wait on an unsubmitted "
+                             "future timeline value");
+    }
+    point = found->second;
+  }
+  const auto start = std::chrono::steady_clock::now();
+  Impl::SyncPtr sync;
+  {
+    std::unique_lock lock(point->mutex);
+    if (timeout == UINT64_MAX)
+      point->issued.wait(lock, [&] { return point->published; });
+    else if (!point->issued.wait_for(lock,
+                                     std::chrono::nanoseconds(std::min(
+                                         timeout, std::uint64_t(INT64_MAX))),
+                                     [&] { return point->published; }))
+      return false;
+    if (point->failure)
+      std::rethrow_exception(point->failure);
+    sync = point->sync;
+  }
+  if (sync)
+  {
+    Impl::WaitScope context(*m_impl);
+    const auto elapsed = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start)
+            .count());
+    const auto remaining = timeout == UINT64_MAX ? timeout
+                           : timeout > elapsed   ? timeout - elapsed
+                                                 : 0;
+    const auto status = glClientWaitSync(sync->native, 0, remaining);
+    if (status == GL_WAIT_FAILED)
+      throw std::runtime_error("OpenGL timeline host wait failed");
+    if (status == GL_TIMEOUT_EXPIRED)
+      return false;
+  }
+  GetSemaphoreCounterValue(handle);
+  return true;
+}
+
 std::optional<BufferMetadata>
 OpenGLRenderDevice::GetBufferDesc(BufferHandle handle) const noexcept
 {
-  const auto it = m_impl->buffers.find(handle);
-  if (it == m_impl->buffers.end())
+  Impl::ReadScope metadataRead(*m_impl);
+  const auto it = m_impl->resources.buffers.find(handle);
+  if (it == m_impl->resources.buffers.end())
     return std::nullopt;
   return it->second.metadata;
 }
 bool OpenGLRenderDevice::IsValid(BufferHandle handle) const noexcept
 {
-  return m_impl->buffers.contains(handle);
+  Impl::ReadScope metadataRead(*m_impl);
+  return m_impl->resources.buffers.contains(handle);
 }
 bool OpenGLRenderDevice::IsValid(
     DescriptorSetLayoutHandle handle) const noexcept
 {
-  return m_impl->setLayouts.contains(handle);
+  Impl::ReadScope metadataRead(*m_impl);
+  return m_impl->resources.setLayouts.contains(handle);
 }
 bool OpenGLRenderDevice::IsValid(DescriptorSetHandle handle) const noexcept
 {
-  return m_impl->sets.contains(handle);
+  Impl::ReadScope metadataRead(*m_impl);
+  return m_impl->resources.sets.contains(handle);
 }
 bool OpenGLRenderDevice::IsValid(PipelineLayoutHandle handle) const noexcept
 {
-  return m_impl->pipelineLayouts.contains(handle);
+  Impl::ReadScope metadataRead(*m_impl);
+  return m_impl->resources.pipelineLayouts.contains(handle);
 }
 bool OpenGLRenderDevice::IsValid(SamplerHandle handle) const noexcept
 {
-  return m_impl->samplers.contains(handle);
+  Impl::ReadScope metadataRead(*m_impl);
+  return m_impl->resources.samplers.contains(handle);
 }
 
 DescriptorSetLayoutHandle OpenGLRenderDevice::CreateDescriptorSetLayout(
     const DescriptorSetLayoutDesc& desc)
 {
+  Impl::Scope resourceScope(*m_impl);
   Impl::DescriptorSetLayout layout;
   constexpr auto validStages =
       static_cast<std::uint32_t>(ShaderStageFlags::Vertex) |
@@ -746,15 +1149,16 @@ DescriptorSetLayoutHandle OpenGLRenderDevice::CreateDescriptorSetLayout(
   }
   const auto handle = MakeHandle<DescriptorSetLayoutHandle>(
       m_impl->nextSetLayout++, DeviceId());
-  m_impl->setLayouts.emplace(handle, std::move(layout));
+  m_impl->resources.setLayouts.emplace(handle, std::move(layout));
   return handle;
 }
 
 DescriptorSetHandle
 OpenGLRenderDevice::CreateDescriptorSet(const DescriptorSetDesc& desc)
 {
-  const auto layout = m_impl->setLayouts.find(desc.layout);
-  if (layout == m_impl->setLayouts.end())
+  Impl::Scope resourceScope(*m_impl);
+  const auto layout = m_impl->resources.setLayouts.find(desc.layout);
+  if (layout == m_impl->resources.setLayouts.end())
     throw std::invalid_argument(
         "Descriptor set layout is invalid or belongs to another device");
   Impl::DescriptorSet set;
@@ -764,20 +1168,21 @@ OpenGLRenderDevice::CreateDescriptorSet(const DescriptorSetDesc& desc)
                           std::vector<Impl::StoredResource>(info.count));
   const auto handle =
       MakeHandle<DescriptorSetHandle>(m_impl->nextSet++, DeviceId());
-  m_impl->sets.emplace(handle, std::move(set));
+  m_impl->resources.sets.emplace(handle, std::move(set));
   return handle;
 }
 
 PipelineLayoutHandle
 OpenGLRenderDevice::CreatePipelineLayout(const PipelineLayoutDesc& desc)
 {
+  Impl::Scope resourceScope(*m_impl);
   Impl::PipelineLayout layout;
   layout.sets = desc.sets;
   std::uint32_t ubo{}, ssbo{}, texture{};
   for (std::uint32_t setIndex = 0; setIndex < desc.sets.size(); ++setIndex)
   {
-    const auto source = m_impl->setLayouts.find(desc.sets[setIndex]);
-    if (source == m_impl->setLayouts.end())
+    const auto source = m_impl->resources.setLayouts.find(desc.sets[setIndex]);
+    if (source == m_impl->resources.setLayouts.end())
       throw std::invalid_argument(
           "Pipeline layout references an invalid descriptor set layout");
     for (const auto& [binding, info] : source->second.bindings)
@@ -810,12 +1215,13 @@ OpenGLRenderDevice::CreatePipelineLayout(const PipelineLayoutDesc& desc)
   }
   const auto handle = MakeHandle<PipelineLayoutHandle>(
       m_impl->nextPipelineLayout++, DeviceId());
-  m_impl->pipelineLayouts.emplace(handle, std::move(layout));
+  m_impl->resources.pipelineLayouts.emplace(handle, std::move(layout));
   return handle;
 }
 
 SamplerHandle OpenGLRenderDevice::CreateSampler(const SamplerDesc& desc)
 {
+  Impl::Scope resourceScope(*m_impl);
   m_impl->ActivateContext();
   if (desc.anisotropy &&
       (!std::isfinite(desc.maxAnisotropy) || desc.maxAnisotropy < 1.f))
@@ -889,20 +1295,23 @@ SamplerHandle OpenGLRenderDevice::CreateSampler(const SamplerDesc& desc)
   }
   const auto handle =
       MakeHandle<SamplerHandle>(m_impl->nextSampler++, DeviceId());
-  m_impl->samplers.emplace(handle, sampler);
+  m_impl->resources.samplers.emplace(handle, sampler);
+  m_impl->resources.samplerLifetimes.emplace(
+      handle, m_impl->Keep([sampler] { glDeleteSamplers(1, &sampler); }));
   return handle;
 }
 
 void OpenGLRenderDevice::UpdateDescriptorSet(
     DescriptorSetHandle handle, std::span<const DescriptorWrite> writes)
 {
+  Impl::Scope resourceScope(*m_impl);
   m_impl->ActivateContext();
-  auto found = m_impl->sets.find(handle);
-  if (found == m_impl->sets.end())
+  auto found = m_impl->resources.sets.find(handle);
+  if (found == m_impl->resources.sets.end())
     throw std::invalid_argument("Invalid descriptor set");
   auto updated = found->second.resources;
-  const auto layout = m_impl->setLayouts.find(found->second.layout);
-  if (layout == m_impl->setLayouts.end())
+  const auto layout = m_impl->resources.setLayouts.find(found->second.layout);
+  if (layout == m_impl->resources.setLayouts.end())
     throw std::invalid_argument("Descriptor set layout has been destroyed");
   for (const auto& write : writes)
   {
@@ -919,8 +1328,9 @@ void OpenGLRenderDevice::UpdateDescriptorSet(
         throw std::invalid_argument(
             "Descriptor resource type does not match buffer binding");
       auto info = std::get<DescriptorBufferInfo>(write.resource);
-      const auto buffer = m_impl->buffers.find(info.buffer);
-      if (buffer == m_impl->buffers.end() || info.buffer.owner != DeviceId())
+      const auto buffer = m_impl->resources.buffers.find(info.buffer);
+      if (buffer == m_impl->resources.buffers.end() ||
+          info.buffer.owner != DeviceId())
         throw std::invalid_argument(
             "Invalid or cross-device descriptor buffer");
       const auto required =
@@ -953,14 +1363,15 @@ void OpenGLRenderDevice::UpdateDescriptorSet(
         throw std::invalid_argument(
             "Descriptor resource type does not match image binding");
       const auto info = std::get<DescriptorImageInfo>(write.resource);
-      const auto view = m_impl->views.find(info.image);
-      if (view == m_impl->views.end() || info.image.owner != DeviceId() ||
-          !m_impl->samplers.contains(info.sampler) ||
+      const auto view = m_impl->resources.views.find(info.image);
+      if (view == m_impl->resources.views.end() ||
+          info.image.owner != DeviceId() ||
+          !m_impl->resources.samplers.contains(info.sampler) ||
           info.sampler.owner != DeviceId())
         throw std::invalid_argument(
             "Invalid or cross-device descriptor image or sampler");
-      const auto image = m_impl->images.find(view->second.image);
-      if (image == m_impl->images.end() ||
+      const auto image = m_impl->resources.images.find(view->second.image);
+      if (image == m_impl->resources.images.end() ||
           !image->second.usage.Contains(ImageUsage::Sampled))
         throw std::invalid_argument(
             "Descriptor image was not created for sampling");
@@ -973,6 +1384,7 @@ void OpenGLRenderDevice::UpdateDescriptorSet(
 ShaderModuleHandle
 OpenGLRenderDevice::CreateShaderModule(const ShaderModuleDesc& desc)
 {
+  Impl::Scope resourceScope(*m_impl);
   m_impl->ActivateContext();
   (void)ToGLShaderStage(desc.stage);
   if (desc.bytecode.empty() ||
@@ -988,38 +1400,41 @@ OpenGLRenderDevice::CreateShaderModule(const ShaderModuleDesc& desc)
         "Shader module input must contain SPIR-V words");
   const auto handle =
       MakeHandle<ShaderModuleHandle>(m_impl->nextShader++, DeviceId());
-  m_impl->shaders.emplace(handle, Impl::Shader{desc.stage,
-                                               std::string(desc.entryPoint),
-                                               {words.begin(), words.end()}});
+  m_impl->resources.shaders.emplace(handle,
+                                    Impl::Shader{desc.stage,
+                                                 std::string(desc.entryPoint),
+                                                 {words.begin(), words.end()}});
   return handle;
 }
 
 GraphicsPipelineHandle
 OpenGLRenderDevice::CreatePipeline(const GraphicsPipelineDesc& desc)
 {
+  Impl::Scope resourceScope(*m_impl);
   m_impl->ActivateContext();
   std::vector<const Impl::Shader*> shaderModules;
   if (desc.computeShader)
   {
-    const auto it = m_impl->shaders.find(desc.computeShader);
-    if (it == m_impl->shaders.end() ||
+    const auto it = m_impl->resources.shaders.find(desc.computeShader);
+    if (it == m_impl->resources.shaders.end() ||
         it->second.stage != ShaderStageFlags::Compute)
       throw std::invalid_argument("Pipeline requires a compute shader");
     shaderModules.push_back(&it->second);
   }
   else
   {
-    const auto vert = m_impl->shaders.find(desc.vertexShader),
-               frag = m_impl->shaders.find(desc.fragmentShader);
-    if (vert == m_impl->shaders.end() || frag == m_impl->shaders.end() ||
+    const auto vert = m_impl->resources.shaders.find(desc.vertexShader),
+               frag = m_impl->resources.shaders.find(desc.fragmentShader);
+    if (vert == m_impl->resources.shaders.end() ||
+        frag == m_impl->resources.shaders.end() ||
         vert->second.stage != ShaderStageFlags::Vertex ||
         frag->second.stage != ShaderStageFlags::Fragment)
       throw std::invalid_argument(
           "Pipeline requires vertex and fragment shaders");
     shaderModules = {&vert->second, &frag->second};
   }
-  const auto layoutIt = m_impl->pipelineLayouts.find(desc.layout);
-  if (!desc.layout || layoutIt == m_impl->pipelineLayouts.end())
+  const auto layoutIt = m_impl->resources.pipelineLayouts.find(desc.layout);
+  if (!desc.layout || layoutIt == m_impl->resources.pipelineLayouts.end())
     throw std::invalid_argument("Pipeline requires a valid pipeline layout");
   GLint ubos{}, ssbos{}, textures{}, images{}, atomics{};
   glGetIntegerv(GL_MAX_UNIFORM_BUFFER_BINDINGS, &ubos);
@@ -1152,32 +1567,35 @@ OpenGLRenderDevice::CreatePipeline(const GraphicsPipelineDesc& desc)
   const auto handle =
       MakeHandle<GraphicsPipelineHandle>(m_impl->nextPipeline++, DeviceId());
   Impl::Pipeline pipeline{program, desc.vertexLayout, desc.layout, {}};
+  pipeline.lifetime = m_impl->Keep([program] { glDeleteProgram(program); });
   pipeline.topology = desc.topology;
   pipeline.blend = desc.blend;
-  m_impl->pipelines.emplace(handle, std::move(pipeline));
+  m_impl->resources.pipelines.emplace(handle, std::move(pipeline));
   return handle;
 }
 
 std::unique_ptr<IRenderCommandList>
-OpenGLRenderDevice::CreateCommandList(QueueType)
+OpenGLRenderDevice::CreateCommandList(std::uint32_t queueIndex)
 {
-  return std::make_unique<OpenGLCommandList>();
+  if (!GetQueue(queueIndex))
+    throw std::out_of_range("Queue index is unavailable");
+  return std::make_unique<OpenGLCommandList>(DeviceId());
 }
 void OpenGLRenderDevice::DestroyImage(ImageHandle h)
 {
+  Impl::Scope resourceScope(*m_impl);
   m_impl->ActivateContext();
-  auto i = m_impl->images.find(h);
-  if (i != m_impl->images.end())
+  auto i = m_impl->resources.images.find(h);
+  if (i != m_impl->resources.images.end())
   {
-    glDeleteTextures(1, &i->second.id);
-    m_impl->images.erase(i);
-    for (auto view = m_impl->views.begin(); view != m_impl->views.end();)
+    m_impl->resources.images.erase(i);
+    for (auto view = m_impl->resources.views.begin();
+         view != m_impl->resources.views.end();)
       if (view->second.image == h)
       {
         const auto viewHandle = view->first;
-        glDeleteTextures(1, &view->second.id);
-        view = m_impl->views.erase(view);
-        for (auto& [_, set] : m_impl->sets)
+        view = m_impl->resources.views.erase(view);
+        for (auto& [_, set] : m_impl->resources.sets)
           for (auto& [__, values] : set.resources)
             for (auto& value : values)
               if (auto info = std::get_if<DescriptorImageInfo>(&value);
@@ -1190,13 +1608,13 @@ void OpenGLRenderDevice::DestroyImage(ImageHandle h)
 }
 void OpenGLRenderDevice::DestroyImageView(ImageViewHandle h)
 {
+  Impl::Scope resourceScope(*m_impl);
   m_impl->ActivateContext();
-  auto i = m_impl->views.find(h);
-  if (i != m_impl->views.end())
+  auto i = m_impl->resources.views.find(h);
+  if (i != m_impl->resources.views.end())
   {
-    glDeleteTextures(1, &i->second.id);
-    m_impl->views.erase(i);
-    for (auto& [_, set] : m_impl->sets)
+    m_impl->resources.views.erase(i);
+    for (auto& [_, set] : m_impl->resources.sets)
       for (auto& [__, values] : set.resources)
         for (auto& value : values)
           if (auto info = std::get_if<DescriptorImageInfo>(&value);
@@ -1206,13 +1624,13 @@ void OpenGLRenderDevice::DestroyImageView(ImageViewHandle h)
 }
 void OpenGLRenderDevice::DestroyBuffer(BufferHandle h)
 {
+  Impl::Scope resourceScope(*m_impl);
   m_impl->ActivateContext();
-  auto i = m_impl->buffers.find(h);
-  if (i != m_impl->buffers.end())
+  auto i = m_impl->resources.buffers.find(h);
+  if (i != m_impl->resources.buffers.end())
   {
-    glDeleteBuffers(1, &i->second.id);
-    m_impl->buffers.erase(i);
-    for (auto& [_, set] : m_impl->sets)
+    m_impl->resources.buffers.erase(i);
+    for (auto& [_, set] : m_impl->resources.sets)
       for (auto& [__, values] : set.resources)
         for (auto& value : values)
           if (auto info = std::get_if<DescriptorBufferInfo>(&value);
@@ -1222,77 +1640,68 @@ void OpenGLRenderDevice::DestroyBuffer(BufferHandle h)
 }
 void OpenGLRenderDevice::DestroyPipeline(GraphicsPipelineHandle h)
 {
-  auto i = m_impl->pipelines.find(h);
-  if (i == m_impl->pipelines.end())
-    return;
-  m_impl->ActivateContext();
-  glDeleteProgram(i->second.program);
-  for (std::uint32_t index = 0; index < m_impl->swapchains.size(); ++index)
-  {
-    auto& slot = m_impl->swapchains[index];
-    if (!slot.value)
-      continue;
-    const SwapchainHandle swapchain{index, slot.generation, DeviceId()};
-    if (const auto vao = i->second.vaos.find(swapchain);
-        vao != i->second.vaos.end())
-    {
-      m_impl->ActivateContext(slot.value.get());
-      glDeleteVertexArrays(1, &vao->second);
-      i->second.vaos.erase(vao);
-    }
-  }
-  m_impl->ActivateContext();
-  m_impl->pipelines.erase(i);
+  Impl::Scope scope(*m_impl);
+  m_impl->resources.pipelines.erase(h);
+  for (auto& queue : m_queues)
+    static_cast<Queue&>(*queue).RetirePipeline(h);
 }
 void OpenGLRenderDevice::DestroyModule(ShaderModuleHandle h)
 {
-  m_impl->shaders.erase(h);
+  Impl::Scope resourceScope(*m_impl);
+  m_impl->resources.shaders.erase(h);
 }
 void OpenGLRenderDevice::DestroyDescriptorSet(DescriptorSetHandle h)
 {
-  m_impl->sets.erase(h);
-  for (auto it = m_impl->boundSets.begin(); it != m_impl->boundSets.end();)
+  Impl::Scope resourceScope(*m_impl);
+  m_impl->resources.sets.erase(h);
+  for (auto it = m_impl->State().boundSets.begin();
+       it != m_impl->State().boundSets.end();)
     if (it->second == h)
-      it = m_impl->boundSets.erase(it);
+      it = m_impl->State().boundSets.erase(it);
     else
       ++it;
 }
 void OpenGLRenderDevice::DestroyDescriptorSetLayout(DescriptorSetLayoutHandle h)
 {
-  if (!m_impl->setLayouts.contains(h))
+  Impl::Scope resourceScope(*m_impl);
+  if (!m_impl->resources.setLayouts.contains(h))
     return;
-  for (auto it = m_impl->sets.begin(); it != m_impl->sets.end();)
+  for (auto it = m_impl->resources.sets.begin();
+       it != m_impl->resources.sets.end();)
     if (it->second.layout == h)
-      it = m_impl->sets.erase(it);
+      it = m_impl->resources.sets.erase(it);
     else
       ++it;
-  for (auto it = m_impl->pipelineLayouts.begin();
-       it != m_impl->pipelineLayouts.end();)
+  for (auto it = m_impl->resources.pipelineLayouts.begin();
+       it != m_impl->resources.pipelineLayouts.end();)
   {
     if (std::find(it->second.sets.begin(), it->second.sets.end(), h) !=
         it->second.sets.end())
     {
       const auto dead = it->first;
-      for (auto p = m_impl->pipelines.begin(); p != m_impl->pipelines.end();)
+      for (auto p = m_impl->resources.pipelines.begin();
+           p != m_impl->resources.pipelines.end();)
         if (p->second.pipelineLayout == dead)
         {
           DestroyPipeline(p->first);
-          p = m_impl->pipelines.begin();
+          p = m_impl->resources.pipelines.begin();
         }
         else
           ++p;
-      it = m_impl->pipelineLayouts.erase(it);
+      it = m_impl->resources.pipelineLayouts.erase(it);
     }
     else
       ++it;
   }
-  m_impl->setLayouts.erase(h);
+  m_impl->resources.setLayouts.erase(h);
 }
 void OpenGLRenderDevice::DestroyPipelineLayout(PipelineLayoutHandle h)
 {
-  if (!m_impl->pipelineLayouts.contains(h))
+  Impl::Scope resourceScope(*m_impl);
+  if (!m_impl->resources.pipelineLayouts.contains(h))
     return;
-  for (auto p = m_impl->pipelines.begin(); p != m_impl->pipelines.end();)
+  for (auto p = m_impl->resources.pipelines.begin();
+       p != m_impl->resources.pipelines.end();)
     if (p->second.pipelineLayout == h)
     {
       const auto pipeline = p->first;
@@ -1301,17 +1710,18 @@ void OpenGLRenderDevice::DestroyPipelineLayout(PipelineLayoutHandle h)
     }
     else
       ++p;
-  m_impl->pipelineLayouts.erase(h);
+  m_impl->resources.pipelineLayouts.erase(h);
 }
 void OpenGLRenderDevice::DestroySampler(SamplerHandle h)
 {
-  const auto i = m_impl->samplers.find(h);
-  if (i == m_impl->samplers.end())
+  Impl::Scope resourceScope(*m_impl);
+  const auto i = m_impl->resources.samplers.find(h);
+  if (i == m_impl->resources.samplers.end())
     return;
   m_impl->ActivateContext();
-  glDeleteSamplers(1, &i->second);
-  m_impl->samplers.erase(i);
-  for (auto& [_, set] : m_impl->sets)
+  m_impl->resources.samplerLifetimes.erase(h);
+  m_impl->resources.samplers.erase(i);
+  for (auto& [_, set] : m_impl->resources.sets)
     for (auto& [__, values] : set.resources)
       for (auto& value : values)
         if (auto info = std::get_if<DescriptorImageInfo>(&value);
@@ -1320,6 +1730,7 @@ void OpenGLRenderDevice::DestroySampler(SamplerHandle h)
 }
 RenderCapabilities OpenGLRenderDevice::GetCapabilities() const
 {
+  Impl::Scope resourceScope(*m_impl);
   m_impl->ActivateContext();
   const auto* renderer = glGetString(GL_RENDERER);
   RenderCapabilities caps;
@@ -1356,104 +1767,316 @@ RenderCapabilities OpenGLRenderDevice::GetCapabilities() const
 ImageViewHandle
 OpenGLRenderDevice::AcquiredImageView(SwapchainHandle swapchain) const noexcept
 {
-  const auto* target = m_impl->FindSwapchain(swapchain);
-  return target && target->acquired ? target->images[target->imageIndex].view
-                                    : ImageViewHandle{};
+  Impl::ReadScope metadataRead(*m_impl);
+  auto* target = m_impl->FindSwapchain(swapchain);
+  if (!target)
+    return {};
+  std::lock_guard targetLock(target->mutex);
+  return target->acquired ? target->images[target->imageIndex].view
+                          : ImageViewHandle{};
 }
 
-void OpenGLRenderDevice::Submit(const IRenderCommandList& list)
+void OpenGLRenderDevice::Queue::Submit(const QueueSubmitInfo& submission,
+                                       FenceHandle fence)
 {
-  const auto* commands = dynamic_cast<const OpenGLCommandList*>(&list);
-  if (!commands)
-    throw std::invalid_argument(
-        "OpenGL submit received a command list from another backend");
-  if (m_impl->activeSwapchain)
-    m_impl->ActivateContext(m_impl->FindSwapchain(*m_impl->activeSwapchain));
-  else
-    m_impl->ActivateContext();
-  m_impl->submissionWrites.clear();
+  std::vector<std::vector<OpenGLCommandList::Command>> commands;
+  for (const auto* list : submission.commandLists)
+  {
+    const auto* native = dynamic_cast<const OpenGLCommandList*>(list);
+    if (!native || native->Owner() != device.DeviceId())
+      throw std::invalid_argument("Cross-device OpenGL command list");
+    if (native->IsRecording())
+      throw std::logic_error("End command recording before submission");
+    commands.push_back(native->Commands());
+  }
+  auto snapshot = device.m_impl->Capture();
+  std::vector<std::shared_ptr<Impl::Point>> waits, signals;
+  std::shared_ptr<Impl::Point> completion;
+  std::lock_guard syncLock(device.m_impl->syncMutex);
+  std::vector<std::shared_ptr<Impl::Semaphore>> consumed;
+  struct Signal
+  {
+    std::shared_ptr<Impl::Semaphore> semaphore;
+    std::uint64_t value;
+    std::shared_ptr<Impl::Point> point;
+  };
+  std::vector<Signal> reservations;
+  for (const auto& wait : submission.waits)
+  {
+    const auto semaphore = device.m_impl->semaphores.at(wait.semaphore);
+    if (semaphore->type == SemaphoreType::Timeline &&
+        semaphore->counter >= wait.value)
+      continue;
+    const auto it = semaphore->type == SemaphoreType::Timeline
+                        ? semaphore->signals.lower_bound(wait.value)
+                        : semaphore->signals.begin();
+    if (it == semaphore->signals.end())
+      throw std::logic_error(
+          "OpenGL GLsync fallback cannot wait on a signal not yet submitted; "
+          "external semaphore backing is unavailable");
+    if (semaphore->type == SemaphoreType::Binary)
+    {
+      if (std::find(consumed.begin(), consumed.end(), semaphore) !=
+          consumed.end())
+        throw std::logic_error("Binary semaphore wait consumed twice");
+      consumed.push_back(semaphore);
+    }
+    waits.push_back(it->second);
+  }
+  for (const auto& signal : submission.signals)
+  {
+    auto semaphore = device.m_impl->semaphores.at(signal.semaphore);
+    if (std::any_of(reservations.begin(), reservations.end(),
+                    [&](const Signal& value)
+                    { return value.semaphore == semaphore; }))
+      throw std::logic_error("Duplicate semaphore signal in submission");
+    if (semaphore->type == SemaphoreType::Timeline)
+    {
+      if (signal.value <= std::max(semaphore->counter, semaphore->lastSignal))
+        throw std::logic_error("Timeline signal values must increase");
+    }
+    else if (!semaphore->signals.empty() &&
+             std::find(consumed.begin(), consumed.end(), semaphore) ==
+                 consumed.end())
+    {
+      throw std::logic_error(
+          "Binary semaphore must be consumed before signaling again");
+    }
+    auto point = std::make_shared<Impl::Point>();
+    signals.push_back(point);
+    reservations.push_back(
+        {semaphore,
+         semaphore->type == SemaphoreType::Timeline ? signal.value : 0, point});
+  }
+  if (fence)
+  {
+    const auto state = device.m_impl->fences.at(fence);
+    completion = state->point;
+    if (state->initiallySignaled || completion->reserved)
+      throw std::logic_error("Reset a fence before reusing it");
+  }
+  for (const auto& semaphore : consumed)
+    semaphore->signals.clear();
+  for (const auto& signal : reservations)
+  {
+    signal.semaphore->signals.emplace(signal.value, signal.point);
+    signal.semaphore->lastSignal = signal.value;
+  }
+  if (completion)
+    completion->reserved = true;
   try
   {
-    for (const auto& command : commands->Commands())
-      std::visit([this](const auto& value) { value.Execute(this); }, command);
-    for (auto handle : m_impl->submissionWrites)
-      m_impl->FindSwapchain(handle)->frameReady = true;
-    m_impl->submissionWrites.clear();
+    worker.Post(
+        [this, commands = std::move(commands), snapshot = std::move(snapshot),
+         waits, signals, completion]
+        {
+          Impl::SyncPtr finished;
+          std::exception_ptr error;
+          execution.snapshot = snapshot.get();
+          state.submissionWrites.clear();
+          try
+          {
+            worker.RethrowFailure();
+            Collect();
+            if (snapshot->resources.publication)
+              glWaitSync(snapshot->resources.publication->native, 0,
+                         GL_TIMEOUT_IGNORED);
+            for (const auto& wait : waits)
+              WaitPoint(wait);
+            glMemoryBarrier(GL_ALL_BARRIER_BITS);
+            for (const auto& list : commands)
+              for (const auto& command : list)
+                std::visit([this](const auto& value)
+                           { value.Execute(&device); }, command);
+          }
+          catch (...)
+          {
+            error = std::current_exception();
+          }
+          execution.snapshot = nullptr;
+          if (error && state.activeFramebuffer)
+          {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDeleteFramebuffers(1, &state.activeFramebuffer);
+            state.activeFramebuffer = 0;
+          }
+          for (const auto& frame : snapshot->frames)
+          {
+            if (std::find(state.submissionWrites.begin(),
+                          state.submissionWrites.end(),
+                          frame.handle) == state.submissionWrites.end())
+              continue;
+            std::lock_guard frameLock(frame.target->mutex);
+            if (!frame.target->dead && frame.target->acquired &&
+                frame.target->images.at(frame.target->imageIndex).image ==
+                    frame.image)
+              frame.target->frameReady = !error;
+          }
+          state.submissionWrites.clear();
+          try
+          {
+            finished = device.m_impl->InsertSync();
+            flights.push_back({finished, snapshot});
+          }
+          catch (...)
+          {
+            if (!error)
+              error = std::current_exception();
+          }
+          if (error && !pendingFailure)
+            pendingFailure = error;
+          for (const auto& signal : signals)
+            signal->Publish(finished, error ? error : pendingFailure);
+          if (completion)
+          {
+            completion->Publish(finished, pendingFailure);
+            pendingFailure = {};
+          }
+        });
   }
   catch (...)
   {
-    for (auto handle : m_impl->submissionWrites)
-      m_impl->FindSwapchain(handle)->frameReady = false;
-    m_impl->submissionWrites.clear();
+    auto error = std::current_exception();
+    for (const auto& signal : signals)
+      signal->Publish({}, error);
+    if (completion)
+      completion->Publish({}, error);
     throw;
   }
 }
 
-void OpenGLRenderDevice::Present(SwapchainHandle swapchain)
+void OpenGLRenderDevice::Queue::Present(
+    SwapchainHandle swapchain, std::span<const SemaphoreHandle> handles)
 {
-  auto* target = m_impl->FindSwapchain(swapchain);
+  auto snapshot = device.m_impl->Capture();
+  auto target = device.m_impl->ShareSwapchain(swapchain);
   if (!target)
+    throw std::invalid_argument("OpenGL present received an invalid swapchain");
+  if (presentSurface && target->surfaceHandle != presentSurface)
     throw std::invalid_argument(
-        "OpenGL present received an invalid swapchain handle");
-  if (!target->acquired)
-    throw std::logic_error(
-        "OpenGL present requires an acquired image for this swapchain");
-  if (!target->frameReady)
-    throw std::logic_error("OpenGL present requires successfully submitted "
-                           "writes to this swapchain");
-  m_impl->ActivateContext(target);
-  const auto& image = target->images.at(target->imageIndex);
-  GLint oldRead{}, oldDraw{};
-  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldRead);
-  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &oldDraw);
-  const auto scissor = glIsEnabled(GL_SCISSOR_TEST);
-  glDisable(GL_SCISSOR_TEST);
-  glBindFramebuffer(GL_READ_FRAMEBUFFER, image.framebuffer);
-  glReadBuffer(GL_COLOR_ATTACHMENT0);
-  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-  glDrawBuffer(GL_BACK);
-  EGLint width{}, height{};
-  if (!eglQuerySurface(m_impl->group->display, target->surface, EGL_WIDTH,
-                       &width) ||
-      !eglQuerySurface(m_impl->group->display, target->surface, EGL_HEIGHT,
-                       &height))
+        "Queue was created for another presentation surface");
+  std::vector<std::shared_ptr<Impl::Point>> waits;
   {
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, oldRead);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, oldDraw);
-    if (scissor)
-      glEnable(GL_SCISSOR_TEST);
-    throw std::runtime_error("Failed to query the OpenGL presentation extent");
+    std::lock_guard syncLock(device.m_impl->syncMutex);
+    std::vector<std::shared_ptr<Impl::Semaphore>> consumed;
+    for (auto handle : handles)
+    {
+      auto semaphore = device.m_impl->semaphores.at(handle);
+      if (semaphore->type != SemaphoreType::Binary ||
+          semaphore->signals.empty() ||
+          std::find(consumed.begin(), consumed.end(), semaphore) !=
+              consumed.end())
+        throw std::logic_error(
+            "OpenGL present requires previously submitted binary signals");
+      waits.push_back(semaphore->signals.begin()->second);
+      consumed.push_back(semaphore);
+    }
+    for (const auto& semaphore : consumed)
+      semaphore->signals.clear();
   }
-  glBlitFramebuffer(0, 0, target->width, target->height, 0, 0, width, height,
-                    GL_COLOR_BUFFER_BIT, GL_NEAREST);
-  glBindFramebuffer(GL_READ_FRAMEBUFFER, oldRead);
-  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, oldDraw);
-  if (scissor)
-    glEnable(GL_SCISSOR_TEST);
-  if (eglSwapBuffers(m_impl->group->display, target->surface) != EGL_TRUE)
-    throw std::runtime_error("EGL failed to present the rendered frame");
-  target->imageIndex = (target->imageIndex + 1) % target->images.size();
-  target->acquired = false;
-  target->frameReady = false;
-  if (m_impl->activeSwapchain == swapchain)
-    m_impl->activeSwapchain.reset();
+  worker.Invoke(
+      [this, swapchain, target, snapshot, waits]
+      {
+        worker.RethrowFailure();
+        Collect();
+        for (const auto& wait : waits)
+          WaitPoint(wait);
+        glMemoryBarrier(GL_ALL_BARRIER_BITS);
+        std::lock_guard targetLock(target->mutex);
+        if (target->dead || !target->acquired)
+          throw std::logic_error("Present requires an acquired swapchain");
+        if (!target->frameReady)
+          throw std::logic_error(
+              "Present requires submitted writes to this swapchain");
+        // Only this worker's context is used. Configless contexts accept any
+        // EGL surface on this display; otherwise eglMakeCurrent checks
+        // compatibility.
+        if (!eglMakeCurrent(device.m_impl->group->display, target->surface,
+                            target->surface, worker.Native()))
+          throw std::runtime_error(
+              "Queue context is incompatible with the presentation surface");
+        if (!eglSwapInterval(device.m_impl->group->display,
+                             target->vsync ? 1 : 0))
+          throw std::runtime_error("Cannot set the presentation swap interval");
+        if (snapshot->resources.publication)
+          glWaitSync(snapshot->resources.publication->native, 0,
+                     GL_TIMEOUT_IGNORED);
+        const auto& image = target->images.at(target->imageIndex);
+        GLint oldRead{}, oldDraw{};
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldRead);
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &oldDraw);
+        const bool scissor = glIsEnabled(GL_SCISSOR_TEST);
+        GLuint framebuffer{};
+        glCreateFramebuffers(1, &framebuffer);
+        struct RestoreFramebuffer
+        {
+          GLuint framebuffer;
+          GLint read, draw;
+          bool scissor;
+          ~RestoreFramebuffer()
+          {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, read);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw);
+            if (scissor)
+              glEnable(GL_SCISSOR_TEST);
+            glDeleteFramebuffers(1, &framebuffer);
+          }
+        } restore{framebuffer, oldRead, oldDraw, scissor};
+        glNamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0,
+                                  snapshot->resources.views.at(image.view).id,
+                                  0);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glDrawBuffer(GL_BACK);
+        glDisable(GL_SCISSOR_TEST);
+        EGLint width{}, height{};
+        const bool extent =
+            eglQuerySurface(device.m_impl->group->display, target->surface,
+                            EGL_WIDTH, &width) &&
+            eglQuerySurface(device.m_impl->group->display, target->surface,
+                            EGL_HEIGHT, &height);
+        if (!extent)
+          throw std::runtime_error("Cannot query presentation extent");
+        glBlitFramebuffer(0, 0, target->width, target->height, 0, 0, width,
+                          height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        const bool presented = eglSwapBuffers(device.m_impl->group->display,
+                                              target->surface) == EGL_TRUE;
+        auto finished = device.m_impl->InsertSync();
+        flights.push_back({finished, snapshot});
+        // Release the surface before a different queue or resource thread uses
+        // it.
+        worker.MakeCurrent();
+        if (!presented)
+          throw std::runtime_error("EGL presentation failed");
+        target->imageIndex = (target->imageIndex + 1) % target->images.size();
+        target->acquired = false;
+        target->frameReady = false;
+        if (state.activeSwapchain == swapchain)
+          state.activeSwapchain.reset();
+      });
 }
 void OpenGLRenderDevice::WaitIdle()
 {
-  // Work can be submitted to any window context as well as the shared context.
-  m_impl->ActivateContext();
-  glFinish();
-  for (const auto& slot : m_impl->swapchains)
+  std::exception_ptr failure;
+  for (auto& queue : m_queues)
   {
-    if (!slot.value)
-      continue;
-    m_impl->ActivateContext(slot.value.get());
-    glFinish();
+    try
+    {
+      queue->WaitIdle();
+    }
+    catch (...)
+    {
+      if (!failure)
+        failure = std::current_exception();
+    }
   }
-  if (m_impl->activeSwapchain)
-    m_impl->ActivateContext(m_impl->FindSwapchain(*m_impl->activeSwapchain));
-  else
-    m_impl->ActivateContext();
+  {
+    Impl::Scope context(*m_impl, false);
+    m_impl->deletions->Drain();
+  }
+  if (failure)
+    std::rethrow_exception(failure);
 }
 
 #ifdef LIGHTHOUSE_IMGUI

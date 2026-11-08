@@ -22,7 +22,9 @@ class VulkanRenderDevice final : public IRenderDevice
 {
 public:
   using IRenderDevice::CreateShaderModule;
-  explicit VulkanRenderDevice(const DeviceConfig& config = {});
+  explicit VulkanRenderDevice(
+      const RenderDeviceCreateInfo& config,
+      std::span<const std::pair<SurfaceHandle, Window*>> surfaces = {});
   ~VulkanRenderDevice() override;
   VulkanRenderDevice(const VulkanRenderDevice&) = delete;
   VulkanRenderDevice& operator=(const VulkanRenderDevice&) = delete;
@@ -35,15 +37,25 @@ public:
   std::vector<std::byte> ReadImage(ImageHandle) override;
   ImageViewHandle CreateImageView(const ImageViewDesc&) override;
   BufferHandle CreateBuffer(const BufferDesc&) override;
-  void UpdateBuffer(BufferHandle, std::uint64_t,
-                    std::span<const std::byte>) override;
-  std::span<std::byte> MapStreamingBuffer(BufferHandle) override;
-  std::uint64_t StreamingBufferAlignment() const override;
-  void PublishStreamingWrites(BufferHandle, std::uint64_t,
-                              std::uint64_t) override;
-  std::uint64_t InsertCompletionMarker() override;
-  bool PollCompletionMarker(std::uint64_t) override;
-  void ReleaseCompletionMarker(std::uint64_t) override;
+  IRenderQueue* GetQueue(std::uint32_t index) override;
+  FenceHandle CreateFence(bool signaled = false) override;
+  void DestroyFence(FenceHandle) override;
+  void ResetFence(FenceHandle) override;
+  bool GetFenceStatus(FenceHandle) override;
+  bool WaitForFence(FenceHandle, std::uint64_t timeout = UINT64_MAX) override;
+  SemaphoreHandle CreateSemaphore(SemaphoreType type = SemaphoreType::Binary,
+                                  std::uint64_t initialValue = 0) override;
+  void DestroySemaphore(SemaphoreHandle) override;
+  std::uint64_t GetSemaphoreCounterValue(SemaphoreHandle) override;
+  void SignalSemaphore(SemaphoreHandle, std::uint64_t value) override;
+  bool WaitSemaphore(SemaphoreHandle, std::uint64_t value,
+                     std::uint64_t timeout = UINT64_MAX) override;
+  std::span<std::byte> MapMemory(BufferHandle) override;
+  void UnmapMemory(BufferHandle) override;
+  void FlushMappedMemoryRange(BufferHandle, std::uint64_t offset,
+                              std::uint64_t size) override;
+  void InvalidateMappedMemoryRange(BufferHandle, std::uint64_t offset,
+                                   std::uint64_t size) override;
   std::optional<BufferMetadata>
       GetBufferDesc(BufferHandle) const noexcept override;
   bool IsValid(BufferHandle) const noexcept override;
@@ -60,7 +72,8 @@ public:
   void UpdateDescriptorSet(DescriptorSetHandle,
                            std::span<const DescriptorWrite>) override;
   GraphicsPipelineHandle CreatePipeline(const GraphicsPipelineDesc&) override;
-  std::unique_ptr<IRenderCommandList> CreateCommandList(QueueType) override;
+  std::unique_ptr<IRenderCommandList>
+  CreateCommandList(std::uint32_t queueIndex) override;
   void DestroyImage(ImageHandle) override;
   void DestroyImageView(ImageViewHandle) override;
   void DestroyBuffer(BufferHandle) override;
@@ -71,13 +84,14 @@ public:
   void DestroyPipelineLayout(PipelineLayoutHandle) override;
   void DestroySampler(SamplerHandle) override;
   RenderCapabilities GetCapabilities() const override;
-  SwapchainHandle CreateSwapchain(Window& window,
+  SurfaceHandle CreateSurface(Window&) override;
+  void DestroySurface(SurfaceHandle) override;
+  SwapchainHandle CreateSwapchain(SurfaceHandle surface,
                                   const SwapchainConfig& config) override;
   AcquiredSwapchainImage AcquireSwapchainImage(SwapchainHandle) override;
   bool DestroySwapchain(SwapchainHandle) override;
   bool IsValid(SwapchainHandle) const noexcept override;
-  void Submit(const IRenderCommandList&) override;
-  void Present(SwapchainHandle swapchain) override;
+
   void WaitIdle() override;
 #ifdef LIGHTHOUSE_IMGUI
   void InitializeImGui(WindowManager& windows) override;
@@ -88,6 +102,8 @@ public:
 #endif
 
 private:
+  class Queue;
+  std::vector<std::unique_ptr<IRenderQueue>> m_queues;
   friend class VulkanCommandList;
   struct Impl;
   std::unique_ptr<Impl> m_impl;

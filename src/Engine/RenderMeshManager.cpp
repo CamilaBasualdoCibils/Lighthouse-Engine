@@ -190,7 +190,15 @@ RenderMeshHandle RenderMeshManager::Upload(const RenderMesh& source, IRenderDevi
         const auto bytes = std::as_bytes(std::span(indices));
         indexBuffer = device.CreateBuffer({.size = bytes.size(),
             .usage = BufferUsage::Index, .initialData = bytes});
-        device.WaitIdle();
+        const auto fence = device.CreateFence();
+        try {
+          device.GetQueue(0)->Submit(QueueSubmitInfo{}, fence);
+          device.WaitForFence(fence);
+        } catch (...) {
+            device.DestroyFence(fence);
+            throw;
+        }
+        device.DestroyFence(fence);
     } catch (...) {
         if (indexBuffer) device.DestroyBuffer(indexBuffer);
         device.DestroyBuffer(vertexBuffer);

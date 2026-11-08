@@ -10,8 +10,12 @@ class VulkanRenderDevice;
 class VulkanCommandList final : public IRenderCommandList
 {
 public:
-  explicit VulkanCommandList(VulkanRenderDevice& device);
+  explicit VulkanCommandList(VulkanRenderDevice& device,
+                             std::uint32_t queueIndex);
   ~VulkanCommandList() override;
+  void PushDebugGroup(std::string_view, std::array<float, 4>) override;
+  void PopDebugGroup() override;
+  void InsertDebugMarker(std::string_view, std::array<float, 4>) override;
   void Begin() override;
   void End() override;
   void Clear() override;
@@ -29,6 +33,8 @@ public:
   void DrawIndexedRange(std::uint32_t, std::uint32_t, std::int32_t) override;
   void MultiDrawIndexedIndirect(BufferHandle, std::uint32_t) override;
   void Dispatch(std::uint32_t, std::uint32_t, std::uint32_t) override;
+  void CopyBuffer(BufferHandle, BufferHandle, std::uint64_t, std::uint64_t,
+                  std::uint64_t) override;
   void BlitImage(ImageHandle, ImageHandle, const BlitRegion&,
                  ImageFilter) override;
   const vk::CommandBuffer& Native() const noexcept;

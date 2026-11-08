@@ -103,9 +103,17 @@ public:
   virtual std::string_view Name() const noexcept = 0;
   virtual bool Initialize(std::string& diagnostic) = 0;
   virtual GraphicsCapabilities Capabilities() const = 0;
+  virtual bool RequiresEGLWindow() const noexcept { return false; }
+  // Register a native window target before requesting a presentation queue.
+  // The window must outlive every device using this surface.
+  SurfaceHandle CreateSurface(Window&);
+  void DestroySurface(SurfaceHandle);
   virtual std::unique_ptr<IRenderDevice>
-  CreateDevice(const DeviceConfig& config);
+  CreateDevice(const RenderDeviceCreateInfo& config);
   virtual void Shutdown() noexcept = 0;
+
+protected:
+  std::vector<std::pair<SurfaceHandle, Window*>> m_surfaces;
 };
 
 struct BackendAttempt
@@ -139,7 +147,7 @@ public:
   bool IsRegistered(std::string_view backend) const;
   BackendSelectionResult
   Select(const GraphicsConfig& config,
-         const DeviceConfig* deviceConfig = nullptr) const;
+         const RenderDeviceCreateInfo* deviceConfig = nullptr) const;
 
 private:
   struct Entry

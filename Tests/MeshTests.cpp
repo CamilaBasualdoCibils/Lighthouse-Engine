@@ -1,3 +1,4 @@
+#include "NullSynchronizationDevice.hpp"
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 #include <Lighthouse/Engine/Assets/Mesh.hpp>
@@ -15,9 +16,9 @@
 namespace {
 using namespace Lighthouse;
 
-class TestDevice final : public IRenderDevice {
+class TestDevice final : public NullSynchronizationDevice {
 public:
-    SwapchainHandle CreateSwapchain(Window&, const SwapchainConfig&) override { return {0, 1, DeviceId()}; }
+    SwapchainHandle CreateSwapchain(SurfaceHandle, const SwapchainConfig&) override { return {0, 1, DeviceId()}; }
     AcquiredSwapchainImage AcquireSwapchainImage(SwapchainHandle) override { return {}; }
     bool DestroySwapchain(SwapchainHandle) override { return true; }
     bool IsValid(SwapchainHandle handle) const noexcept override { return handle.owner == DeviceId() && handle.index == 0 && handle.generation == 1; }
@@ -44,7 +45,11 @@ public:
     SamplerHandle CreateSampler(const SamplerDesc&) override { return {}; }
     void UpdateDescriptorSet(DescriptorSetHandle, std::span<const DescriptorWrite>) override {}
     GraphicsPipelineHandle CreatePipeline(const GraphicsPipelineDesc&) override { return {}; }
-    std::unique_ptr<IRenderCommandList> CreateCommandList(QueueType) override { return {}; }
+    std::unique_ptr<IRenderCommandList>
+    CreateCommandList(std::uint32_t queueIndex) override
+    {
+      return {};
+    }
     void Destroy(ImageHandle) override {}
     void Destroy(ImageViewHandle) override {}
     void Destroy(BufferHandle handle) override { m_buffers.erase(handle); }
@@ -55,8 +60,6 @@ public:
     void Destroy(PipelineLayoutHandle) override {}
     void Destroy(SamplerHandle) override {}
     RenderCapabilities GetCapabilities() const override { return {}; }
-    void Submit(const IRenderCommandList&) override {}
-    void Present(SwapchainHandle) override {}
 
 private:
     std::uint32_t m_next{1};

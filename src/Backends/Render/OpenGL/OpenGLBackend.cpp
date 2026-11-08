@@ -154,7 +154,8 @@ void OpenGLDeviceGroup::Initialize(void* nativeDisplay)
   }
 }
 
-EGLContext OpenGLDeviceGroup::CreateSharedContext(EGLConfig windowConfig) const
+EGLContext OpenGLDeviceGroup::CreateSharedContext(EGLConfig windowConfig,
+                                                  bool configless) const
 {
   const EGLint attributes[]{EGL_CONTEXT_MAJOR_VERSION,
                             4,
@@ -164,7 +165,9 @@ EGLContext OpenGLDeviceGroup::CreateSharedContext(EGLConfig windowConfig) const
                             EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
                             EGL_NONE};
   const auto context = eglCreateContext(
-      display, windowConfig ? windowConfig : config, shareContext, attributes);
+      display,
+      configless ? EGL_NO_CONFIG_KHR : (windowConfig ? windowConfig : config),
+      shareContext, attributes);
   if (context == EGL_NO_CONTEXT)
     throw std::runtime_error("Failed to create the EGL device context");
   return context;
@@ -292,15 +295,17 @@ GraphicsCapabilities OpenGLBackend::Capabilities() const
               m_impl->group && m_impl->group->display != EGL_NO_DISPLAY};
 }
 std::unique_ptr<IRenderDevice>
-OpenGLBackend::CreateDevice(const DeviceConfig& config)
+OpenGLBackend::CreateDevice(const RenderDeviceCreateInfo& config)
 {
   if (!m_impl->group)
     m_impl->group = std::make_shared<Detail::OpenGLDeviceGroup>();
   m_impl->group->Initialize();
-  return std::make_unique<OpenGLRenderDevice>(m_impl->group, config);
+  return std::make_unique<OpenGLRenderDevice>(m_impl->group, config,
+                                              m_surfaces);
 }
 void OpenGLBackend::Shutdown() noexcept
 {
+  m_surfaces.clear();
   if (m_impl)
     m_impl->group.reset();
 }

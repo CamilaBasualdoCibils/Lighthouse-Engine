@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Lighthouse/Engine/Rendering/IRenderQueue.hpp>
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -43,7 +44,12 @@ public:
     return std::nullopt;
   }
 
-  virtual SwapchainHandle CreateSwapchain(Window&, const SwapchainConfig&) = 0;
+  // Platform surface creation is exposed here because this architecture owns
+  // the Vulkan instance/EGL display inside the render device.
+  virtual SurfaceHandle CreateSurface(Window&) = 0;
+  virtual void DestroySurface(SurfaceHandle) = 0;
+  virtual SwapchainHandle CreateSwapchain(SurfaceHandle,
+                                          const SwapchainConfig&) = 0;
   // Acquires an image for this swapchain. Other swapchains may remain acquired.
   // The returned attachments identify the destination of recorded commands.
   virtual AcquiredSwapchainImage AcquireSwapchainImage(SwapchainHandle) = 0;
@@ -58,45 +64,27 @@ public:
   }
   virtual ImageViewHandle CreateImageView(const ImageViewDesc& description) = 0;
   virtual BufferHandle CreateBuffer(const BufferDesc& description) = 0;
-  // Synchronous host upload: completes prior device work, copies the bytes,
-  // and makes them visible to subsequent submissions. It does not record a
-  // command and must not race other threads submitting work on this device.
-  virtual void UpdateBuffer(BufferHandle, std::uint64_t,
-                            std::span<const std::byte>)
-  {
-    throw std::logic_error("Buffer updates are unsupported by this backend");
-  }
-  // Persistent host mapping for streaming into ranges not read by in-flight
-  // GPU commands. Mapping is established during resource setup. Worker threads
-  // may copy to disjoint mapped ranges without touching the graphics context.
-  virtual std::span<std::byte> MapStreamingBuffer(BufferHandle)
-  {
-    throw std::logic_error("Persistent buffer streaming unsupported");
-  }
-  virtual std::uint64_t StreamingBufferAlignment() const
-  {
-    return 256;
-  }
-  // Publish completed worker writes. Never waits for GPU completion.
-  virtual void PublishStreamingWrites(BufferHandle, std::uint64_t,
-                                      std::uint64_t)
-  {
-    throw std::logic_error("Persistent buffer streaming unsupported");
-  }
-  // Opaque completion marker for all commands previously submitted on this
-  // device. Poll is zero-timeout; release only after completion (or shutdown).
-  virtual std::uint64_t InsertCompletionMarker()
-  {
-    throw std::logic_error("GPU completion markers unsupported");
-  }
-  virtual bool PollCompletionMarker(std::uint64_t)
-  {
-    throw std::logic_error("GPU completion markers unsupported");
-  }
-  virtual void ReleaseCompletionMarker(std::uint64_t)
-  {
-    throw std::logic_error("GPU completion markers unsupported");
-  }
+  virtual IRenderQueue* GetQueue(std::uint32_t index) = 0;
+  virtual FenceHandle CreateFence(bool signaled = false) = 0;
+  virtual void DestroyFence(FenceHandle) = 0;
+  virtual void ResetFence(FenceHandle) = 0;
+  virtual bool GetFenceStatus(FenceHandle) = 0;
+  virtual bool WaitForFence(FenceHandle,
+                            std::uint64_t timeout = UINT64_MAX) = 0;
+  virtual SemaphoreHandle
+  CreateSemaphore(SemaphoreType type = SemaphoreType::Binary,
+                  std::uint64_t initialValue = 0) = 0;
+  virtual void DestroySemaphore(SemaphoreHandle) = 0;
+  virtual std::uint64_t GetSemaphoreCounterValue(SemaphoreHandle) = 0;
+  virtual void SignalSemaphore(SemaphoreHandle, std::uint64_t value) = 0;
+  virtual bool WaitSemaphore(SemaphoreHandle, std::uint64_t value,
+                             std::uint64_t timeout = UINT64_MAX) = 0;
+  virtual std::span<std::byte> MapMemory(BufferHandle) = 0;
+  virtual void UnmapMemory(BufferHandle) = 0;
+  virtual void FlushMappedMemoryRange(BufferHandle, std::uint64_t offset,
+                                      std::uint64_t size) = 0;
+  virtual void InvalidateMappedMemoryRange(BufferHandle, std::uint64_t offset,
+                                           std::uint64_t size) = 0;
   virtual std::optional<BufferMetadata>
   GetBufferDesc(BufferHandle handle) const noexcept = 0;
   virtual bool IsValid(BufferHandle handle) const noexcept = 0;
@@ -133,14 +121,16 @@ public:
   virtual RayTracingPipelineHandle
   CreateRayTracingPipeline(const RayTracingPipelineDesc&)
   {
-    throw std::logic_error("Ray-tracing pipelines are unsupported by this backend");
+    throw std::logic_error(
+        "Ray-tracing pipelines are unsupported by this backend");
   }
   virtual void DestroyRayTracingPipeline(RayTracingPipelineHandle)
   {
-    throw std::logic_error("Ray-tracing pipelines are unsupported by this backend");
+    throw std::logic_error(
+        "Ray-tracing pipelines are unsupported by this backend");
   }
   virtual std::unique_ptr<IRenderCommandList>
-  CreateCommandList(QueueType type) = 0;
+  CreateCommandList(std::uint32_t queueIndex) = 0;
 
   virtual void DestroyImage(ImageHandle handle) = 0;
   virtual void DestroyImageView(ImageViewHandle handle) = 0;
@@ -153,11 +143,6 @@ public:
   virtual void DestroySampler(SamplerHandle) = 0;
 
   virtual RenderCapabilities GetCapabilities() const = 0;
-  // Execute commands against their declared attachments. One command list may
-  // write multiple acquired swapchains; each becomes independently presentable.
-  virtual void Submit(const IRenderCommandList& commandList) = 0;
-  // Display this swapchain's acquired image after its submitted work completes.
-  virtual void Present(SwapchainHandle swapchain) = 0;
   virtual void WaitIdle() = 0;
 
 private:

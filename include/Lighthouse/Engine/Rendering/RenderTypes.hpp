@@ -203,6 +203,13 @@ constexpr BufferUsage& operator|=(BufferUsage& left, BufferUsage right) noexcept
   return left = left | right;
 }
 
+struct SurfaceTag;
+struct FenceTag;
+struct SemaphoreTag;
+using SurfaceHandle = Handle<SurfaceTag>;
+using FenceHandle = Handle<FenceTag>;
+using SemaphoreHandle = Handle<SemaphoreTag>;
+
 struct ImageTag;
 struct ImageViewTag;
 struct BufferTag;
@@ -521,8 +528,8 @@ struct RenderCapabilities
                                // access.
   bool hardwareRayTracing{};   // Physical device support, not a ray-tracing API
                                // promise.
-  bool rayTracing{}; // Enabled backend ray-tracing API (currently
-                     // unavailable).
+  bool rayTracing{};           // Enabled backend ray-tracing API (currently
+                               // unavailable).
   bool meshShaders{};
   bool asyncCompute{}; // False for the single-queue implementation.
   bool dynamicRendering{};
@@ -536,10 +543,33 @@ struct RenderCapabilities
   bool variableRateShading{};
 };
 
-struct DeviceConfig
+enum class RenderQueueCapability : std::uint32_t
+{
+  None = 0,
+  Graphics = 1u << 0,
+  Compute = 1u << 1,
+  Transfer = 1u << 2,
+  Present = 1u << 3
+};
+constexpr RenderQueueCapability operator|(RenderQueueCapability a,
+                                          RenderQueueCapability b) noexcept
+{
+  return static_cast<RenderQueueCapability>(static_cast<std::uint32_t>(a) |
+                                            static_cast<std::uint32_t>(b));
+}
+struct RenderQueueRequest
+{
+  RenderQueueCapability capabilities = RenderQueueCapability::None;
+  std::uint32_t minCount = 0;
+  std::uint32_t preferredCount = 1;
+  SurfaceHandle presentSurface = {};
+};
+
+struct RenderDeviceCreateInfo
 {
   std::string_view applicationName{"Lighthouse"};
   bool enableValidation{};
+  std::vector<RenderQueueRequest> queues;
 };
 
 // Borrowed handles for the currently acquired swapchain image. The swapchain

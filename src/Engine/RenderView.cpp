@@ -6,22 +6,29 @@
 
 #include <algorithm>
 
-namespace Lighthouse {
+namespace Lighthouse
+{
 
-void IRenderView::BuildGraph(ViewBuildContext &) {}
+void IRenderView::BuildGraph(ViewBuildContext&) {}
 
-Window *WindowView::GetWindow() const noexcept {
+Window* WindowView::GetWindow() const noexcept
+{
   return m_windows ? m_windows->GetWindow(window) : nullptr;
 }
 
-void WindowView::BuildGraph(ViewBuildContext &ctx) {
-  auto *targetWindow = GetWindow();
+void WindowView::BuildGraph(ViewBuildContext& ctx)
+{
+  auto* targetWindow = GetWindow();
   if (!targetWindow)
     throw std::logic_error("Window view targets an invalid window");
   // if (!ctx.device) throw std::logic_error("Window view requires a render
   // device");
   if (!swapchain || !ctx.device.IsValid(swapchain))
-    swapchain = ctx.device.CreateSwapchain(*targetWindow, presentation);
+  {
+    if (!surface)
+      surface = ctx.device.CreateSurface(*targetWindow);
+    swapchain = ctx.device.CreateSwapchain(surface, presentation);
+  }
   m_swapchainInfo =
       ctx.device.GetSwapchainInfo(swapchain).value_or(m_swapchainInfo);
   ImportedWindowView imported_image_view(this);
@@ -29,7 +36,8 @@ void WindowView::BuildGraph(ViewBuildContext &ctx) {
       "WindowView Swapchain", ImportedWindowView::Desc{}, imported_image_view);
   m_logger->info("Imported WindowView Swapchain to RenderGraph");
 }
-void WindowView::Begin(Renderer *renderer) {
+void WindowView::Begin(Renderer* renderer)
+{
 
   const auto acquire =
       renderer->GetRenderDevice()->AcquireSwapchainImage(swapchain);
@@ -38,19 +46,20 @@ void WindowView::Begin(Renderer *renderer) {
       renderer->GetRenderDevice()->GetSwapchainInfo(swapchain).value_or(
           m_swapchainInfo);
 }
-void WindowView::End(Renderer *renderer) {
-  renderer->GetRenderDevice()->Present(swapchain);
+void WindowView::End(Renderer* renderer)
+{
+  renderer->GetRenderDevice()->GetQueue(0)->Present(swapchain);
   m_acquiredImage.reset();
 }
 
-void ExportView::BuildGraph(ViewBuildContext &ctx) {
+void ExportView::BuildGraph(ViewBuildContext& ctx)
+{
   if (!imageView)
     throw std::logic_error("Export view targets an invalid external image");
   m_exportImage = ctx.graph.Import<ImportedRenderGraphImage>(
       "export image", description, {imageView});
 }
 
-void RenderTextureView::BuildGraph(ViewBuildContext &ctx) {
-}
+void RenderTextureView::BuildGraph(ViewBuildContext& ctx) {}
 
 } // namespace Lighthouse

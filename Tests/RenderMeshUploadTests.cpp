@@ -1,3 +1,4 @@
+#include "QueueTestHelpers.hpp"
 #include <Lighthouse/Engine/Assets/Mesh.hpp>
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
@@ -5,6 +6,7 @@
 #define GL_GLEXT_PROTOTYPES
 #include <GL/glcorearb.h>
 #include <array>
+#include <cstring>
 #include <gtest/gtest.h>
 
 using namespace Lighthouse;
@@ -16,7 +18,14 @@ TEST(RenderMeshUploadTests,
   OpenGLBackend backend;
   std::string diagnostic;
   ASSERT_TRUE(backend.Initialize(diagnostic));
-  Renderer renderer(backend.CreateDevice({}), &windows);
+  Renderer renderer(
+      backend.CreateDevice(
+          {.queues = {{.capabilities =
+                           Lighthouse::RenderQueueCapability::Graphics |
+                           Lighthouse::RenderQueueCapability::Compute |
+                           Lighthouse::RenderQueueCapability::Transfer,
+                       .minCount = 1}}}),
+      &windows);
   renderer.CreateWindowView({.title = "Mesh upload regression",
                              .width = 64,
                              .height = 64,
@@ -84,7 +93,7 @@ void main() { color=vec4(1); }
                           .usage = {ImageUsage::ColorAttachment}});
   const auto imageView =
       device.CreateImageView({.image = image, .format = ImageFormat::RGBA8});
-  auto commands = device.CreateCommandList(QueueType::Graphics);
+  auto commands = device.CreateCommandList(0);
   commands->Begin();
   commands->BeginRendering({.colorAttachment = imageView,
                             .clearColor = true,
@@ -105,19 +114,11 @@ void main() { color=vec4(1); }
   commands->EndRendering();
   commands->BindTexture(0, image);
   commands->End();
-  device.Submit(*commands);
-  device.WaitIdle();
-  // WaitIdle switches contexts; Submit an empty readback binding to select the
-  // shared context's texture binding before querying its actual texels.
-  auto readback = device.CreateCommandList(QueueType::Graphics);
-  readback->Begin();
-  readback->BindTexture(0, image);
-  readback->End();
-  device.Submit(*readback);
+  SubmitAndWait(device, *commands);
+  // Queue contexts stay on their owner threads; diagnostics use the device API.
+  const auto readbackBytes = device.ReadImage(image);
   std::array<unsigned char, 64 * 64 * 4> pixels{};
-  glActiveTexture(GL_TEXTURE0);
-  glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
-  EXPECT_EQ(glGetError(), GL_NO_ERROR);
+  std::memcpy(pixels.data(), readbackBytes.data(), pixels.size());
   EXPECT_GT(pixels[(24 * 64 + 16) * 4], 240);
   EXPECT_GT(pixels[(24 * 64 + 48) * 4], 240);
   EXPECT_LT(pixels[(60 * 64 + 32) * 4], 10);

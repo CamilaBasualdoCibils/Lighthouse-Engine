@@ -54,6 +54,7 @@ class WindowView final : public IOutputView {
 public:
     WindowHandle window;
     SwapchainConfig presentation;
+    SurfaceHandle surface;
     SwapchainHandle swapchain;
     SwapchainInfo GetSwapchainInfo() const noexcept
     {

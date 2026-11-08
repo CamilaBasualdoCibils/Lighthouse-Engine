@@ -1,3 +1,4 @@
+#include "QueueTestHelpers.hpp"
 #include <Lighthouse/Engine/Assets/Assets.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 #include <Lighthouse/Engine/Rendering/Renderer.hpp>
@@ -8,6 +9,7 @@
 #define GL_GLEXT_PROTOTYPES
 #include <GL/glcorearb.h>
 #include <array>
+#include <cstring>
 
 #include <gtest/gtest.h>
 
@@ -69,8 +71,13 @@ TEST(OpenGLShaderTests, CreatesAndDestroysModulesAndLinksGraphicsPipeline) {
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic)) << diagnostic;
-    auto device = backend.CreateDevice({});
-    const auto swapchain = device->CreateSwapchain(*window, {});
+    auto device = backend.CreateDevice(
+        {.queues = {
+             {.capabilities = Lighthouse::RenderQueueCapability::Graphics |
+                              Lighthouse::RenderQueueCapability::Compute |
+                              Lighthouse::RenderQueueCapability::Transfer,
+              .minCount = 1}}});
+    const auto swapchain = device->CreateSwapchain(device->CreateSurface(*window), {});
 
     constexpr std::string_view vertexSource = R"(#version 450
 layout(location = 0) in vec3 position;
@@ -86,12 +93,15 @@ void main() { color = vec4(1.0); }
         {ShaderSourceLanguage::GLSL, ShaderStage::Fragment, "main"});
     const auto vertexModule = device->CreateShaderModule(vertex);
     const auto fragmentModule = device->CreateShaderModule(fragment);
-    const auto pipeline = device->CreatePipeline({
-        .vertexShader = vertexModule,
-        .fragmentShader = fragmentModule
-    });
+    const auto layout = device->CreatePipelineLayout({});
+    const auto pipeline =
+        device->CreatePipeline({.vertexShader = vertexModule,
+                                .fragmentShader = fragmentModule,
+                                .colorFormats = {ImageFormat::RGBA8},
+                                .layout = layout});
 
     device->DestroyPipeline(pipeline);
+    device->DestroyPipelineLayout(layout);
     device->DestroyModule(vertexModule);
     device->DestroyModule(fragmentModule);
     EXPECT_TRUE(device->DestroySwapchain(swapchain));
@@ -115,20 +125,25 @@ TEST(OpenGLSwapchainTests, RotatesRealImagesAndBlitsTheirPixels) {
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic)) << diagnostic;
-    auto device = backend.CreateDevice({});
-    EXPECT_THROW(device->CreateSwapchain(*window, {.minImageCount = 0}), std::invalid_argument);
-    const auto swapchain = device->CreateSwapchain(*window, {.vsync = false, .minImageCount = 3});
+    auto device = backend.CreateDevice(
+        {.queues = {
+             {.capabilities = Lighthouse::RenderQueueCapability::Graphics |
+                              Lighthouse::RenderQueueCapability::Compute |
+                              Lighthouse::RenderQueueCapability::Transfer,
+              .minCount = 1}}});
+    EXPECT_THROW(device->CreateSwapchain(device->CreateSurface(*window), {.minImageCount = 0}), std::invalid_argument);
+    const auto swapchain = device->CreateSwapchain(device->CreateSurface(*window), {.vsync = false, .minImageCount = 3});
     const auto readback = device->CreateImage({.width = 64, .height = 64,
         .format = ImageFormat::RGBA8, .usage = ImageUsage::ColorAttachment | ImageUsage::TransferDestination});
     const auto readbackView = device->CreateImageView({.image = readback, .format = ImageFormat::RGBA8});
-    auto commands = device->CreateCommandList(QueueType::Graphics);
+    auto commands = device->CreateCommandList(0);
     std::array<AcquiredSwapchainImage, 3> acquired;
     for (std::uint32_t frame = 0; frame < 6; ++frame) {
         const auto image = device->AcquireSwapchainImage(swapchain);
         ASSERT_TRUE(image.image);
         ASSERT_TRUE(image.view);
         EXPECT_THROW(device->AcquireSwapchainImage(swapchain), std::logic_error);
-        EXPECT_THROW(device->Present(swapchain), std::logic_error);
+        EXPECT_THROW(device->GetQueue(0)->Present(swapchain), std::logic_error);
         if (frame < acquired.size()) {
             acquired[frame] = image;
             for (std::uint32_t previous = 0; previous < frame; ++previous) {
@@ -151,22 +166,19 @@ TEST(OpenGLSwapchainTests, RotatesRealImagesAndBlitsTheirPixels) {
         };
         commands->BlitImage(image.image, readback, region, ImageFilter::Nearest);
         commands->BeginRendering({.colorAttachment = readbackView, .width = 64, .height = 64});
-        ASSERT_NO_THROW(device->Submit(*commands));
+        ASSERT_NO_THROW(SubmitAndWait(*device, *commands));
         std::array<unsigned char, 4> pixel{};
-        glReadPixels(32, 32, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+        const auto pixels = device->ReadImage(readback);
+        std::memcpy(pixel.data(), pixels.data() + (32 * 64 + 32) * 4,
+                    pixel.size());
         EXPECT_EQ(pixel, (std::array<unsigned char, 4>{255, 0, 0, 255}));
         commands->Clear();
         commands->EndRendering();
         // Also verify the acquired image can be used as a blit destination.
         commands->BlitImage(readback, image.image, region, ImageFilter::Nearest);
-        ASSERT_NO_THROW(device->Submit(*commands));
-        // Presentation must ignore a scissor left by application rendering.
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(0, 0, 1, 1);
-        ASSERT_NO_THROW(device->Present(swapchain));
-        EXPECT_TRUE(glIsEnabled(GL_SCISSOR_TEST));
-        glDisable(GL_SCISSOR_TEST);
-        EXPECT_EQ(glGetError(), GL_NO_ERROR);
+        ASSERT_NO_THROW(SubmitAndWait(*device, *commands));
+        // Presentation state belongs to the queue's context, not this thread.
+        ASSERT_NO_THROW(device->GetQueue(0)->Present(swapchain));
     }
     EXPECT_TRUE(device->DestroySwapchain(swapchain));
     EXPECT_FALSE(device->IsValid(swapchain));
@@ -193,43 +205,58 @@ TEST(OpenGLWindowViewTests, RendererCreatesAndOwnsWindowWhileStandaloneWindowsRe
     ASSERT_TRUE(backend.Initialize(diagnostic)) << diagnostic;
     WindowHandle ownedWindow;
     {
-        Renderer renderer(backend.CreateDevice({}), &windows);
-        const auto viewHandle = renderer.CreateView<WindowView>(RenderWindowDesc{
-            .title = "Renderer window", .width = 96, .height = 80,
-            .resizable = false, .visible = false, .decorated = false});
-        auto* view = renderer.GetView<WindowView>(viewHandle);
-        ASSERT_NE(view, nullptr);
-        auto* window = view->GetWindow();
-        ASSERT_NE(window, nullptr);
-        ownedWindow = window->Handle();
-        EXPECT_EQ(window->Title(), "Renderer window");
-        EXPECT_EQ(window->Width(), 96u);
-        EXPECT_EQ(window->Height(), 80u);
-        EXPECT_FALSE(window->IsVisible());
-        EXPECT_NE(window->NativeEGLWindowHandle(), nullptr);
-        EXPECT_NE(window->NativeDisplayHandle(), nullptr);
-        const auto size = window->GetFramebufferSize();
-        EXPECT_EQ(size.width, window->FramebufferWidth());
-        EXPECT_EQ(size.height, window->FramebufferHeight());
-        EXPECT_GT(size.width, 0u);
-        EXPECT_GT(size.height, 0u);
-        RenderGraph graph;
-        ViewBuildContext context{graph, *renderer.GetRenderDevice()};
-        view->BuildGraph(context);
-        const auto swapchain = view->swapchain;
-        EXPECT_TRUE(renderer.GetRenderDevice()->IsValid(swapchain));
-        EXPECT_TRUE(renderer.DestroyView(viewHandle));
-        EXPECT_EQ(renderer.GetView(viewHandle), nullptr);
-        EXPECT_EQ(windows.GetWindow(ownedWindow), nullptr);
-        EXPECT_FALSE(renderer.GetRenderDevice()->IsValid(swapchain));
-        EXPECT_NE(windows.GetWindow(standalone), nullptr);
-        EXPECT_THROW(renderer.CreateView<WindowView>(RenderWindowDesc{.width = 0}), std::invalid_argument);
-        const auto remaining = renderer.CreateWindowView(RenderWindowDesc{
-            .title = "Destructor cleanup", .width = 64, .height = 64,
-            .visible = false});
-        auto* remainingView = renderer.GetView<WindowView>(remaining);
-        ownedWindow = remainingView->GetWindow()->Handle();
-        remainingView->BuildGraph(context);
+      Renderer renderer(
+          backend.CreateDevice(
+              {.queues = {{.capabilities =
+                               Lighthouse::RenderQueueCapability::Graphics |
+                               Lighthouse::RenderQueueCapability::Compute |
+                               Lighthouse::RenderQueueCapability::Transfer,
+                           .minCount = 1}}}),
+          &windows);
+      const auto viewHandle = renderer.CreateView<WindowView>(
+          RenderWindowDesc{.title = "Renderer window",
+                           .width = 96,
+                           .height = 80,
+                           .resizable = false,
+                           .visible = false,
+                           .decorated = false});
+      auto* view = renderer.GetView<WindowView>(viewHandle);
+      ASSERT_NE(view, nullptr);
+      auto* window = view->GetWindow();
+      ASSERT_NE(window, nullptr);
+      ownedWindow = window->Handle();
+      EXPECT_EQ(window->Title(), "Renderer window");
+      EXPECT_EQ(window->Width(), 96u);
+      EXPECT_EQ(window->Height(), 80u);
+      EXPECT_FALSE(window->IsVisible());
+      EXPECT_NE(window->NativeEGLWindowHandle(), nullptr);
+      EXPECT_NE(window->NativeDisplayHandle(), nullptr);
+      const auto size = window->GetFramebufferSize();
+      EXPECT_EQ(size.width, window->FramebufferWidth());
+      EXPECT_EQ(size.height, window->FramebufferHeight());
+      EXPECT_GT(size.width, 0u);
+      EXPECT_GT(size.height, 0u);
+      RenderGraph graph;
+      ViewBuildContext context{graph, *renderer.GetRenderDevice()};
+      view->BuildGraph(context);
+      const auto swapchain = view->swapchain;
+      EXPECT_TRUE(renderer.GetRenderDevice()->IsValid(swapchain));
+      EXPECT_TRUE(renderer.DestroyView(viewHandle));
+      EXPECT_EQ(renderer.GetView(viewHandle), nullptr);
+      EXPECT_EQ(windows.GetWindow(ownedWindow), nullptr);
+      EXPECT_FALSE(renderer.GetRenderDevice()->IsValid(swapchain));
+      EXPECT_NE(windows.GetWindow(standalone), nullptr);
+      EXPECT_THROW(
+          renderer.CreateView<WindowView>(RenderWindowDesc{.width = 0}),
+          std::invalid_argument);
+      const auto remaining = renderer.CreateWindowView(
+          RenderWindowDesc{.title = "Destructor cleanup",
+                           .width = 64,
+                           .height = 64,
+                           .visible = false});
+      auto* remainingView = renderer.GetView<WindowView>(remaining);
+      ownedWindow = remainingView->GetWindow()->Handle();
+      remainingView->BuildGraph(context);
     }
     EXPECT_EQ(windows.GetWindow(ownedWindow), nullptr);
     EXPECT_NE(windows.GetWindow(standalone), nullptr);

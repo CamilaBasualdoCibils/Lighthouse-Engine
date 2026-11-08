@@ -25,7 +25,12 @@ bool EngineRuntime::Initialize(const Config& config,
     Shutdown();
     return false;
   }
-  const DeviceConfig deviceConfig{.applicationName = config.name};
+  const RenderDeviceCreateInfo deviceConfig{
+      .applicationName = config.name,
+      .queues = {{.capabilities = RenderQueueCapability::Graphics |
+                                  RenderQueueCapability::Compute |
+                                  RenderQueueCapability::Transfer,
+                  .minCount = 1}}};
   m_backend = backends.Select(config.graphics, &deviceConfig);
   for (const auto& attempt : m_backend.attempts){
     if (!attempt.selected)

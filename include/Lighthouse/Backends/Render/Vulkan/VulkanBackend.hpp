@@ -19,7 +19,7 @@ public:
   bool Initialize(std::string& diagnostic) override;
   GraphicsCapabilities Capabilities() const override;
   std::unique_ptr<IRenderDevice>
-  CreateDevice(const DeviceConfig& config) override;
+  CreateDevice(const RenderDeviceCreateInfo& config) override;
   void Shutdown() noexcept override;
 
 private:

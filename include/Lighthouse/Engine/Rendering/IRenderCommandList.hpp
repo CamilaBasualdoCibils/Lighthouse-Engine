@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Lighthouse/Engine/Core/Types.hpp"
+#include <array>
 #include <cstdint>
 
 #include <Lighthouse/Engine/Rendering/RenderTypes.hpp>
@@ -22,11 +23,21 @@ class IRenderCommandList
 public:
   virtual ~IRenderCommandList() = default;
 
+  virtual void PushDebugGroup(std::string_view name,
+                              std::array<float, 4> color = {1, 1, 1, 1})
+  {
+  }
+  virtual void PopDebugGroup() {}
+  virtual void InsertDebugMarker(std::string_view name,
+                                 std::array<float, 4> color = {1, 1, 1, 1})
+  {
+  }
   virtual void Begin() = 0;
   virtual void End() = 0;
   virtual void BeginRendering(const RenderPassDesc& description) = 0;
   virtual void EndRendering() = 0;
-  // Write replaces stencil on depth pass; Equal preserves stencil and masks draws.
+  // Write replaces stencil on depth pass; Equal preserves stencil and masks
+  // draws.
   virtual void SetStencil(StencilMode mode, std::uint32_t reference)
   {
     if (mode != StencilMode::Disabled)
@@ -59,6 +70,14 @@ public:
     throw std::logic_error("Indexed multidraw unsupported by this backend");
   }
   virtual void Dispatch(std::uint32_t x, std::uint32_t y, std::uint32_t z) = 0;
+
+  // Copies distinct buffers; offsets/size are nonzero-size, 4-byte aligned.
+  // The caller declares graph dependencies.
+  virtual void CopyBuffer(BufferHandle, BufferHandle, std::uint64_t,
+                          std::uint64_t, std::uint64_t)
+  {
+    throw std::logic_error("Buffer copy unsupported");
+  }
 
   virtual void BlitImage(ImageHandle src, ImageHandle dst,
                          const BlitRegion& region, ImageFilter filter) = 0;

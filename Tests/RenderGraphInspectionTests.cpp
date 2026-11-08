@@ -158,3 +158,33 @@ TEST(RenderGraphInspection, SnapshotsMovesClearAndScopeExceptions)
   (void)assigned.Import<Resource>("Fresh", {}, {});
   EXPECT_EQ(assigned.GetInspectionData().resources[0].version, 1u);
 }
+
+TEST(RenderGraphInspection, TransientBufferRetainsAllocatedHandle)
+{
+  struct Allocator final : IRenderGraphAllocator
+  {
+    BufferHandle allocated{17, 1, 23}, freed{};
+    RenderGraphImageAllocation
+    AllocateImage(const RenderGraphImageDesc&) override
+    {
+      return {};
+    }
+    void FreeImage(ImageViewHandle) override {}
+    RenderGraphBufferAllocation
+    AllocateBuffer(const RenderGraphBufferDesc&) override
+    {
+      return {allocated};
+    }
+    void FreeBuffer(BufferHandle buffer) override
+    {
+      freed = buffer;
+    }
+  } allocator;
+  RenderGraphBuffer resource{};
+  const RenderGraphBufferDesc desc{64, BufferUsage::Storage};
+  resource.create(desc, &allocator);
+  EXPECT_EQ(resource.handle, allocator.allocated);
+  resource.destroy(desc, &allocator);
+  EXPECT_EQ(allocator.freed, allocator.allocated);
+  EXPECT_FALSE(resource.handle);
+}

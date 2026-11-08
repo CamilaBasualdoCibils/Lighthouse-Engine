@@ -73,7 +73,7 @@ public:
     desc.usage = rgdesc.usage;
     BufferHandle buffer = m_device.CreateBuffer(desc);
     RenderGraphBufferAllocation allocation{buffer};
-    m_logger->info("Allocated buffer ");
+    //m_logger->info("Allocated buffer ");
     return allocation;
   }
 
@@ -81,7 +81,7 @@ public:
   {
     // TODO: Implement this pure virtual method.
     m_device.DestroyBuffer(buffer);
-    m_logger->info("Freed buffer ");
+    //m_logger->info("Freed buffer ");
   }
 
 private:

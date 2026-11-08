@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 
 namespace Lighthouse
 {
@@ -14,8 +15,22 @@ constexpr std::array Features{
     GraphicsFeature::AsyncCompute,   GraphicsFeature::Multiview};
 }
 
+SurfaceHandle IGraphicsBackend::CreateSurface(Window& window)
+{
+  static std::atomic<std::uint32_t> next{1};
+  const SurfaceHandle handle{next.fetch_add(1, std::memory_order_relaxed), 1,
+                             0};
+  m_surfaces.emplace_back(handle, &window);
+  return handle;
+}
+void IGraphicsBackend::DestroySurface(SurfaceHandle surface)
+{
+  std::erase_if(m_surfaces, [surface](const auto& entry)
+                { return entry.first == surface; });
+}
+
 std::unique_ptr<IRenderDevice>
-IGraphicsBackend::CreateDevice(const DeviceConfig&)
+IGraphicsBackend::CreateDevice(const RenderDeviceCreateInfo&)
 {
   return {};
 }
@@ -86,7 +101,7 @@ bool BackendRegistry::IsRegistered(std::string_view backend) const
 
 BackendSelectionResult
 BackendRegistry::Select(const GraphicsConfig& config,
-                        const DeviceConfig* deviceConfig) const
+                        const RenderDeviceCreateInfo* deviceConfig) const
 {
   BackendSelectionResult result;
   if (config.backends.empty())
