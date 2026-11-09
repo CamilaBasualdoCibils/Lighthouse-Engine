@@ -11,7 +11,7 @@ find_package(glm CONFIG REQUIRED)
 find_package(mimalloc CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
-find_path(TINYGLTF_INCLUDE_DIR NAMES tiny_gltf.h REQUIRED)
+find_package(fastgltf CONFIG REQUIRED)
 
 file(GLOB_RECURSE _engine_sources CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
@@ -39,9 +39,10 @@ add_library(Lighthouse::Engine ALIAS LighthouseEngine)
 target_include_directories(LighthouseEngine PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 )
-target_include_directories(LighthouseEngine PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${TINYGLTF_INCLUDE_DIR})
+#target_include_directories(LighthouseEngine PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(LighthouseEngine PUBLIC Lighthouse::EngineEmbedded
 glm::glm
+fastgltf::fastgltf
 fg::FrameGraph
 Boost::program_options
 Boost::describe

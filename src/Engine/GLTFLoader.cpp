@@ -1,227 +1,307 @@
 #include <Lighthouse/Engine/Core/Profiling.hpp>
 #include <Lighthouse/Engine/Assets/Assets.hpp>
 
-#define TINYGLTF_IMPLEMENTATION
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <tiny_gltf.h>
+#include <fastgltf/core.hpp>
+#include <fastgltf/tools.hpp>
+#include <charconv>
+#include <memory>
+#include <type_traits>
 
 #include <algorithm>
 #include <cctype>
-#include <cstring>
+#include <fastgltf/types.hpp>
 #include <fstream>
-#include <iterator>
 #include <limits>
-#include <numeric>
 #include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace Lighthouse::Assets {
 namespace {
 
-const tinygltf::Accessor& GetAccessor(const tinygltf::Model& model, int index) {
-    if (index < 0 || static_cast<std::size_t>(index) >= model.accessors.size())
-        throw std::runtime_error("glTF mesh references an invalid accessor");
-    return model.accessors[static_cast<std::size_t>(index)];
-}
-
-struct AccessorBytes {
-    const unsigned char* data;
-    std::size_t stride;
-    std::size_t count;
-};
-
-AccessorBytes GetAccessorBytes(const tinygltf::Model& model, const tinygltf::Accessor& accessor,
-                               std::size_t elementSize) {
-    if (accessor.sparse.isSparse)
-        throw std::runtime_error("Sparse glTF mesh accessors are not supported");
-    if (accessor.bufferView < 0 ||
-        static_cast<std::size_t>(accessor.bufferView) >= model.bufferViews.size())
-        throw std::runtime_error("glTF mesh accessor has no valid buffer view");
-    const auto& view = model.bufferViews[static_cast<std::size_t>(accessor.bufferView)];
-    if (view.buffer < 0 || static_cast<std::size_t>(view.buffer) >= model.buffers.size())
-        throw std::runtime_error("glTF mesh buffer view references an invalid buffer");
-    const auto& buffer = model.buffers[static_cast<std::size_t>(view.buffer)];
-    if (view.byteOffset > buffer.data.size() ||
-        view.byteLength > buffer.data.size() - view.byteOffset)
-        throw std::runtime_error("glTF mesh buffer view exceeds its buffer");
-    const int byteStride = accessor.ByteStride(view);
-    if (byteStride <= 0 || static_cast<std::size_t>(byteStride) < elementSize)
-        throw std::runtime_error("glTF mesh accessor has an invalid stride");
-    const auto stride = static_cast<std::size_t>(byteStride);
-    if (accessor.byteOffset > view.byteLength)
-        throw std::runtime_error("glTF mesh accessor offset exceeds its buffer view");
-    const auto available = view.byteLength - accessor.byteOffset;
-    if (accessor.count && (available < elementSize ||
-        accessor.count - 1 > (available - elementSize) / stride))
-        throw std::runtime_error("glTF mesh accessor exceeds its buffer view");
-    return {buffer.data.data() + view.byteOffset + accessor.byteOffset, stride, accessor.count};
-}
-
-float ReadFloat(const unsigned char* data) {
-    float value;
-    std::memcpy(&value, data, sizeof(value));
-    return value;
-}
-
-AccessorBytes GetFloatAttribute(const tinygltf::Model& model, int index, int type,
-                                std::size_t components, std::size_t count) {
-    const auto& accessor = GetAccessor(model, index);
-    if (accessor.type != type || accessor.componentType != TINYGLTF_COMPONENT_TYPE_FLOAT ||
-        accessor.count != count)
-        throw std::runtime_error("glTF mesh attribute has an unsupported format or vertex count");
-    return GetAccessorBytes(model, accessor, components * sizeof(float));
-}
-
-std::vector<std::uint32_t> ReadIndices(const tinygltf::Model& model, int index,
-                                       std::size_t vertexCount) {
-    const auto& accessor = GetAccessor(model, index);
-    if (accessor.type != TINYGLTF_TYPE_SCALAR)
-        throw std::runtime_error("glTF mesh indices must be scalar");
-    std::size_t width;
-    switch (accessor.componentType) {
-    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE: width = 1; break;
-    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT: width = 2; break;
-    case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT: width = 4; break;
-    default: throw std::runtime_error("glTF mesh index component type is unsupported");
-    }
-    const auto bytes = GetAccessorBytes(model, accessor, width);
-    if (bytes.count > std::numeric_limits<std::uint32_t>::max())
-        throw std::runtime_error("glTF mesh index count exceeds 32-bit range");
-    std::vector<std::uint32_t> indices;
-    indices.reserve(bytes.count);
-    for (std::size_t i = 0; i < bytes.count; ++i) {
-        std::uint32_t value{};
-        std::memcpy(&value, bytes.data + i * bytes.stride, width);
-        if (value >= vertexCount)
-            throw std::runtime_error("glTF mesh index is outside its vertex array");
-        indices.push_back(value);
-    }
-    return indices;
-}
-
-void SetPrimitiveTopology(Mesh3D& mesh, int mode) {
-    if (mode == -1) mode = TINYGLTF_MODE_TRIANGLES;
-    switch (mode) {
-    case TINYGLTF_MODE_POINTS: mesh.topology = PrimitiveTopology::PointList; break;
-    case TINYGLTF_MODE_LINE: mesh.topology = PrimitiveTopology::LineList; break;
-    case TINYGLTF_MODE_LINE_STRIP: mesh.topology = PrimitiveTopology::LineStrip; break;
-    case TINYGLTF_MODE_TRIANGLES: mesh.topology = PrimitiveTopology::TriangleList; break;
-    case TINYGLTF_MODE_TRIANGLE_STRIP: mesh.topology = PrimitiveTopology::TriangleStrip; break;
-    case TINYGLTF_MODE_LINE_LOOP:
-    case TINYGLTF_MODE_TRIANGLE_FAN: {
-        std::vector<std::uint32_t> source = mesh.indices;
-        if (source.empty()) {
-            source.resize(mesh.vertices.size());
-            std::iota(source.begin(), source.end(), 0u);
-        }
-        std::vector<std::uint32_t> expanded;
-        if (mode == TINYGLTF_MODE_LINE_LOOP) {
-            mesh.topology = PrimitiveTopology::LineList;
-            if (source.size() < 2) throw std::runtime_error("glTF line loop needs at least two vertices");
-            expanded.reserve(source.size() * 2);
-            for (std::size_t i = 0; i < source.size(); ++i) {
-                expanded.push_back(source[i]);
-                expanded.push_back(source[(i + 1) % source.size()]);
-            }
-        } else {
-            mesh.topology = PrimitiveTopology::TriangleList;
-            if (source.size() < 3) throw std::runtime_error("glTF triangle fan needs at least three vertices");
-            expanded.reserve((source.size() - 2) * 3);
-            for (std::size_t i = 1; i + 1 < source.size(); ++i) {
-                expanded.push_back(source[0]);
-                expanded.push_back(source[i]);
-                expanded.push_back(source[i + 1]);
-            }
-        }
-        mesh.indices = std::move(expanded);
-        break;
-    }
-    default: throw std::runtime_error("glTF mesh primitive topology is unsupported");
-    }
-}
-
-Mesh3D ReadPrimitive(const tinygltf::Model& model, const tinygltf::Primitive& primitive) {
-    const auto position = primitive.attributes.find("POSITION");
-    if (position == primitive.attributes.end())
-        throw std::runtime_error("glTF mesh primitive has no POSITION attribute");
-    const auto& positionAccessor = GetAccessor(model, position->second);
-    if (positionAccessor.count > std::numeric_limits<std::uint32_t>::max())
-        throw std::runtime_error("glTF mesh vertex count exceeds 32-bit range");
-    const auto count = positionAccessor.count;
-    const auto positions = GetFloatAttribute(model, position->second, TINYGLTF_TYPE_VEC3, 3, count);
-    Mesh3D mesh;
-    mesh.vertices.resize(count);
-    for (std::size_t i = 0; i < count; ++i) {
-        const auto* data = positions.data + i * positions.stride;
-        mesh.vertices[i].position = {ReadFloat(data), ReadFloat(data + 4), ReadFloat(data + 8)};
-    }
-    if (const auto normal = primitive.attributes.find("NORMAL"); normal != primitive.attributes.end()) {
-        const auto normals = GetFloatAttribute(model, normal->second, TINYGLTF_TYPE_VEC3, 3, count);
-        for (std::size_t i = 0; i < count; ++i) {
-            const auto* data = normals.data + i * normals.stride;
-            mesh.vertices[i].normal = {ReadFloat(data), ReadFloat(data + 4), ReadFloat(data + 8)};
-        }
-    }
-    if (const auto uv = primitive.attributes.find("TEXCOORD_0"); uv != primitive.attributes.end()) {
-        const auto uvs = GetFloatAttribute(model, uv->second, TINYGLTF_TYPE_VEC2, 2, count);
-        for (std::size_t i = 0; i < count; ++i) {
-            const auto* data = uvs.data + i * uvs.stride;
-            mesh.vertices[i].uv = {ReadFloat(data), ReadFloat(data + 4)};
-        }
-    }
-    if (primitive.indices >= 0)
-        mesh.indices = ReadIndices(model, primitive.indices, count);
-    SetPrimitiveTopology(mesh, primitive.mode);
-    return mesh;
-}
-
 GLTFAsset LoadGLTFImpl(const std::filesystem::path& path) {
     LIGHTHOUSE_PROFILE_SCOPE("Assets::LoadGLTF");
-    auto extension = path.extension().string();
-    std::transform(extension.begin(), extension.end(), extension.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    if (extension != ".gltf" && extension != ".glb")
-        throw std::invalid_argument("LoadGLTF requires a .gltf or .glb file");
-    tinygltf::TinyGLTF loader;
-    // Expand source images to tightly packed RGBA pixels owned by ImageData.
-    loader.SetPreserveImageChannels(false);
-    tinygltf::Model model;
-    std::string error, warning;
-    const auto filename = path.string();
-    const bool loaded = extension == ".glb"
-        ? loader.LoadBinaryFromFile(&model, &error, &warning, filename)
-        : loader.LoadASCIIFromFile(&model, &error, &warning, filename);
-    if (!loaded)
-        throw std::runtime_error("Failed to load glTF '" + filename + "': " + error);
-    GLTFAsset result;
-    for (const auto& mesh : model.meshes)
-        for (const auto& primitive : mesh.primitives)
-            result.meshes.push_back(ReadPrimitive(model, primitive));
+    fastgltf::Parser parser;
+    auto data = fastgltf::GltfDataBuffer::FromPath(path);
+    if (data.error() != fastgltf::Error::None)
+        throw std::runtime_error("Failed to read glTF file: " + path.string());
 
-    for (const auto& texture : model.textures) {
-        if (texture.source < 0 || static_cast<size_t>(texture.source) >= model.images.size())
-            throw std::runtime_error("glTF texture references an invalid source image");
-        result.textures.push_back({static_cast<uint32_t>(texture.source)});
+    auto asset = parser.loadGltf(data.get(), path.parent_path(), fastgltf::Options::None);
+    if (asset.error() != fastgltf::Error::None)
+        throw std::runtime_error("Failed to parse glTF file: " + path.string() + ": " +
+                                 std::string(fastgltf::getErrorMessage(asset.error())));
+
+    GLTFAsset gltfAsset;
+    const auto index = [](std::size_t value) -> std::uint32_t {
+        if (value > std::numeric_limits<std::uint32_t>::max())
+            throw std::runtime_error("glTF index or byte range exceeds 32 bits");
+        return static_cast<std::uint32_t>(value);
+    };
+    const auto filePath = [&](const fastgltf::sources::URI& source) {
+        if (!source.uri.isLocalPath() || source.fileByteOffset != 0)
+            throw std::runtime_error("glTF URI cannot be represented as a local file reference");
+        return (path.parent_path() / source.uri.fspath()).lexically_normal();
+    };
+    gltfAsset.buffers.reserve(asset->buffers.size());
+    for (const auto& buffer : asset->buffers) {
+        BufferAsset bufferAsset;
+        std::visit([&](const auto& source) {
+            using T = std::decay_t<decltype(source)>;
+            if constexpr (std::is_same_v<T, fastgltf::sources::URI>)
+                bufferAsset.data = BufferAsset::FileRef{filePath(source), buffer.byteLength};
+            else if constexpr (std::is_same_v<T, fastgltf::sources::Array> ||
+                               std::is_same_v<T, fastgltf::sources::Vector> ||
+                               std::is_same_v<T, fastgltf::sources::ByteView>) {
+                if (source.bytes.size() < buffer.byteLength)
+                    throw std::runtime_error("glTF buffer is shorter than its declared byteLength");
+                bufferAsset.data = BufferAsset::RawData{
+                    std::vector<std::byte>(source.bytes.begin(), source.bytes.end())};
+            } else
+                throw std::runtime_error("Unsupported glTF buffer source");
+        }, buffer.data);
+        gltfAsset.buffers.push_back(std::move(bufferAsset));
     }
-    result.images.reserve(model.images.size());
-    for (size_t index = 0; index < model.images.size(); ++index) {
-        const auto& image = model.images[index];
-        if (image.width <= 0 || image.height <= 0 || image.component != 4 ||
-            image.bits != 8 || image.pixel_type != TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE)
-            throw std::runtime_error("glTF image " + std::to_string(index) +
-                " must decode to an 8-bit RGBA image");
-        const auto bytes = std::as_bytes(std::span(image.image));
-        result.images.emplace_back(UVec2{uint32_t(image.width), uint32_t(image.height)},
-            ImageFormat::RGBA8, std::vector<std::byte>(bytes.begin(), bytes.end()));
+
+    for (const auto& view : asset->bufferViews) {
+        if (view.meshoptCompression)
+            throw std::runtime_error("BufferViewAsset cannot represent compressed buffer views");
+        BufferViewAsset result;
+        result.views.push_back({index(view.bufferIndex), index(view.byteOffset),
+                                index(view.byteLength), view.target
+                                    ? static_cast<BufferViewTarget>(*view.target)
+                                    : BufferViewTarget::None,
+                                view.byteStride ? std::optional{index(*view.byteStride)} : std::nullopt});
+        gltfAsset.bufferViews.push_back(std::move(result));
     }
-    return result;
+
+    for (const auto& accessor : asset->accessors) {
+        if (accessor.sparse)
+            throw std::runtime_error("AccessorAsset cannot represent sparse accessors");
+        AccessorAsset result{};
+        result.name = accessor.name;
+        if ((accessor.bufferViewIndex && *accessor.bufferViewIndex > INT32_MAX) ||
+            accessor.byteOffset > INT32_MAX)
+            throw std::runtime_error("glTF accessor exceeds the signed 32-bit range");
+        result.bufferView = accessor.bufferViewIndex
+            ? static_cast<std::int32_t>(*accessor.bufferViewIndex) : -1;
+        result.byteOffset = static_cast<std::int32_t>(accessor.byteOffset);
+        result.componentType = static_cast<AccessorComponentType>(
+            fastgltf::getGLComponentType(accessor.componentType));
+        result.normalized = accessor.normalized;
+        result.count = accessor.count;
+        switch (accessor.type) {
+        case fastgltf::AccessorType::Scalar: result.type = AccessorType::Scalar; break;
+        case fastgltf::AccessorType::Vec2: result.type = AccessorType::Vec2; break;
+        case fastgltf::AccessorType::Vec3: result.type = AccessorType::Vec3; break;
+        case fastgltf::AccessorType::Vec4: result.type = AccessorType::Vec4; break;
+        case fastgltf::AccessorType::Mat2: result.type = AccessorType::Mat2; break;
+        case fastgltf::AccessorType::Mat3: result.type = AccessorType::Mat3; break;
+        case fastgltf::AccessorType::Mat4: result.type = AccessorType::Mat4; break;
+        default: throw std::runtime_error("Invalid glTF accessor type");
+        }
+        const auto bounds = [](const auto& source, auto& destination) {
+            if (!source) return;
+            destination.emplace(source->template isType<double>()
+                ? AccessorBoundsArray::DataType::float64 : AccessorBoundsArray::DataType::Int64);
+            auto& target = *destination;
+            target.count = source->size();
+            if (source->template isType<double>()) {
+                for (std::size_t i = 0; i < target.count; ++i)
+                    target.float64_buffer.push_back(source->template get<double>(i));
+            } else {
+                for (std::size_t i = 0; i < target.count; ++i)
+                    target.int64_buffer.push_back(source->template get<std::int64_t>(i));
+            }
+        };
+        bounds(accessor.min, result.min);
+        bounds(accessor.max, result.max);
+        gltfAsset.accesors.push_back(std::move(result));
+    }
+
+    for (const auto& mesh : asset->meshes) {
+        MeshAsset result;
+        for (const auto& primitive : mesh.primitives) {
+            // These fields have no storage in PrimitiveAsset yet.
+            if (!primitive.targets.empty() ||
+                primitive.type != fastgltf::PrimitiveType::Triangles)
+                throw std::runtime_error("PrimitiveAsset cannot represent morph targets or non-triangle topology");
+            PrimitiveAsset output{};
+            if (primitive.indicesAccessor) output.indices = index(*primitive.indicesAccessor);
+            if (primitive.materialIndex) output.material = index(*primitive.materialIndex);
+            output.position = output.normal = output.tangent = UINT32_MAX;
+            for (const auto& attribute : primitive.attributes) {
+                const std::string_view name = attribute.name;
+                const auto value = index(attribute.accessorIndex);
+                if (name == "POSITION") output.position = value;
+                else if (name == "NORMAL") output.normal = value;
+                else if (name == "TANGENT") output.tangent = value;
+                else {
+                    const auto set = [&](std::string_view prefix, auto& map) {
+                        if (!name.starts_with(prefix)) return false;
+                        std::uint32_t number{};
+                        const auto suffix = name.substr(prefix.size());
+                        const auto parsed = std::from_chars(suffix.data(), suffix.data() + suffix.size(), number);
+                        if (parsed.ec != std::errc{} || parsed.ptr != suffix.data() + suffix.size())
+                            throw std::runtime_error("Invalid glTF attribute set index");
+                        map.emplace(number, value);
+                        return true;
+                    };
+                    if (!set("TEXCOORD_", output.texcoords) && !set("COLOR_", output.colors) &&
+                        !set("JOINTS_", output.joints) && !set("WEIGHTS_", output.weights))
+                        throw std::runtime_error("PrimitiveAsset cannot represent attribute: " + std::string(name));
+                }
+            }
+            result.primitives.push_back(index(gltfAsset.primitives.size()));
+            gltfAsset.primitives.push_back(std::move(output));
+        }
+        gltfAsset.meshes.push_back(std::move(result));
+    }
+
+    const auto textureInfo = [&](const fastgltf::TextureInfo& source) {
+        return MaterialAsset::TextureInfo{index(source.textureIndex), index(source.texCoordIndex)};
+    };
+    gltfAsset.materials.reserve(asset->materials.size());
+    for (const auto& material : asset->materials) {
+        MaterialAsset result;
+        result.name = material.name;
+        for (std::size_t i = 0; i < 4; ++i)
+            result.baseColorFactor[i] = material.pbrData.baseColorFactor[i];
+        result.metallicFactor = material.pbrData.metallicFactor;
+        result.roughnessFactor = material.pbrData.roughnessFactor;
+        if (material.pbrData.baseColorTexture)
+            result.baseColorTexture = textureInfo(*material.pbrData.baseColorTexture);
+        if (material.pbrData.metallicRoughnessTexture)
+            result.metallicRoughnessTexture = textureInfo(*material.pbrData.metallicRoughnessTexture);
+        if (material.normalTexture)
+            result.normalTexture = MaterialAsset::NormalTextureInfo{
+                textureInfo(*material.normalTexture), material.normalTexture->scale};
+        if (material.occlusionTexture)
+            result.occlusionTexture = MaterialAsset::OcclusionTextureInfo{
+                textureInfo(*material.occlusionTexture), material.occlusionTexture->strength};
+        if (material.emissiveTexture)
+            result.emissiveTexture = textureInfo(*material.emissiveTexture);
+        for (std::size_t i = 0; i < 3; ++i)
+            result.emissiveFactor[i] = material.emissiveFactor[i];
+        switch (material.alphaMode) {
+        case fastgltf::AlphaMode::Opaque: result.alphaMode = MaterialAsset::AlphaMode::Opaque; break;
+        case fastgltf::AlphaMode::Mask: result.alphaMode = MaterialAsset::AlphaMode::Mask; break;
+        case fastgltf::AlphaMode::Blend: result.alphaMode = MaterialAsset::AlphaMode::Blend; break;
+        }
+        result.alphaCutoff = material.alphaCutoff;
+        result.doubleSided = material.doubleSided;
+        gltfAsset.materials.push_back(std::move(result));
+    }
+
+    gltfAsset.cameras.reserve(asset->cameras.size());
+    for (const auto& camera : asset->cameras) {
+        CameraAsset result;
+        result.name = camera.name;
+        std::visit([&](const auto& source) {
+            using T = std::decay_t<decltype(source)>;
+            if constexpr (std::is_same_v<T, fastgltf::Camera::Perspective>) {
+                CameraAsset::Perspective projection;
+                if (source.aspectRatio) projection.aspectRatio = *source.aspectRatio;
+                projection.yfov = source.yfov;
+                if (source.zfar) projection.zfar = *source.zfar;
+                projection.znear = source.znear;
+                result.projection = projection;
+            } else {
+                result.projection = CameraAsset::Orthographic{
+                    source.xmag, source.ymag, source.zfar, source.znear};
+            }
+        }, camera.camera);
+        gltfAsset.cameras.push_back(std::move(result));
+    }
+
+    for (const auto& image : asset->images) {
+        ImageAsset result;
+        std::visit([&](const auto& source) {
+            using T = std::decay_t<decltype(source)>;
+            if constexpr (requires { source.mimeType; }) {
+                if (source.mimeType == fastgltf::MimeType::PNG) result.encoding = ImageAssetEncoding::PNG;
+                if (source.mimeType == fastgltf::MimeType::JPEG) result.encoding = ImageAssetEncoding::JPEG;
+            }
+            if constexpr (std::is_same_v<T, fastgltf::sources::URI>) {
+                result.data = filePath(source);
+                auto extension = std::get<std::filesystem::path>(result.data).extension().string();
+                std::transform(extension.begin(), extension.end(), extension.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (result.encoding == ImageAssetEncoding::Unknown) {
+                    if (extension == ".png") result.encoding = ImageAssetEncoding::PNG;
+                    if (extension == ".jpg" || extension == ".jpeg") result.encoding = ImageAssetEncoding::JPEG;
+                }
+            } else if constexpr (std::is_same_v<T, fastgltf::sources::Array> ||
+                                 std::is_same_v<T, fastgltf::sources::Vector> ||
+                                 std::is_same_v<T, fastgltf::sources::ByteView>)
+                result.data = std::vector<std::byte>(source.bytes.begin(), source.bytes.end());
+            else if constexpr (std::is_same_v<T, fastgltf::sources::BufferView>) {
+                const auto& view = asset->bufferViews.at(source.bufferViewIndex);
+                const auto& buffer = gltfAsset.buffers.at(view.bufferIndex);
+                std::vector<std::byte> bytes(view.byteLength);
+                if (const auto* raw = std::get_if<BufferAsset::RawData>(&buffer.data)) {
+                    if (view.byteOffset > raw->data.size() || view.byteLength > raw->data.size() - view.byteOffset)
+                        throw std::runtime_error("glTF image buffer view is out of bounds");
+                    std::copy_n(raw->data.begin() + view.byteOffset, view.byteLength, bytes.begin());
+                } else {
+                    const auto& file = std::get<BufferAsset::FileRef>(buffer.data);
+                    if (view.byteOffset > file.size || view.byteLength > file.size - view.byteOffset)
+                        throw std::runtime_error("glTF image buffer view is out of bounds");
+                    std::ifstream input(file.path, std::ios::binary);
+                    input.seekg(view.byteOffset);
+                    if (!input.read(reinterpret_cast<char*>(bytes.data()), bytes.size()))
+                        throw std::runtime_error("Failed to read embedded glTF image: " + file.path.string());
+                }
+                result.data = std::move(bytes);
+            } else
+                throw std::runtime_error("Unsupported glTF image source");
+        }, image.data);
+        gltfAsset.images.push_back(std::move(result));
+    }
+    for (const auto& sampler : asset->samplers) {
+        SamplerAsset result;
+        result.name = sampler.name;
+        if (sampler.magFilter) result.magFilter = static_cast<std::uint16_t>(*sampler.magFilter);
+        if (sampler.minFilter) result.minFilter = static_cast<std::uint16_t>(*sampler.minFilter);
+        result.wrapS = static_cast<std::uint16_t>(sampler.wrapS);
+        result.wrapT = static_cast<std::uint16_t>(sampler.wrapT);
+        gltfAsset.samplers.push_back(std::move(result));
+    }
+    for (const auto& texture : asset->textures) {
+        if (!texture.imageIndex)
+            throw std::runtime_error("TextureAsset requires an image");
+        TextureAsset result{index(*texture.imageIndex)};
+        if (texture.samplerIndex) result.sampler = index(*texture.samplerIndex);
+        gltfAsset.textures.push_back(std::move(result));
+    }
+    for (const auto& node : asset->nodes) {
+        SceneNodeAsset result;
+        result.name = node.name;
+        const auto transform = fastgltf::getTransformMatrix(node);
+        for (std::size_t column = 0; column < 4; ++column)
+            for (std::size_t row = 0; row < 4; ++row)
+                result.localTransform[column][row] = transform[column][row];
+        for (const auto child : node.children) result.children.push_back(index(child));
+        if (node.meshIndex) result.mesh = index(*node.meshIndex);
+        if (node.cameraIndex) result.camera = index(*node.cameraIndex);
+        if (node.skinIndex) result.skin = index(*node.skinIndex);
+        gltfAsset.nodes.push_back(std::move(result));
+    }
+    for (const auto& scene : asset->scenes) {
+        SceneAsset result;
+        result.name = scene.name;
+        for (const auto node : scene.nodeIndices) result.rootNodes.push_back(index(node));
+        gltfAsset.scenes.push_back(std::move(result));
+    }
+    if (asset->defaultScene) gltfAsset.defaultScene = index(*asset->defaultScene);
+    if (!asset->skins.empty() || !asset->animations.empty())
+        throw std::runtime_error("SkinAsset and AnimationAsset are still empty definitions");
+    return gltfAsset;
 }
 
 } // namespace
 
-GLTFAsset LoadGLTF(const std::filesystem::path& path) {
+GLTFAsset ParseGLTF(const std::filesystem::path& path) {
     return LoadGLTFImpl(path);
 }
 
