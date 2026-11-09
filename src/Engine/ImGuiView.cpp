@@ -2,7 +2,7 @@
 #ifdef LIGHTHOUSE_IMGUI
 #include <Lighthouse/Engine/Rendering/IImGuiDevice.hpp>
 #include <Lighthouse/Engine/Rendering/ImguiSimpleObject.hpp>
-#include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Rendering/RenderGraphComposer.hpp>
 #include <imgui.h>
 #include <implot.h>
 #include <stdexcept>
@@ -112,7 +112,7 @@ ImGuiView::~ImGuiView()
   ImPlot::DestroyContext(m_plotContext);
   ImGui::DestroyContext(m_context);
 }
-void ImGuiView::Begin(Renderer* renderer)
+void ImGuiView::Begin(RenderGraphComposer* renderer)
 {
   if (m_context)
     return;
@@ -222,7 +222,7 @@ void ImGuiView::AbortFrame() noexcept
   }
   RestoreFrame();
 }
-void ImGuiView::End(Renderer*)
+void ImGuiView::End(RenderGraphComposer*)
 {
   // Successful frames finish in the graph. This is exception cleanup only.
   AbortFrame();

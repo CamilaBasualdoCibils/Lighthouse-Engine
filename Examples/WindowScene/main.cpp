@@ -11,14 +11,8 @@ class WindowSceneExample : public Lighthouse::IApplication {
 public:
     void OnStart() override {
         using namespace Lighthouse;
-        auto& scene = CreateScene("Main");
-        auto camera = scene.CreateEntity("Camera");
-        camera.Add<Transform>();
-        camera.Add<Camera>(Camera{70.0f});
-        scene.SetActiveCamera(camera);
-        const auto handle = GetRenderer().CreateView<WindowView>(RenderWindowDesc{
-            .title = "Lighthouse Window and Scene", .width = 960, .height = 540},
-            RenderViewDesc{.scene = scene.Handle(), .camera = CameraSource{camera}});
+        const auto handle = GetRenderer().CreateWindowView(RenderWindowDesc{
+            .title = "Lighthouse Window", .width = 960, .height = 540});
         auto* view = GetRenderer().GetView<WindowView>(handle);
         GetRenderer().AddLambdaTechnique([view](TechniqueBuildContext& ctx) {
             struct Data { RenderGraphResource image; };

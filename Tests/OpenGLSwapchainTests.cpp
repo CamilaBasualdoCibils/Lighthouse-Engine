@@ -1,5 +1,5 @@
 #include "QueueTestHelpers.hpp"
-#include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Rendering/RenderGraphComposer.hpp>
 #include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
 #include <Lighthouse/Backends/Render/OpenGL/OpenGLRenderDevice.hpp>
 #include <cassert>

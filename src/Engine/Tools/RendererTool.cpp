@@ -172,7 +172,7 @@ RenderGraphResource RendererTool::BuildGraph(ImguiBuildContext& context,
           {
             if (dockspace)
               ImGui::SetNextWindowDockID(dockspace, ImGuiCond_FirstUseEver);
-            const bool visible = ImGui::Begin("Renderer");
+            const bool visible = ImGui::Begin("RenderGraphComposer");
             try
             {
               if (visible)

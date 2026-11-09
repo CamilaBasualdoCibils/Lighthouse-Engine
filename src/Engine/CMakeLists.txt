@@ -1,4 +1,3 @@
-find_package(EnTT CONFIG REQUIRED)
 find_package(glslang CONFIG REQUIRED)
 find_package(slang CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
@@ -10,8 +9,9 @@ if(NOT LIGHTHOUSE_IMGUI)
 endif()
 find_package(glm CONFIG REQUIRED)
 find_package(mimalloc CONFIG REQUIRED)
-find_path(TINYGLTF_INCLUDE_DIR NAMES tiny_gltf.h REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+find_path(TINYGLTF_INCLUDE_DIR NAMES tiny_gltf.h REQUIRED)
 
 file(GLOB_RECURSE _engine_sources CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
@@ -26,35 +26,34 @@ if(LIGHTHOUSE_IMGUI)
     find_package(unofficial-imgui-node-editor CONFIG REQUIRED)
     target_sources(LighthouseEngine PRIVATE ImGuiView.cpp)
     target_link_libraries(LighthouseEngine PRIVATE unofficial::imgui-node-editor::imgui-node-editor)
-    target_link_libraries(LighthouseEngine PUBLIC imgui::imgui implot::implot)
+    target_link_libraries(LighthouseEngine PUBLIC Lighthouse::EngineEmbedded imgui::imgui implot::implot)
     target_compile_definitions(LighthouseEngine PUBLIC LIGHTHOUSE_IMGUI=1)
 endif()
 if (LIGHTHOUSE_ENABLE_TRACY)
     target_compile_definitions(LighthouseEngine PUBLIC LIGHTHOUSE_ENABLE_TRACY=1)
     find_package(Tracy CONFIG REQUIRED)
-    target_link_libraries(LighthouseEngine PUBLIC Tracy::TracyClient)
+    target_link_libraries(LighthouseEngine PUBLIC Lighthouse::EngineEmbedded Tracy::TracyClient)
 endif()
 add_library(Lighthouse::Engine ALIAS LighthouseEngine)
 
 target_include_directories(LighthouseEngine PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 )
-target_include_directories(LighthouseEngine PRIVATE ${TINYGLTF_INCLUDE_DIR})
-target_include_directories(LighthouseEngine PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(LighthouseEngine PUBLIC 
-EnTT::EnTT 
-glm::glm 
-fg::FrameGraph 
+target_include_directories(LighthouseEngine PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${TINYGLTF_INCLUDE_DIR})
+target_link_libraries(LighthouseEngine PUBLIC Lighthouse::EngineEmbedded
+glm::glm
+fg::FrameGraph
 Boost::program_options
 Boost::describe
-PRIVATE 
+spdlog::spdlog
+PRIVATE
+nlohmann_json::nlohmann_json
 glfw
-glslang::glslang 
-glslang::SPIRV 
-glslang::glslang-default-resource-limits 
-slang::slang 
-$<IF:$<TARGET_EXISTS:mimalloc-static>,mimalloc-static,mimalloc> 
-spdlog::spdlog)
+glslang::glslang
+glslang::SPIRV
+glslang::glslang-default-resource-limits
+slang::slang
+$<IF:$<TARGET_EXISTS:mimalloc-static>,mimalloc-static,mimalloc> )
 target_compile_features(LighthouseEngine PUBLIC cxx_std_23)
 
 

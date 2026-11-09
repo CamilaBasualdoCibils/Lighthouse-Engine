@@ -1,12 +1,12 @@
 #include <Lighthouse/Engine/Core/Profiling.hpp>
+#include <Lighthouse/Engine/Assets/Mesh.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
-#include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Rendering/RenderGraphComposer.hpp>
 #include <algorithm>
 #include <exception>
 
 #include "Lighthouse/Engine/Rendering/RenderView.hpp"
 #include "RenderMeshManager.hpp"
-#include <Lighthouse/Engine/Assets/Mesh.hpp>
 #include <spdlog/spdlog.h>
 #ifdef LIGHTHOUSE_IMGUI
 #include <Lighthouse/Engine/Rendering/ImGuiView.hpp>
@@ -20,7 +20,7 @@
 
 namespace Lighthouse {
 
-Renderer::Renderer(std::unique_ptr<IRenderDevice> device,
+RenderGraphComposer::RenderGraphComposer(std::unique_ptr<IRenderDevice> device,
                    WindowManager *windows)
     : m_windows(windows), m_device(std::move(device)),
       m_renderGraphAllocator(*m_device.get()),
@@ -28,7 +28,7 @@ Renderer::Renderer(std::unique_ptr<IRenderDevice> device,
   static std::atomic<std::uint64_t> nextOwner{1};
   m_ownerId = nextOwner.fetch_add(1, std::memory_order_relaxed);
 }
-Renderer::~Renderer() {
+RenderGraphComposer::~RenderGraphComposer() {
   // Release graph-owned UI objects before destroying their ImGui contexts.
   m_renderGraph.Clear();
   m_techniques.clear();
@@ -44,29 +44,29 @@ Renderer::~Renderer() {
       DestroyView({i, m_views[i].generation, m_ownerId});
 }
 
-Renderer::TechniqueSlot *
-Renderer::FindSlot(RenderTechniqueHandle handle) noexcept {
+RenderGraphComposer::TechniqueSlot *
+RenderGraphComposer::FindSlot(RenderTechniqueHandle handle) noexcept {
   if (!handle || handle.owner != m_ownerId ||
       handle.index >= m_techniques.size())
     return nullptr;
   auto &slot = m_techniques[handle.index];
   return slot.value && slot.generation == handle.generation ? &slot : nullptr;
 }
-const Renderer::TechniqueSlot *
-Renderer::FindSlot(RenderTechniqueHandle handle) const noexcept {
-  return const_cast<Renderer *>(this)->FindSlot(handle);
+const RenderGraphComposer::TechniqueSlot *
+RenderGraphComposer::FindSlot(RenderTechniqueHandle handle) const noexcept {
+  return const_cast<RenderGraphComposer *>(this)->FindSlot(handle);
 }
 IRenderTechnique *
-Renderer::GetTechnique(RenderTechniqueHandle handle) noexcept {
+RenderGraphComposer::GetTechnique(RenderTechniqueHandle handle) noexcept {
   auto *slot = FindSlot(handle);
   return slot ? slot->value.get() : nullptr;
 }
 const IRenderTechnique *
-Renderer::GetTechnique(RenderTechniqueHandle handle) const noexcept {
+RenderGraphComposer::GetTechnique(RenderTechniqueHandle handle) const noexcept {
   auto *slot = FindSlot(handle);
   return slot ? slot->value.get() : nullptr;
 }
-bool Renderer::RemoveTechnique(RenderTechniqueHandle handle) {
+bool RenderGraphComposer::RemoveTechnique(RenderTechniqueHandle handle) {
   auto *slot = FindSlot(handle);
   if (!slot)
     return false;
@@ -76,7 +76,7 @@ bool Renderer::RemoveTechnique(RenderTechniqueHandle handle) {
   return true;
 }
 
-std::vector<RenderTechniqueHandle> Renderer::Techniques() const {
+std::vector<RenderTechniqueHandle> RenderGraphComposer::Techniques() const {
   std::vector<RenderTechniqueHandle> result;
   for (std::uint32_t i = 0; i < m_techniques.size(); ++i)
     if (m_techniques[i].value)
@@ -84,7 +84,7 @@ std::vector<RenderTechniqueHandle> Renderer::Techniques() const {
   return result;
 }
 
-RenderViewHandle Renderer::AddView(std::unique_ptr<IRenderView> value) {
+RenderViewHandle RenderGraphComposer::AddView(std::unique_ptr<IRenderView> value) {
   std::uint32_t index = 0;
   while (index < m_views.size() && m_views[index].value)
     ++index;
@@ -94,7 +94,7 @@ RenderViewHandle Renderer::AddView(std::unique_ptr<IRenderView> value) {
   return {index, m_views[index].generation, m_ownerId};
 }
 
-RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc &description,
+RenderViewHandle RenderGraphComposer::CreateWindowView(const RenderWindowDesc &description,
 
                                             SwapchainConfig presentation) {
   if (!m_windows)
@@ -164,42 +164,43 @@ RenderViewHandle Renderer::CreateWindowView(const RenderWindowDesc &description,
   }
 }
 
-RenderMeshHandle Renderer::UploadMesh(const Mesh& mesh) {
+RenderMeshHandle RenderGraphComposer::UploadMesh(const Mesh& mesh) {
   return UploadMesh(mesh.ToRenderMesh());
 }
-RenderMeshHandle Renderer::UploadMesh(const RenderMesh& mesh) {
-    LIGHTHOUSE_PROFILE_SCOPE("Renderer::UploadMesh");
+
+RenderMeshHandle RenderGraphComposer::UploadMesh(const RenderMesh& mesh) {
+    LIGHTHOUSE_PROFILE_SCOPE("RenderGraphComposer::UploadMesh");
   return m_renderMeshManager->Upload(mesh, *m_device);
 }
 
-RenderMeshHandle Renderer::CreateRenderMesh(const RenderMesh &description) {
+RenderMeshHandle RenderGraphComposer::CreateRenderMesh(const RenderMesh &description) {
   return m_renderMeshManager->Create(description, m_device.get());
 }
-bool Renderer::DestroyRenderMesh(RenderMeshHandle mesh) {
+bool RenderGraphComposer::DestroyRenderMesh(RenderMeshHandle mesh) {
   return m_renderMeshManager->Destroy(mesh);
 }
 const RenderMesh *
-Renderer::GetRenderMesh(RenderMeshHandle mesh) const noexcept {
+RenderGraphComposer::GetRenderMesh(RenderMeshHandle mesh) const noexcept {
   return m_renderMeshManager->GetDescription(mesh, m_device.get());
 }
-bool Renderer::IsValid(RenderMeshHandle mesh) const noexcept {
+bool RenderGraphComposer::IsValid(RenderMeshHandle mesh) const noexcept {
   return m_renderMeshManager->IsValid(mesh, m_device.get());
 }
 RenderMeshUploadStatus
-Renderer::GetRenderMeshUploadStatus(RenderMeshHandle mesh) const noexcept {
+RenderGraphComposer::GetRenderMeshUploadStatus(RenderMeshHandle mesh) const noexcept {
   return m_renderMeshManager->GetUploadStatus(mesh, m_device.get());
 }
 
-IRenderView *Renderer::GetView(RenderViewHandle handle) noexcept {
+IRenderView *RenderGraphComposer::GetView(RenderViewHandle handle) noexcept {
   if (!handle || handle.owner != m_ownerId || handle.index >= m_views.size())
     return nullptr;
   auto &slot = m_views[handle.index];
   return slot.generation == handle.generation ? slot.value.get() : nullptr;
 }
-const IRenderView *Renderer::GetView(RenderViewHandle handle) const noexcept {
-  return const_cast<Renderer *>(this)->GetView(handle);
+const IRenderView *RenderGraphComposer::GetView(RenderViewHandle handle) const noexcept {
+  return const_cast<RenderGraphComposer *>(this)->GetView(handle);
 }
-bool Renderer::DestroyView(RenderViewHandle handle) {
+bool RenderGraphComposer::DestroyView(RenderViewHandle handle) {
   auto *view = GetView(handle);
   if (!view)
     return false;
@@ -218,9 +219,9 @@ bool Renderer::DestroyView(RenderViewHandle handle) {
   return true;
 }
 
-void Renderer::Compile() {
+void RenderGraphComposer::Compile() {
   spdlog::info("Compiling Render Graph");
-    LIGHTHOUSE_PROFILE_SCOPE("Renderer::Compile");
+    LIGHTHOUSE_PROFILE_SCOPE("RenderGraphComposer::Compile");
   RenderGraph graph;
 
   for (std::uint32_t i = 0; i < m_views.size(); ++i) {
@@ -242,8 +243,8 @@ void Renderer::Compile() {
   graph.Compile();
   m_renderGraph = std::move(graph);
 }
-void Renderer::Render() {
-    LIGHTHOUSE_PROFILE_SCOPE("Renderer::Render");
+void RenderGraphComposer::Render() {
+    LIGHTHOUSE_PROFILE_SCOPE("RenderGraphComposer::Render");
 
   for (const auto &viewSlot : m_views) {
     if (auto *outputView = dynamic_cast<IOutputView *>(viewSlot.value.get())) {

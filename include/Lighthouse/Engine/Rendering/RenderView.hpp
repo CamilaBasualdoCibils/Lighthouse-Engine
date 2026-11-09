@@ -46,8 +46,8 @@ public:
     virtual void BuildGraph(ViewBuildContext& context) override = 0;
     virtual void PostBuildGraph(ViewBuildContext& context) {}
 
-    virtual void Begin(Renderer* renderer)=0;
-    virtual void End(Renderer* renderer)=0;
+    virtual void Begin(RenderGraphComposer* renderer)=0;
+    virtual void End(RenderGraphComposer* renderer)=0;
 };
 
 class WindowView final : public IOutputView {
@@ -63,14 +63,14 @@ public:
     Window* GetWindow() const noexcept;
     void BuildGraph(ViewBuildContext& ctx) override;
 
-    void Begin(Renderer *renderer) override;
+    void Begin(RenderGraphComposer *renderer) override;
 
-    void End(Renderer *renderer) override;
+    void End(RenderGraphComposer *renderer) override;
 
     std::optional<AcquiredSwapchainImage> GetAcquiredImage() const noexcept { return m_acquiredImage; }
     RenderGraphResource GetAcquiredImageAsRGResource() const noexcept { return m_acquiredImageAsRGResource.value_or(kInvalidGraphResource); }
   private:
-    friend class Renderer;
+    friend class RenderGraphComposer;
     WindowView(WindowHandle window, SwapchainConfig config)
         : IOutputView(), window(window), presentation(config) {}
     SwapchainInfo m_swapchainInfo;
@@ -81,11 +81,11 @@ public:
 };
 class ExportView final : public IOutputView {
 public:
-  void Begin(Renderer *renderer) override {
+  void Begin(RenderGraphComposer *renderer) override {
 
   }
 
-  void End(Renderer *renderer) override {
+  void End(RenderGraphComposer *renderer) override {
 
   }
 

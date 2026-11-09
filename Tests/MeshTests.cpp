@@ -1,6 +1,7 @@
 #include "NullSynchronizationDevice.hpp"
-#include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Rendering/RenderGraphComposer.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
+#include <Lighthouse/Engine/Rendering/RenderMesh.hpp>
 #include <Lighthouse/Engine/Assets/Mesh.hpp>
 
 #include <array>
@@ -50,15 +51,16 @@ public:
     {
       return {};
     }
-    void Destroy(ImageHandle) override {}
-    void Destroy(ImageViewHandle) override {}
-    void Destroy(BufferHandle handle) override { m_buffers.erase(handle); }
-    void Destroy(GraphicsPipelineHandle) override {}
-    void Destroy(ShaderModuleHandle) override {}
-    void Destroy(DescriptorSetLayoutHandle) override {}
-    void Destroy(DescriptorSetHandle) override {}
-    void Destroy(PipelineLayoutHandle) override {}
-    void Destroy(SamplerHandle) override {}
+    void DestroyImage(ImageHandle) override {}
+    void DestroyImageView(ImageViewHandle) override {}
+    void DestroyBuffer(BufferHandle handle) override { m_buffers.erase(handle); }
+    void DestroyPipeline(GraphicsPipelineHandle) override {}
+    void DestroyModule(ShaderModuleHandle) override {}
+    void DestroyDescriptorSetLayout(DescriptorSetLayoutHandle) override {}
+    void DestroyDescriptorSet(DescriptorSetHandle) override {}
+    void DestroyPipelineLayout(PipelineLayoutHandle) override {}
+    void DestroySampler(SamplerHandle) override {}
+    void WaitIdle() override {}
     RenderCapabilities GetCapabilities() const override { return {}; }
 
 private:
@@ -76,48 +78,6 @@ TEST(MeshTests, PositionOnlyMeshDoesNotRequireOtherSemantics) {
         .VertexCount(3).Build();
     EXPECT_EQ(desc.layout.attributes.size(), 1u);
     EXPECT_EQ(desc.layout.bindings.front().stride, 12u);
-}
-
-TEST(MeshTests, Mesh2DProducesOwnedRenderMeshData) {
-    Mesh2D asset;
-    asset.vertices = {{{0.0f, 0.0f}, {0.0f, 0.0f}},
-                      {{1.0f, 0.0f}, {1.0f, 0.0f}},
-                      {{0.0f, 1.0f}, {0.0f, 1.0f}}};
-    asset.indices = {0, 1, 2};
-    const Mesh& base = asset;
-    const auto renderMesh = base.ToRenderMesh();
-    ASSERT_EQ(renderMesh.layout.attributes.size(), 2u);
-    EXPECT_EQ(renderMesh.layout.attributes[0].format, VertexFormat::Float2);
-    EXPECT_EQ(renderMesh.layout.attributes[1].semantic, "TEXCOORD0");
-    EXPECT_EQ(renderMesh.layout.bindings[0].stride, sizeof(Mesh2DVertex));
-    EXPECT_EQ(renderMesh.vertexCount, 3u);
-    EXPECT_EQ(renderMesh.indexCount, 3u);
-    ASSERT_EQ(renderMesh.vertexData.size(), 1u);
-    EXPECT_EQ(renderMesh.vertexData[0].bytes.size(), sizeof(Mesh2DVertex) * 3);
-    EXPECT_EQ(renderMesh.indexData.size(), sizeof(std::uint32_t) * 3);
-    asset.vertices.clear();
-    asset.indices.clear();
-    EXPECT_EQ(renderMesh.vertexData[0].bytes.size(), sizeof(Mesh2DVertex) * 3);
-    Renderer renderer;
-    const auto handle = renderer.CreateRenderMesh(renderMesh);
-    EXPECT_TRUE(renderer.IsValid(handle));
-    EXPECT_EQ(renderer.GetRenderMeshUploadStatus(handle), RenderMeshUploadStatus::UploadNotImplemented);
-}
-
-TEST(MeshTests, Mesh3DProducesPositionNormalAndUvLayout) {
-    Mesh3D asset;
-    asset.vertices = {{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}}};
-    asset.topology = PrimitiveTopology::PointList;
-    const auto renderMesh = asset.ToRenderMesh();
-    ASSERT_EQ(renderMesh.layout.attributes.size(), 3u);
-    EXPECT_EQ(renderMesh.layout.attributes[0].format, VertexFormat::Float3);
-    EXPECT_EQ(renderMesh.layout.attributes[1].semantic, "NORMAL");
-    EXPECT_EQ(renderMesh.layout.attributes[2].format, VertexFormat::Float2);
-    EXPECT_EQ(renderMesh.layout.bindings[0].stride, sizeof(Mesh3DVertex));
-    EXPECT_EQ(renderMesh.topology, PrimitiveTopology::PointList);
-    EXPECT_FALSE(renderMesh.indexBuffer.has_value());
-    asset.indices = {1};
-    EXPECT_THROW(asset.ToRenderMesh(), std::invalid_argument);
 }
 
 TEST(MeshTests, SupportsArbitraryCustomSemanticsAndIntegerFormats) {
@@ -198,23 +158,17 @@ TEST(MeshTests, SupportsHostVisibleCpuDataMemoryPreferences) {
 }
 
 TEST(MeshTests, RendererOwnsExactlyOneDevice) {
-    Renderer renderer;
-    EXPECT_EQ(renderer.GetRenderDevice(), nullptr);
     auto first = std::make_unique<TestDevice>();
     auto* owned = first.get();
-    renderer.SetRenderDevice(std::move(first));
+    RenderGraphComposer renderer(std::move(first));
     EXPECT_EQ(renderer.GetRenderDevice(), owned);
-    EXPECT_THROW(renderer.SetRenderDevice(std::make_unique<TestDevice>()), std::logic_error);
-    EXPECT_EQ(renderer.GetRenderDevice(), owned);
-    renderer.ResetRenderDevice();
-    EXPECT_EQ(renderer.GetRenderDevice(), nullptr);
+    EXPECT_EQ(first, nullptr);
 }
 
 TEST(MeshTests, RendererRejectsWrongUsageAndUndersizedBuffers) {
     auto owned = std::make_unique<TestDevice>();
     auto& device = *owned;
-    Renderer renderer;
-    renderer.SetRenderDevice(std::move(owned));
+    RenderGraphComposer renderer(std::move(owned));
     const auto wrongUsage = MakeBuffer(device, 128, BufferUsage::Index);
     auto invalidUsage = RenderMeshBuilder().Attribute("P", VertexFormat::Float3, 0)
         .VertexBuffer(wrongUsage).VertexCount(1);
@@ -233,7 +187,7 @@ TEST(MeshTests, RejectsDuplicateAttributeLocations) {
 }
 
 TEST(MeshTests, InvalidAndStaleRenderMeshHandlesAreRejected) {
-    Renderer renderer;
+    RenderGraphComposer renderer(std::make_unique<TestDevice>());
     EXPECT_FALSE(renderer.IsValid(RenderMeshHandle{}));
     EXPECT_EQ(renderer.GetRenderMesh(RenderMeshHandle{}), nullptr);
     auto mesh = renderer.CreateRenderMesh(RenderMeshBuilder().Build());
@@ -246,13 +200,12 @@ TEST(MeshTests, InvalidAndStaleRenderMeshHandlesAreRejected) {
 TEST(MeshTests, DestroyingAReferencedDeviceBufferInvalidatesTheMesh) {
     auto owned = std::make_unique<TestDevice>();
     auto& device = *owned;
-    Renderer renderer;
-    renderer.SetRenderDevice(std::move(owned));
+    RenderGraphComposer renderer(std::move(owned));
     const auto vertexBuffer = MakeBuffer(device, 36, BufferUsage::Vertex);
     const auto mesh = renderer.CreateRenderMesh(RenderMeshBuilder().Attribute("P", VertexFormat::Float3, 0)
         .VertexBuffer(vertexBuffer).VertexCount(3));
     ASSERT_TRUE(renderer.IsValid(mesh));
-    device.Destroy(vertexBuffer);
+    device.DestroyBuffer(vertexBuffer);
     EXPECT_FALSE(renderer.IsValid(mesh));
     EXPECT_EQ(renderer.GetRenderMesh(mesh), nullptr);
 }
@@ -268,7 +221,7 @@ TEST(MeshTests, CpuVertexAndIndexDataAreCopiedAndValidated) {
     float copiedValue{};
     std::memcpy(&copiedValue, desc.vertexData[0].bytes.data(), sizeof(float));
     EXPECT_EQ(copiedValue, 0.0f);
-    Renderer renderer;
+    RenderGraphComposer renderer(std::make_unique<TestDevice>());
     const auto mesh = renderer.CreateRenderMesh(desc);
     ASSERT_TRUE(renderer.IsValid(mesh));
     EXPECT_EQ(renderer.GetRenderMeshUploadStatus(mesh), RenderMeshUploadStatus::UploadNotImplemented);
@@ -280,8 +233,7 @@ TEST(MeshTests, RejectsBufferReferencesFromDifferentDevices) {
     auto owned = std::make_unique<TestDevice>();
     auto& deviceA = *owned;
     TestDevice deviceB;
-    Renderer renderer;
-    renderer.SetRenderDevice(std::move(owned));
+    RenderGraphComposer renderer(std::move(owned));
     const auto vertex = MakeBuffer(deviceA, 12, BufferUsage::Vertex);
     const auto index = MakeBuffer(deviceB, 4, BufferUsage::Index);
     auto builder = RenderMeshBuilder().Attribute("P", VertexFormat::Float3, 0).VertexBuffer(vertex)
@@ -298,8 +250,7 @@ TEST(MeshTests, DefaultMemorySettingsAreAlsoUsedByGenericBuffers) {
 TEST(MeshTests, SupportsRequestedRendererCreateRenderMeshBuilderCall) {
     auto owned = std::make_unique<TestDevice>();
     auto& device = *owned;
-    Renderer renderer;
-    renderer.SetRenderDevice(std::move(owned));
+    RenderGraphComposer renderer(std::move(owned));
     const auto customBuffer = MakeBuffer(device, 1024 * 28, BufferUsage::Vertex);
     const RenderMeshHandle mesh = renderer.CreateRenderMesh(
         RenderMeshBuilder()
@@ -311,4 +262,42 @@ TEST(MeshTests, SupportsRequestedRendererCreateRenderMeshBuilderCall) {
     EXPECT_TRUE(renderer.IsValid(mesh));
     EXPECT_EQ(renderer.GetRenderMesh(mesh)->layout.attributes[1].semantic, "CUSTOM_DATA");
 }
+TEST(MeshTests, Mesh2DProducesOwnedRenderMeshData) {
+    Mesh2D asset;
+    asset.vertices = {{{0.0f, 0.0f}, {0.0f, 0.0f}},
+                      {{1.0f, 0.0f}, {1.0f, 0.0f}},
+                      {{0.0f, 1.0f}, {0.0f, 1.0f}}};
+    asset.indices = {0, 1, 2};
+    const Mesh& base = asset;
+    const auto renderMesh = base.ToRenderMesh();
+    ASSERT_EQ(renderMesh.layout.attributes.size(), 2u);
+    EXPECT_EQ(renderMesh.layout.attributes[0].format, VertexFormat::Float2);
+    EXPECT_EQ(renderMesh.layout.attributes[1].semantic, "TEXCOORD0");
+    EXPECT_EQ(renderMesh.layout.bindings[0].stride, sizeof(Mesh2DVertex));
+    EXPECT_EQ(renderMesh.vertexCount, 3u);
+    EXPECT_EQ(renderMesh.indexCount, 3u);
+    ASSERT_EQ(renderMesh.vertexData.size(), 1u);
+    EXPECT_EQ(renderMesh.vertexData[0].bytes.size(), sizeof(Mesh2DVertex) * 3);
+    EXPECT_EQ(renderMesh.indexData.size(), sizeof(std::uint32_t) * 3);
+    asset.vertices.clear();
+    asset.indices.clear();
+    EXPECT_EQ(renderMesh.vertexData[0].bytes.size(), sizeof(Mesh2DVertex) * 3);
+}
+
+TEST(MeshTests, Mesh3DProducesPositionNormalAndUvLayout) {
+    Mesh3D asset;
+    asset.vertices = {{{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}}};
+    asset.topology = PrimitiveTopology::PointList;
+    const auto renderMesh = asset.ToRenderMesh();
+    ASSERT_EQ(renderMesh.layout.attributes.size(), 3u);
+    EXPECT_EQ(renderMesh.layout.attributes[0].format, VertexFormat::Float3);
+    EXPECT_EQ(renderMesh.layout.attributes[1].semantic, "NORMAL");
+    EXPECT_EQ(renderMesh.layout.attributes[2].format, VertexFormat::Float2);
+    EXPECT_EQ(renderMesh.layout.bindings[0].stride, sizeof(Mesh3DVertex));
+    EXPECT_EQ(renderMesh.topology, PrimitiveTopology::PointList);
+    EXPECT_FALSE(renderMesh.indexBuffer.has_value());
+    asset.indices = {1};
+    EXPECT_THROW(asset.ToRenderMesh(), std::invalid_argument);
+}
+
 } // namespace

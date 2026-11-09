@@ -1,5 +1,5 @@
 {
-  "name": "atlasnet",
+  "name": "lighthouse-engine",
   "version-string": "0.1.0",
   "dependencies": [
     "glm",
@@ -47,6 +47,7 @@
       ]
     },
     "tracy",
+    "glew",
     {
       "name": "openxr-loader",
       "features": [
@@ -57,13 +58,21 @@
     "vulkan-memory-allocator",
     "pugixml",
     "gtest",
-    "freetype",
     "rpclib",
-    "tinygltf",
     "shader-slang",
     "glslang",
     "spirv-cross",
-    "mimalloc",
-    "tracy"
+    "libevdev",
+    "msquic",
+    {
+      "name": "vulkan-loader",
+      "features": [
+        "xcb",
+        "xlib",
+        "wayland"
+      ],
+      "platform": "linux"
+    },
+    "tinygltf"
   ]
 }

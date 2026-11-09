@@ -25,8 +25,8 @@ public:
   ~ImGuiView() override;
   void BuildGraph(ViewBuildContext&) override {}
   void PostBuildGraph(ViewBuildContext& context) override;
-  void Begin(Renderer* renderer) override;
-  void End(Renderer* renderer) override;
+  void Begin(RenderGraphComposer* renderer) override;
+  void End(RenderGraphComposer* renderer) override;
 
 private:
   void NewFrame();

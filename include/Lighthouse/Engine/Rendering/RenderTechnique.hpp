@@ -12,7 +12,7 @@
 
 namespace Lighthouse {
 
-class Renderer;
+class RenderGraphComposer;
 
 template <typename T> struct TechniqueRef {
     RenderTechniqueHandle handle;
@@ -21,11 +21,11 @@ template <typename T> struct TechniqueRef {
 
 class TechniqueBuildContext {
 public:
-    TechniqueBuildContext(RenderGraph& graph, Renderer& renderer, IRenderDevice& device, RenderGraph::Builder* builder = nullptr)
+    TechniqueBuildContext(RenderGraph& graph, RenderGraphComposer& renderer, IRenderDevice& device, RenderGraph::Builder* builder = nullptr)
         : graph(graph), renderer(renderer), device(device), m_builder(builder) {}
 
     RenderGraph& graph;
-    Renderer& renderer;
+    RenderGraphComposer& renderer;
     IRenderDevice& device;
     template <typename T> const T& GetTechnique(TechniqueRef<T> ref) const;
     RenderGraph::Builder& Builder() const {

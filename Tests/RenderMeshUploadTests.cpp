@@ -1,7 +1,7 @@
 #include "QueueTestHelpers.hpp"
-#include <Lighthouse/Engine/Assets/Mesh.hpp>
+#include <Lighthouse/Engine/Rendering/RenderMesh.hpp>
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
-#include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Rendering/RenderGraphComposer.hpp>
 #include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
 #define GL_GLEXT_PROTOTYPES
 #include <GL/glcorearb.h>
@@ -18,7 +18,7 @@ TEST(RenderMeshUploadTests,
   OpenGLBackend backend;
   std::string diagnostic;
   ASSERT_TRUE(backend.Initialize(diagnostic));
-  Renderer renderer(
+  RenderGraphComposer renderer(
       backend.CreateDevice(
           {.queues = {{.capabilities =
                            Lighthouse::RenderQueueCapability::Graphics |
@@ -31,7 +31,18 @@ TEST(RenderMeshUploadTests,
                              .height = 64,
                              .visible = false});
   auto& device = *renderer.GetRenderDevice();
-  Mesh3D left, right;
+  struct Vertex { Vec3 position{}, normal{}; Vec2 uv{}; };
+  struct Triangle {
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+    RenderMesh ToRenderMesh() const {
+      return RenderMeshBuilder().Attribute("POSITION", VertexFormat::Float3, 0, 0, offsetof(Vertex, position))
+        .Attribute("NORMAL", VertexFormat::Float3, 1, 0, offsetof(Vertex, normal))
+        .Attribute("TEXCOORD0", VertexFormat::Float2, 2, 0, offsetof(Vertex, uv))
+        .VertexStride(sizeof(Vertex)).VertexCount(vertices.size()).VertexData(AsBytes(vertices))
+        .IndexData(AsBytes(indices), IndexFormat::UInt32).IndexCount(indices.size()).Build();
+    }
+  } left, right;
   left.vertices = {
       {{-0.9f, -0.8f, 0.5f}}, {{-0.1f, -0.8f, 0.5f}}, {{-0.5f, 0.8f, 0.5f}}};
   right.vertices = {
@@ -45,7 +56,7 @@ TEST(RenderMeshUploadTests,
   const auto first = renderer.UploadMesh(leftData);
   const auto oldBuffer =
       renderer.GetRenderMesh(first)->vertexBuffers.front().buffer;
-  const auto second = renderer.UploadMesh(right);
+  const auto second = renderer.UploadMesh(right.ToRenderMesh());
   const auto* a = renderer.GetRenderMesh(first);
   const auto* b = renderer.GetRenderMesh(second);
   ASSERT_NE(a, nullptr);
@@ -54,7 +65,7 @@ TEST(RenderMeshUploadTests,
   EXPECT_EQ(a->vertexBuffers.front().buffer, b->vertexBuffers.front().buffer);
   EXPECT_EQ(a->indexBuffer->buffer, b->indexBuffer->buffer);
   EXPECT_EQ(a->vertexBuffers.front().offset, 0u);
-  EXPECT_EQ(b->vertexBuffers.front().offset, 3 * sizeof(Mesh3DVertex));
+  EXPECT_EQ(b->vertexBuffers.front().offset, 3 * sizeof(Vertex));
   EXPECT_EQ(b->indexBuffer->offset, 3 * sizeof(std::uint32_t));
   EXPECT_EQ(a->indexBuffer->format, IndexFormat::UInt32);
   EXPECT_EQ(renderer.GetRenderMeshUploadStatus(first),
@@ -63,7 +74,7 @@ TEST(RenderMeshUploadTests,
   EXPECT_TRUE(a->indexData.empty());
   auto invalid = right;
   invalid.indices.back() = 3;
-  EXPECT_THROW(renderer.UploadMesh(invalid), std::invalid_argument);
+  EXPECT_THROW(renderer.UploadMesh(invalid.ToRenderMesh()), std::invalid_argument);
   EXPECT_TRUE(renderer.IsValid(first));
   EXPECT_TRUE(renderer.IsValid(second));
 
@@ -101,7 +112,7 @@ void main() { color=vec4(1); }
                             .height = 64});
   commands->BindPipeline(pipeline);
   commands->BindVertexBuffer(a->vertexBuffers.front().buffer,
-                             sizeof(Mesh3DVertex));
+                             sizeof(Vertex));
   commands->BindIndexBuffer(a->indexBuffer->buffer);
   for (const auto* mesh : {a, b})
   {
@@ -109,7 +120,7 @@ void main() { color=vec4(1); }
         mesh->indexCount,
         static_cast<std::uint32_t>(mesh->indexBuffer->offset / 4),
         static_cast<std::int32_t>(mesh->vertexBuffers.front().offset /
-                                  sizeof(Mesh3DVertex)));
+                                  sizeof(Vertex)));
   }
   commands->EndRendering();
   commands->BindTexture(0, image);
@@ -131,7 +142,7 @@ void main() { color=vec4(1); }
   EXPECT_TRUE(renderer.DestroyRenderMesh(first));
   EXPECT_FALSE(renderer.IsValid(first));
   EXPECT_TRUE(renderer.IsValid(second));
-  const auto replacement = renderer.UploadMesh(left);
+  const auto replacement = renderer.UploadMesh(left.ToRenderMesh());
   EXPECT_EQ(first.index, replacement.index);
   EXPECT_NE(first.generation, replacement.generation);
   EXPECT_TRUE(renderer.IsValid(second));

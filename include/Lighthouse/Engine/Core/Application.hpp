@@ -32,7 +32,7 @@ protected:
     
     EngineRuntime& GetRuntime();
     WindowManager& GetWindowManager();
-    Renderer& GetRenderer();
+    RenderGraphComposer& GetRenderer();
     IGraphicsBackend* GetGraphicsBackend();
     const Config& GetConfig() const;
 

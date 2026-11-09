@@ -26,7 +26,7 @@ public:
     return m_deviceId;
   }
 
-  // Native window requirement used by Renderer when creating a window view.
+  // Native window requirement used by RenderGraphComposer when creating a window view.
   virtual bool RequiresEGLWindow() const noexcept
   {
     return false;

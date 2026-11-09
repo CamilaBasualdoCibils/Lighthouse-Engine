@@ -1,6 +1,6 @@
 #include "Lighthouse/Engine/Rendering/Graph/IRenderGraphAllocator.hpp"
 #include "Lighthouse/Engine/Rendering/RenderTypes.hpp"
-#include "Lighthouse/Engine/Rendering/Renderer.hpp"
+#include "Lighthouse/Engine/Rendering/RenderGraphComposer.hpp"
 #include <Lighthouse/Engine/Core/Profiling.hpp>
 #include <Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp>
 #include <stdexcept>
@@ -133,7 +133,7 @@ void RenderGraph::Compile() {
     m_compiled = true;
 }
 
-void RenderGraph::Execute(Renderer* renderer, IRenderGraphAllocator* allocator)
+void RenderGraph::Execute(RenderGraphComposer* renderer, IRenderGraphAllocator* allocator)
 {
   LIGHTHOUSE_PROFILE_SCOPE("RenderGraph::Execute");
   if (!m_compiled)

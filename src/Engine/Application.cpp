@@ -26,7 +26,7 @@ EngineRuntime& IApplication::GetRuntime() {
 }
 
 WindowManager& IApplication::GetWindowManager() { return GetRuntime().GetWindowManager(); }
-Renderer& IApplication::GetRenderer() { return GetRuntime().GetRenderer(); }
+RenderGraphComposer& IApplication::GetRenderer() { return GetRuntime().GetRenderer(); }
 IGraphicsBackend* IApplication::GetGraphicsBackend() { return GetRuntime().GetGraphicsBackend(); }
 
 const Config& IApplication::GetConfig() const {

@@ -1,5 +1,5 @@
 #include "NullSynchronizationDevice.hpp"
-#include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Rendering/RenderGraphComposer.hpp>
 #include <cassert>
 using namespace Lighthouse;
 namespace {
@@ -52,10 +52,10 @@ public:
 };
 }
 int main() {
-    Renderer renderer(std::make_unique<TestRenderDevice>());
+    RenderGraphComposer renderer(std::make_unique<TestRenderDevice>());
     // The allocator currently registers a process-wide logger for each renderer.
     spdlog::drop("RenderGraphSimpleAllocator");
-    Renderer other(std::make_unique<TestRenderDevice>());
+    RenderGraphComposer other(std::make_unique<TestRenderDevice>());
     std::vector<int> order;
     renderer.CreateView<OrderedView>(order, 1);
     auto first = renderer.AddLambdaTechnique([&](TechniqueBuildContext& ctx) {

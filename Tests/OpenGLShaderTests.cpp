@@ -1,7 +1,7 @@
 #include "QueueTestHelpers.hpp"
 #include <Lighthouse/Engine/Assets/Assets.hpp>
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
-#include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Rendering/RenderGraphComposer.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
 #include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
 #include "OpenGLShaderTranslator.hpp"
@@ -205,7 +205,7 @@ TEST(OpenGLWindowViewTests, RendererCreatesAndOwnsWindowWhileStandaloneWindowsRe
     ASSERT_TRUE(backend.Initialize(diagnostic)) << diagnostic;
     WindowHandle ownedWindow;
     {
-      Renderer renderer(
+      RenderGraphComposer renderer(
           backend.CreateDevice(
               {.queues = {{.capabilities =
                                Lighthouse::RenderQueueCapability::Graphics |
@@ -214,7 +214,7 @@ TEST(OpenGLWindowViewTests, RendererCreatesAndOwnsWindowWhileStandaloneWindowsRe
                            .minCount = 1}}}),
           &windows);
       const auto viewHandle = renderer.CreateView<WindowView>(
-          RenderWindowDesc{.title = "Renderer window",
+          RenderWindowDesc{.title = "RenderGraphComposer window",
                            .width = 96,
                            .height = 80,
                            .resizable = false,
@@ -225,7 +225,7 @@ TEST(OpenGLWindowViewTests, RendererCreatesAndOwnsWindowWhileStandaloneWindowsRe
       auto* window = view->GetWindow();
       ASSERT_NE(window, nullptr);
       ownedWindow = window->Handle();
-      EXPECT_EQ(window->Title(), "Renderer window");
+      EXPECT_EQ(window->Title(), "RenderGraphComposer window");
       EXPECT_EQ(window->Width(), 96u);
       EXPECT_EQ(window->Height(), 80u);
       EXPECT_FALSE(window->IsVisible());

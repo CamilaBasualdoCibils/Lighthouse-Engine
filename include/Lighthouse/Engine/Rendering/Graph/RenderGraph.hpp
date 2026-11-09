@@ -24,7 +24,7 @@
 #include <fg/FrameGraphResource.hpp>
 
 namespace Lighthouse {
-class Renderer;
+class RenderGraphComposer;
 
 using RenderGraphResource = FrameGraphResource;
 constexpr RenderGraphResource kInvalidGraphResource = -1;
@@ -42,9 +42,9 @@ struct RenderGraphExecutePassContext {
 };
 struct RenderGraphExecuteContext {
 public:
-  RenderGraphExecuteContext(Renderer *renderer, IRenderDevice *device)
+  RenderGraphExecuteContext(RenderGraphComposer *renderer, IRenderDevice *device)
       : renderer(renderer), device(device) {}
-  Renderer *renderer;
+  RenderGraphComposer *renderer;
   IRenderDevice *device;
   std::vector<std::unique_ptr<IRenderCommandList>> commandLists;
   std::vector<std::function<void()>> retirements;
@@ -300,7 +300,7 @@ public:
   }
 
   void Compile();
-  void Execute(Renderer *device, IRenderGraphAllocator *allocator);
+  void Execute(RenderGraphComposer *device, IRenderGraphAllocator *allocator);
   void Clear();
   // Latest handle per resource, including imports, in first-declaration order.
   [[nodiscard]] const std::vector<RenderGraphResource>& GetResourceNodes() const noexcept {

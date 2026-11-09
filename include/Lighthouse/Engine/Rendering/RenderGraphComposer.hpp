@@ -22,7 +22,7 @@ class IRenderDevice;
 class RenderMeshManager;
 class Mesh;
 
-// Renderer-facing window options. Native surface setup comes from the device.
+// RenderGraphComposer-facing window options. Native surface setup comes from the device.
 struct RenderWindowDesc {
   std::string title;
   std::uint32_t width{1280};
@@ -35,13 +35,13 @@ struct RenderWindowDesc {
   std::vector<SwapchainFormat> swapchainFormats{SwapchainFormat::SRGB};
 };
 
-class Renderer {
+class RenderGraphComposer {
 public:
-  explicit Renderer(std::unique_ptr<IRenderDevice> device,
+  explicit RenderGraphComposer(std::unique_ptr<IRenderDevice> device,
                     WindowManager *windows = nullptr);
-  ~Renderer();
-  Renderer(const Renderer &) = delete;
-  Renderer &operator=(const Renderer &) = delete;
+  ~RenderGraphComposer();
+  RenderGraphComposer(const RenderGraphComposer &) = delete;
+  RenderGraphComposer &operator=(const RenderGraphComposer &) = delete;
   WindowManager* GetWindowManager() noexcept { return m_windows; }
   IRenderDevice *GetRenderDevice() noexcept { return m_device.get(); }
   const IRenderDevice *GetRenderDevice() const noexcept {

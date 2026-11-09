@@ -3,7 +3,7 @@
 #include <Lighthouse/Engine/Core/Config.hpp>
 #include <Lighthouse/Engine/Tools/ToolBox.hpp>
 #include <Lighthouse/Engine/Graphics/GraphicsBackend.hpp>
-#include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Rendering/RenderGraphComposer.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
 
 namespace Lighthouse {
@@ -28,7 +28,7 @@ public:
     InputSystem& GetInputSystem() noexcept { return m_input; }
     const InputSystem& GetInputSystem() const noexcept { return m_input; }
     WindowManager& GetWindowManager() noexcept { return m_windows; }
-    Renderer& GetRenderer() noexcept { return *m_renderer; }
+    RenderGraphComposer& GetRenderer() noexcept { return *m_renderer; }
 
 private:
 #ifdef LIGHTHOUSE_IMGUI
@@ -36,7 +36,7 @@ private:
 #endif
     WindowManager m_windows;
     InputSystem m_input;
-    std::unique_ptr<Renderer> m_renderer;
+    std::unique_ptr<RenderGraphComposer> m_renderer;
     BackendSelectionResult m_backend;
 };
 

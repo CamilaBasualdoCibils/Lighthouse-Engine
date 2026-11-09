@@ -16,7 +16,7 @@ public:
   RendererTool& operator=(const RendererTool&) = delete;
   std::string_view Name() const noexcept override
   {
-    return "Renderer";
+    return "RenderGraphComposer";
   }
   RenderGraphResource BuildGraph(ImguiBuildContext& context,
                                  RenderGraphResource completionFlag) override;

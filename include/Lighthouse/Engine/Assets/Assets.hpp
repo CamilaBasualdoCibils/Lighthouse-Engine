@@ -1,21 +1,14 @@
 #pragma once
-
-#include <cstdint>
+#include <Lighthouse/Engine/Assets/Mesh.hpp>
+#include <Lighthouse/Engine/Assets/ImageData.hpp>
+#include <vector>
 #include <filesystem>
-#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <vector>
-
-#include <Lighthouse/Engine/Assets/Mesh.hpp>
-#include <Lighthouse/Engine/Assets/ImageData.hpp>
-#include <Lighthouse/Engine/Assets/Material.hpp>
-#include <Lighthouse/Engine/Core/Types.hpp>
+#include <Lighthouse/Engine/Assets/Shader.hpp>
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
-
 namespace Lighthouse {
-
 struct MaterialAsset {};
 struct TextureAsset {
     std::uint32_t image{}; // Index into GLTFAsset::images, not a GPU handle.
@@ -54,18 +47,10 @@ struct GLTFAsset {
     std::optional<std::uint32_t> defaultScene;
 };
 
-} // namespace Lighthouse
-
+}
 namespace Lighthouse::Assets {
-
-template <typename AssetType>
-std::shared_ptr<AssetType> Load(const std::string& path);
-
-// Loads geometry and CPU-owned, decoded RGBA8 images. No render device or
-// GPU allocations; callers decide which images to upload and how to sample them.
 GLTFAsset LoadGLTF(const std::filesystem::path& path);
 std::string LoadText(const std::filesystem::path& path);
-
 struct ShaderLoadOptions {
     std::optional<ShaderSourceLanguage> language;
     std::optional<ShaderStage> stage;
@@ -74,6 +59,4 @@ struct ShaderLoadOptions {
 
 Shader LoadShader(const std::filesystem::path& path, const ShaderLoadOptions& options = {});
 Shader LoadShader(std::string_view source, const ShaderCompileOptions& options);
-Material LoadMaterial(const std::filesystem::path& path, std::string_view name);
-
-} // namespace Lighthouse::Assets
+}

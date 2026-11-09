@@ -1,38 +1,19 @@
 find_package(GTest CONFIG REQUIRED)
-
-add_executable(LighthouseEngineTests
-    SceneEntityTests.cpp
-    SceneInspectorTests.cpp
-    GraphicsBackendTests.cpp
-    WindowManagerTests.cpp
-    RendererTests.cpp
-    WorldRendererTests.cpp
-    MeshTests.cpp
-    GLTFTests.cpp
-    ShaderTests.cpp
-    MaterialTests.cpp
-)
-target_compile_definitions(LighthouseEngineTests PRIVATE
-    LIGHTHOUSE_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-find_program(SPIRV_VAL_EXECUTABLE spirv-val)
-if(SPIRV_VAL_EXECUTABLE)
-    target_compile_definitions(LighthouseEngineTests PRIVATE
-        LIGHTHOUSE_SPIRV_VAL_EXECUTABLE="${SPIRV_VAL_EXECUTABLE}")
-endif()
-target_link_libraries(LighthouseEngineTests PRIVATE
-    Lighthouse::Engine
-    GTest::gtest_main
-    GTest::gmock
-)
-
 include(GoogleTest)
+add_executable(LighthouseEngineTests GraphicsBackendTests.cpp WindowManagerTests.cpp ShaderTests.cpp MeshTests.cpp GLTFTests.cpp)
+target_link_libraries(LighthouseEngineTests PRIVATE Lighthouse::Engine GTest::gtest_main GTest::gmock)
 gtest_discover_tests(LighthouseEngineTests)
-
-# This focused regression target does not depend on the legacy scene tests.
 add_executable(LighthouseRendererTechniqueTests RendererTechniqueTests.cpp)
 target_link_libraries(LighthouseRendererTechniqueTests PRIVATE Lighthouse::Engine)
 add_test(NAME LighthouseRendererTechniqueTests COMMAND LighthouseRendererTechniqueTests)
-
 add_executable(RenderGraphInspectionTests RenderGraphInspectionTests.cpp)
 target_link_libraries(RenderGraphInspectionTests PRIVATE Lighthouse::Engine GTest::gtest_main)
 gtest_discover_tests(RenderGraphInspectionTests)
+
+if((LIGHTHOUSE_BUILD_OPENGL_BACKEND AND LIGHTHOUSE_BUILD_VULKAN_BACKEND) OR LIGHTHOUSE_BUILD_EXAMPLES)
+    find_package(nlohmann_json CONFIG REQUIRED)
+    add_executable(LighthouseGLTFImageTests GLTFImageTests.cpp)
+    target_compile_definitions(LighthouseGLTFImageTests PRIVATE LIGHTHOUSE_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    target_link_libraries(LighthouseGLTFImageTests PRIVATE Lighthouse::OpenGLBackend Lighthouse::VulkanBackend nlohmann_json::nlohmann_json)
+    add_test(NAME LighthouseGLTFImageTests COMMAND LighthouseGLTFImageTests)
+endif()

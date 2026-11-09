@@ -1,5 +1,5 @@
 #include <Lighthouse/Engine/Rendering/ImGuiView.hpp>
-#include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Rendering/RenderGraphComposer.hpp>
 #include <Lighthouse/Engine/Rendering/IImGuiDevice.hpp>
 #include <Lighthouse/Engine/Rendering/ImguiSimpleObject.hpp>
 #include <Lighthouse/Engine/Core/EngineRuntime.hpp>
@@ -30,7 +30,7 @@ TEST_F(ImGuiViewTests, IndependentViewportsRestoreContextAndSurviveEngineWindowC
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(
+    RenderGraphComposer renderer(
         backend.CreateDevice(
             {.queues = {{.capabilities =
                              Lighthouse::RenderQueueCapability::Graphics |
@@ -184,7 +184,7 @@ TEST_F(ImGuiViewTests, UiOnlyAndCallbackExceptionRestoreContexts) {
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(
+    RenderGraphComposer renderer(
         backend.CreateDevice(
             {.queues = {{.capabilities =
                              Lighthouse::RenderQueueCapability::Graphics |
@@ -231,7 +231,7 @@ TEST_F(ImGuiViewTests, VulkanGraphFrames) {
                 .minCount = 1}}});
     }
     catch (const std::runtime_error& error) { GTEST_SKIP() << error.what(); }
-    Renderer renderer(std::move(device), &windows);
+    RenderGraphComposer renderer(std::move(device), &windows);
     int calls = 0;
     renderer.CreateView<ImGuiView>([&] {
         ++calls;
@@ -302,7 +302,7 @@ TEST_F(ImGuiViewTests, GraphObjectOrderRecompileAndFailureRecovery) {
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(
+    RenderGraphComposer renderer(
         backend.CreateDevice(
             {.queues = {{.capabilities =
                              Lighthouse::RenderQueueCapability::Graphics |
@@ -351,7 +351,7 @@ TEST_F(ImGuiViewTests, ToolboxChainsCustomAndSimpleToolPasses) {
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(
+    RenderGraphComposer renderer(
         backend.CreateDevice(
             {.queues = {{.capabilities =
                              Lighthouse::RenderQueueCapability::Graphics |
@@ -385,7 +385,7 @@ TEST_F(ImGuiViewTests, RendererToolUsesItsOwnGraphPassAndNodeEditorContext) {
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(
+    RenderGraphComposer renderer(
         backend.CreateDevice(
             {.queues = {{.capabilities =
                              Lighthouse::RenderQueueCapability::Graphics |
@@ -400,11 +400,11 @@ TEST_F(ImGuiViewTests, RendererToolUsesItsOwnGraphPassAndNodeEditorContext) {
     auto recorder = std::make_shared<RecordingSimpleObject>(events);
     view->AddObject(recorder);
     renderer.Compile();
-    EXPECT_NE(renderer.GetRenderGraph().Dot().find("Renderer"), std::string::npos);
+    EXPECT_NE(renderer.GetRenderGraph().Dot().find("RenderGraphComposer"), std::string::npos);
     for (int frame = 0; frame < 3; ++frame) renderer.Render();
     ASSERT_NE(recorder->context, nullptr);
     ImGui::SetCurrentContext(recorder->context);
-    auto* window = ImGui::FindWindowByName("Renderer");
+    auto* window = ImGui::FindWindowByName("RenderGraphComposer");
     ASSERT_NE(window, nullptr);
     EXPECT_NE(window->DockId, 0u);
     ImGui::SetCurrentContext(nullptr);
@@ -420,8 +420,8 @@ public:
     explicit PostBuildOutput(std::vector<int>& events) : events(events) {}
     void BuildGraph(ViewBuildContext&) override { events.push_back(1); }
     void PostBuildGraph(ViewBuildContext&) override { events.push_back(3); }
-    void Begin(Renderer*) override {}
-    void End(Renderer*) override {}
+    void Begin(RenderGraphComposer*) override {}
+    void End(RenderGraphComposer*) override {}
     std::vector<int>& events;
 };
 class PostBuildProbe final : public ImguiGraphObject {
@@ -447,7 +447,7 @@ TEST_F(ImGuiViewTests, PostBuildRunsAfterAllViewsAndTechniques) {
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(
+    RenderGraphComposer renderer(
         backend.CreateDevice(
             {.queues = {{.capabilities =
                              Lighthouse::RenderQueueCapability::Graphics |
@@ -480,7 +480,7 @@ TEST_F(ImGuiViewTests, RendererInspectorShowsSceneMetadataWithoutKeepingPassesAl
     OpenGLBackend backend;
     std::string diagnostic;
     ASSERT_TRUE(backend.Initialize(diagnostic));
-    Renderer renderer(
+    RenderGraphComposer renderer(
         backend.CreateDevice(
             {.queues = {{.capabilities =
                              Lighthouse::RenderQueueCapability::Graphics |
@@ -511,7 +511,7 @@ TEST_F(ImGuiViewTests, RendererInspectorShowsSceneMetadataWithoutKeepingPassesAl
     const auto all = renderer.GetRenderGraph().GetInspectionData(true);
     EXPECT_GT(all.passes.size(), snapshot.passes.size());
     bool foundInspector = false;
-    for (const auto& pass : all.passes) if (pass.name == "Renderer") {
+    for (const auto& pass : all.passes) if (pass.name == "RenderGraphComposer") {
         foundInspector = true; EXPECT_TRUE(pass.hidden);
         // Only completion is consumed; scene output is inspected as metadata.
         ASSERT_EQ(pass.reads.size(), 1u);

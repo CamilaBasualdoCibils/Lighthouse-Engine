@@ -43,7 +43,7 @@ bool EngineRuntime::Initialize(const Config& config,
   try
   {
     m_renderer =
-        std::make_unique<Renderer>(std::move(m_backend.device), &m_windows);
+        std::make_unique<RenderGraphComposer>(std::move(m_backend.device), &m_windows);
     spdlog::info("Graphics backend: {} ({})", m_backend.selectedBackend,
                  m_renderer->GetRenderDevice()->GetCapabilities().deviceName);
     return true;

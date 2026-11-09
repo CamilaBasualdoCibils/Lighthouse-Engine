@@ -1,7 +1,7 @@
 #include "Lighthouse/Engine/Rendering/Graph/RenderGraph.hpp"
 #include <Lighthouse/Engine/Rendering/IRenderDevice.hpp>
 #include <Lighthouse/Engine/Rendering/RenderView.hpp>
-#include <Lighthouse/Engine/Rendering/Renderer.hpp>
+#include <Lighthouse/Engine/Rendering/RenderGraphComposer.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
 
 #include <algorithm>
@@ -36,7 +36,7 @@ void WindowView::BuildGraph(ViewBuildContext& ctx)
       "WindowView Swapchain", ImportedWindowView::Desc{}, imported_image_view);
   m_logger->info("Imported WindowView Swapchain to RenderGraph");
 }
-void WindowView::Begin(Renderer* renderer)
+void WindowView::Begin(RenderGraphComposer* renderer)
 {
 
   const auto acquire =
@@ -46,7 +46,7 @@ void WindowView::Begin(Renderer* renderer)
       renderer->GetRenderDevice()->GetSwapchainInfo(swapchain).value_or(
           m_swapchainInfo);
 }
-void WindowView::End(Renderer* renderer)
+void WindowView::End(RenderGraphComposer* renderer)
 {
   renderer->GetRenderDevice()->GetQueue(0)->Present(swapchain);
   m_acquiredImage.reset();
