@@ -21,8 +21,6 @@ include(CTest)
 option(OPENPERIPHERAL_BUILD_TESTS "Build OpenPeripheral tests" OFF)
 option(OPENPERIPHERAL_BUILD_TOOLS "Build OpenPeripheral tools" OFF)
 option(OPENPERIPHERAL_BUILD_EXAMPLES "Build OpenPeripheral examples" OFF)
-option(VISR_BUILD_TESTS "Build VISR tests" OFF)
-option(VISR_BUILD_TOOLS "Build VISR tools" OFF)
 
 include(cmake/EmbedResources.cmake)
 lighthouse_embed_resources(LighthouseEngineEmbedded "Lighthouse::EngineEmbedded"
@@ -31,7 +29,6 @@ add_library(Lighthouse::EngineEmbedded ALIAS LighthouseEngineEmbedded)
 target_include_directories(LighthouseEngineEmbedded PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 
 add_subdirectory(extern/OpenPeripherals)
-add_subdirectory(extern/VISR)
 add_subdirectory(src/Engine)
 
 if(BUILD_TESTING)
