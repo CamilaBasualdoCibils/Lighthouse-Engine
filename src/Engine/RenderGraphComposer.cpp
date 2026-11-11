@@ -99,6 +99,16 @@ RenderViewHandle RenderGraphComposer::CreateWindowView(const RenderWindowDesc &d
                                             SwapchainConfig presentation) {
   if (!m_windows)
     throw std::logic_error("Creating a window view requires a WindowManager");
+  if (description.ImGuiHost) {
+#ifndef LIGHTHOUSE_IMGUI
+    throw std::logic_error("ImGuiHost requires LIGHTHOUSE_IMGUI");
+#else
+    for (const auto& slot : m_views)
+      if (auto* view = dynamic_cast<WindowView*>(slot.value.get());
+          view && view->IsImGuiHost())
+        throw std::logic_error("Only one ImGuiHost window is allowed per renderer");
+#endif
+  }
   if (description.swapchainFormats.empty())
     throw std::invalid_argument(
         "Window view requires a swapchain format preference");
@@ -147,6 +157,7 @@ RenderViewHandle RenderGraphComposer::CreateWindowView(const RenderWindowDesc &d
     auto view =
         std::unique_ptr<WindowView>(new WindowView(window, presentation));
     view->m_windows = m_windows;
+    view->m_imguiHost = description.ImGuiHost;
     view->surface = surface;
     view->swapchain = swapchain;
     const auto info = m_device->GetSwapchainInfo(swapchain);
@@ -206,6 +217,14 @@ bool RenderGraphComposer::DestroyView(RenderViewHandle handle) {
     return false;
   auto *windowView = dynamic_cast<WindowView *>(view);
   const auto window = windowView ? windowView->window : WindowHandle{};
+#ifdef LIGHTHOUSE_IMGUI
+  if (windowView && windowView->IsImGuiHost()) {
+    m_renderGraph.Clear();
+    for (const auto& slot : m_views)
+      if (auto* ui = dynamic_cast<ImGuiView*>(slot.value.get()))
+        ui->SetHost(nullptr);
+  }
+#endif
   if (windowView && windowView->swapchain && m_device)
     m_device->DestroySwapchain(windowView->swapchain);
   if (windowView && windowView->surface && m_device)
@@ -223,6 +242,20 @@ void RenderGraphComposer::Compile() {
   spdlog::info("Compiling Render Graph");
     LIGHTHOUSE_PROFILE_SCOPE("RenderGraphComposer::Compile");
   RenderGraph graph;
+#ifdef LIGHTHOUSE_IMGUI
+  WindowView* host = nullptr;
+  std::vector<ImGuiView*> uiViews;
+  for (const auto& slot : m_views) {
+    if (auto* view = dynamic_cast<WindowView*>(slot.value.get());
+        view && view->IsImGuiHost()) host = view;
+    if (auto* ui = dynamic_cast<ImGuiView*>(slot.value.get())) uiViews.push_back(ui);
+  }
+  if (host && uiViews.size() > 1)
+    throw std::logic_error("An ImGuiHost supports one ImGuiView per renderer");
+  // Retire GPU work before changing context ownership or host windows.
+  m_renderGraph.Drain();
+  for (auto* ui : uiViews) ui->SetHost(host);
+#endif
 
   for (std::uint32_t i = 0; i < m_views.size(); ++i) {
     if (auto *view = dynamic_cast<IRenderView *>(m_views[i].value.get())) {

@@ -1,6 +1,7 @@
 #include <Lighthouse/Engine/Rendering/ImGuiView.hpp>
 #ifdef LIGHTHOUSE_IMGUI
 #include <Lighthouse/Engine/Rendering/IImGuiDevice.hpp>
+#include <Lighthouse/Engine/Rendering/Detail/ImGuiGlfwRouting.hpp>
 #include <Lighthouse/Engine/Rendering/ImguiSimpleObject.hpp>
 #include <Lighthouse/Engine/Rendering/RenderGraphComposer.hpp>
 #include <imgui.h>
@@ -49,6 +50,7 @@ private:
   std::function<void()> m_draw;
 };
 } // namespace
+ImGuiView::ImGuiView(const ImGuiViewDesc& desc) : m_desc(desc) {}
 ImGuiView::ImGuiView(std::function<void()> draw)
 {
   if (!draw)
@@ -85,17 +87,36 @@ void ImGuiView::PostBuildGraph(ViewBuildContext& context)
                    .completion;
   for (const auto& object : m_objects)
     completion = object->BuildGraph(imgui, completion);
+  RenderGraphResource hostImage = kInvalidGraphResource;
+  if (m_host) {
+    const auto original = m_host->GetAcquiredImageAsRGResource();
+    for (const auto& resource : context.graph.GetInspectionData(true).resources)
+      if (resource.resource == original) hostImage = resource.handle;
+  }
   imgui.AddPass(
       "ImGui Render",
-      [completion](RenderGraph::Builder& builder, FrameGraph::NoData&)
+      [completion, hostImage](RenderGraph::Builder& builder, FrameGraph::NoData&)
       {
         builder.Read(completion);
+        if (hostImage != kInvalidGraphResource) (void)builder.Write(hostImage);
         builder.SetSideEffect();
       },
       [this](const FrameGraph::NoData&, FrameGraphPassResources&,
-             RenderGraphExecutePassContext&) { RenderFrame(); });
+             RenderGraphExecutePassContext& execution) {
+        // Hosted overlays must wait for the composer's scene submission.
+        // External-only views finish now, before another UI context starts.
+        if (m_host) execution.afterSubmit = [this] { RenderFrame(); };
+        else RenderFrame();
+      });
 }
-ImGuiView::~ImGuiView()
+ImGuiView::~ImGuiView() { Shutdown(); }
+void ImGuiView::SetHost(WindowView* host)
+{
+  if (host == m_host) return;
+  Shutdown();
+  m_host = host;
+}
+void ImGuiView::Shutdown()
 {
   AbortFrame();
   if (!m_context)
@@ -111,6 +132,9 @@ ImGuiView::~ImGuiView()
   m_backend->ShutdownImGui();
   ImPlot::DestroyContext(m_plotContext);
   ImGui::DestroyContext(m_context);
+  m_context = nullptr;
+  m_plotContext = nullptr;
+  m_backend = nullptr;
 }
 void ImGuiView::Begin(RenderGraphComposer* renderer)
 {
@@ -131,11 +155,12 @@ void ImGuiView::Begin(RenderGraphComposer* renderer)
   auto& io = ImGui::GetIO();
   io.ConfigFlags |=
       ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_ViewportsEnable;
-  io.ConfigViewportsNoAutoMerge = true;
+  io.ConfigViewportsNoAutoMerge = !m_host;
   io.ConfigViewportsNoDecoration = true;
   try
   {
-    backend->InitializeImGui(*windows);
+    backend->InitializeImGui(*windows, m_host);
+    if (m_host) Detail::EnableImGuiGlfwViewportRaiseOnShow();
   }
   catch (...)
   {
@@ -164,6 +189,10 @@ void ImGuiView::NewFrame()
     m_frameActive = true;
     ImGui::NewFrame();
     m_frameStarted = true;
+    if (m_desc.showImguiDemo)
+      ImGui::ShowDemoWindow();
+    if (m_desc.showImplotDemo)
+      ImPlot::ShowDemoWindow();
   }
   catch (...)
   {
@@ -193,6 +222,7 @@ void ImGuiView::RenderFrame()
   {
     ImGui::EndFrame();
     ImGui::Render();
+    if (m_host) m_backend->RenderImGuiHost(*m_host);
     m_backend->RenderImGuiViewports();
   }
   catch (...)

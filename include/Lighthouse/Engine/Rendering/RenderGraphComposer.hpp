@@ -31,8 +31,10 @@ struct RenderWindowDesc {
   bool resizable{true};
   bool visible{true};
   bool decorated{true};
+  // Main ImGui viewport host. At most one window per renderer may opt in.
   // Ordered preference. No implicit fallback outside this list.
   std::vector<SwapchainFormat> swapchainFormats{SwapchainFormat::SRGB};
+  bool ImGuiHost{false};
 };
 
 class RenderGraphComposer {

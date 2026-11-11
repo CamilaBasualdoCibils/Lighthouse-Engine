@@ -638,6 +638,7 @@ struct OpenGLRenderDevice::Impl
   struct ImGuiState
   {
     GLFWwindow* host{};
+    bool engineHost{};
     ContextSnapshot saved;
     bool frameActive{};
   };

@@ -10,6 +10,7 @@
 #include <GLFW/glfw3.h>
 #ifdef LIGHTHOUSE_IMGUI
 #include <Lighthouse/Engine/Rendering/Detail/ImGuiGlfwRouting.hpp>
+#include <Lighthouse/Engine/Rendering/RenderView.hpp>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
@@ -446,6 +447,7 @@ struct VulkanRenderDevice::Impl
   struct Gui
   {
     GLFWwindow* host{};
+    bool engineHost{};
   };
   std::unordered_map<ImGuiContext*, Gui> gui;
 #endif
@@ -3018,7 +3020,7 @@ void VulkanRenderDevice::Queue::Present(
 }
 
 #ifdef LIGHTHOUSE_IMGUI
-void VulkanRenderDevice::InitializeImGui(WindowManager& windows)
+void VulkanRenderDevice::InitializeImGui(WindowManager& windows, WindowView* engineHost)
 {
   auto& d = *m_impl;
   auto* context = ImGui::GetCurrentContext();
@@ -3030,8 +3032,9 @@ void VulkanRenderDevice::InitializeImGui(WindowManager& windows)
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
   glfwWindowHint(GLFW_FOCUSED, GLFW_FALSE);
-  auto* host =
-      glfwCreateWindow(1280, 720, "Lighthouse ImGui host", nullptr, nullptr);
+  auto* host = engineHost
+      ? static_cast<GLFWwindow*>(engineHost->GetWindow()->NativeHandle())
+      : glfwCreateWindow(1280, 720, "Lighthouse ImGui host", nullptr, nullptr);
   Require(host, "Failed to create ImGui host");
   bool platform = false, renderer = false;
   try
@@ -3048,10 +3051,11 @@ void VulkanRenderDevice::InitializeImGui(WindowManager& windows)
     info.Queue = static_cast<vk::Queue::CType>(d.queue);
     info.DescriptorPoolSize = 1024;
     info.MinImageCount = 2;
-    info.ImageCount = 3;
+    info.ImageCount = engineHost ? d.Find(engineHost->swapchain)->images.size() : 3;
     info.UseDynamicRendering = true;
     vk::PipelineRenderingCreateInfo rendering;
-    const auto format = vk::Format::eR8G8B8A8Unorm;
+    const auto format = engineHost ? d.Find(engineHost->swapchain)->format.format
+                                   : vk::Format::eR8G8B8A8Unorm;
     rendering.setColorAttachmentFormats(format);
     info.PipelineInfoMain.MSAASamples =
         static_cast<decltype(info.PipelineInfoMain.MSAASamples)>(
@@ -3064,7 +3068,7 @@ void VulkanRenderDevice::InitializeImGui(WindowManager& windows)
     Require(ImGui_ImplVulkan_Init(&info),
             "ImGui Vulkan renderer initialization failed");
     renderer = true;
-    d.gui.emplace(context, Impl::Gui{host});
+    d.gui.emplace(context, Impl::Gui{host, engineHost != nullptr});
   }
   catch (...)
   {
@@ -3072,7 +3076,7 @@ void VulkanRenderDevice::InitializeImGui(WindowManager& windows)
       ImGui_ImplVulkan_Shutdown();
     if (platform)
       ImGui_ImplGlfw_Shutdown();
-    glfwDestroyWindow(host);
+    if (!engineHost) glfwDestroyWindow(host);
     glfwDefaultWindowHints();
     throw;
   }
@@ -3091,7 +3095,7 @@ void VulkanRenderDevice::ShutdownImGui() noexcept
     Detail::RemoveImGuiGlfwCallbacks(ImGui::GetCurrentContext());
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
-    glfwDestroyWindow(it->second.host);
+    if (!it->second.engineHost) glfwDestroyWindow(it->second.host);
     d.gui.erase(it);
   }
   catch (...)
@@ -3102,6 +3106,35 @@ void VulkanRenderDevice::BeginImGuiFrame()
 {
   ImGui_ImplVulkan_NewFrame();
   ImGui_ImplGlfw_NewFrame();
+}
+void VulkanRenderDevice::RenderImGuiHost(WindowView& host)
+{
+  auto& d = *m_impl;
+  auto* swap = d.Find(host.swapchain);
+  Require(swap && swap->acquired, "ImGui host image is not acquired");
+  const auto image = swap->images.at(swap->current);
+  auto& state = d.images.at(image);
+  std::vector<vk::Semaphore> waits;
+  if (swap->waitPending) waits.push_back(swap->available);
+  d.Run([&](vk::CommandBuffer cmd) {
+    const bool initialized = swap->ready && state.layout != vk::ImageLayout::eUndefined;
+    d.Barrier(cmd, image, state.layout, vk::ImageLayout::eColorAttachmentOptimal);
+    vk::RenderingAttachmentInfo color;
+    color.setImageView(d.views.at(swap->views.at(swap->current)).native)
+         .setImageLayout(vk::ImageLayout::eColorAttachmentOptimal)
+         .setLoadOp(initialized ? vk::AttachmentLoadOp::eLoad : vk::AttachmentLoadOp::eClear)
+         .setStoreOp(vk::AttachmentStoreOp::eStore)
+         .setClearValue(vk::ClearValue(vk::ClearColorValue(std::array<float, 4>{0, 0, 0, 1})));
+    vk::RenderingInfo rendering;
+    rendering.setRenderArea(vk::Rect2D({0, 0}, swap->extent))
+             .setLayerCount(1).setColorAttachments(color);
+    cmd.beginRendering(rendering, d.dispatch);
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), static_cast<VkCommandBuffer>(cmd));
+    cmd.endRendering(d.dispatch);
+  }, waits);
+  state.layout = vk::ImageLayout::eColorAttachmentOptimal;
+  swap->waitPending = false;
+  swap->ready = true;
 }
 void VulkanRenderDevice::RenderImGuiViewports()
 {

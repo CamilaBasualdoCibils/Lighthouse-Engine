@@ -61,6 +61,7 @@ public:
       return m_swapchainInfo;
     }
     Window* GetWindow() const noexcept;
+    bool IsImGuiHost() const noexcept { return m_imguiHost; }
     void BuildGraph(ViewBuildContext& ctx) override;
 
     void Begin(RenderGraphComposer *renderer) override;
@@ -75,6 +76,7 @@ public:
         : IOutputView(), window(window), presentation(config) {}
     SwapchainInfo m_swapchainInfo;
     WindowManager* m_windows{};
+    bool m_imguiHost{};
     std::optional<AcquiredSwapchainImage> m_acquiredImage;
     std::optional<RenderGraphResource> m_acquiredImageAsRGResource;
     std::shared_ptr<spdlog::logger> m_logger = (spdlog::get("WindowView") ? spdlog::get("WindowView") : spdlog::stdout_color_mt("WindowView"));

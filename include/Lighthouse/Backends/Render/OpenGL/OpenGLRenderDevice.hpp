@@ -109,7 +109,8 @@ public:
   void WaitIdle() override;
   ImageViewHandle AcquiredImageView(SwapchainHandle swapchain) const noexcept;
 #ifdef LIGHTHOUSE_IMGUI
-  void InitializeImGui(WindowManager& windows) override;
+  void InitializeImGui(WindowManager& windows, WindowView* host = nullptr) override;
+  void RenderImGuiHost(WindowView& host) override;
   void ShutdownImGui() noexcept override;
   void BeginImGuiFrame() override;
   void RenderImGuiViewports() override;

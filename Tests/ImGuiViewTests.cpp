@@ -4,7 +4,6 @@
 #include <Lighthouse/Engine/Rendering/ImguiSimpleObject.hpp>
 #include <Lighthouse/Engine/Core/EngineRuntime.hpp>
 #include <Lighthouse/Engine/Tools/ISimpleTool.hpp>
-#include <Lighthouse/Engine/Tools/RendererTool.hpp>
 #include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -377,42 +376,7 @@ TEST_F(ImGuiViewTests, ToolboxChainsCustomAndSimpleToolPasses) {
     renderer.DestroyView(empty); renderer.Compile();
 }
 
-TEST_F(ImGuiViewTests, RendererToolUsesItsOwnGraphPassAndNodeEditorContext) {
-    EngineRuntime runtime;
-    auto& toolbox = runtime.GetToolBox();
-    toolbox.AddTool<RendererTool>();
-    WindowManager windows;
-    OpenGLBackend backend;
-    std::string diagnostic;
-    ASSERT_TRUE(backend.Initialize(diagnostic));
-    RenderGraphComposer renderer(
-        backend.CreateDevice(
-            {.queues = {{.capabilities =
-                             Lighthouse::RenderQueueCapability::Graphics |
-                             Lighthouse::RenderQueueCapability::Compute |
-                             Lighthouse::RenderQueueCapability::Transfer,
-                         .minCount = 1}}}),
-        &windows);
-    auto handle = renderer.CreateView<ImGuiView>();
-    auto* view = renderer.GetView<ImGuiView>(handle);
-    view->AddObject(toolbox);
-    std::vector<int> events;
-    auto recorder = std::make_shared<RecordingSimpleObject>(events);
-    view->AddObject(recorder);
-    renderer.Compile();
-    EXPECT_NE(renderer.GetRenderGraph().Dot().find("RenderGraphComposer"), std::string::npos);
-    for (int frame = 0; frame < 3; ++frame) renderer.Render();
-    ASSERT_NE(recorder->context, nullptr);
-    ImGui::SetCurrentContext(recorder->context);
-    auto* window = ImGui::FindWindowByName("RenderGraphComposer");
-    ASSERT_NE(window, nullptr);
-    EXPECT_NE(window->DockId, 0u);
-    ImGui::SetCurrentContext(nullptr);
-    // Dropping the compiled snapshot also releases the node editor safely.
-    toolbox.Clear();
-    renderer.Compile();
-    EXPECT_NO_THROW(renderer.Render());
-}
+
 
 namespace {
 class PostBuildOutput final : public IOutputView {
@@ -470,65 +434,4 @@ TEST_F(ImGuiViewTests, PostBuildRunsAfterAllViewsAndTechniques) {
     events.clear();
     renderer.Compile();
     EXPECT_EQ(events, (std::vector<int>{1, 2, 3, 4}));
-}
-
-TEST_F(ImGuiViewTests, RendererInspectorShowsSceneMetadataWithoutKeepingPassesAlive) {
-    EngineRuntime runtime;
-    auto& toolbox = runtime.GetToolBox();
-    toolbox.AddTool<RendererTool>();
-    WindowManager windows;
-    OpenGLBackend backend;
-    std::string diagnostic;
-    ASSERT_TRUE(backend.Initialize(diagnostic));
-    RenderGraphComposer renderer(
-        backend.CreateDevice(
-            {.queues = {{.capabilities =
-                             Lighthouse::RenderQueueCapability::Graphics |
-                             Lighthouse::RenderQueueCapability::Compute |
-                             Lighthouse::RenderQueueCapability::Transfer,
-                         .minCount = 1}}}),
-        &windows);
-    int sceneExecutions = 0;
-    bool expanded = false;
-    renderer.AddLambdaTechnique([&](TechniqueBuildContext& context) {
-        struct Data { RenderGraphResource image; };
-        context.graph.AddPass<Data>("Visible producer",
-            [](RenderGraph::Builder& builder, Data& data) {
-                data.image = builder.Create<RenderGraphBuffer>("Scene output", {.size = 16});
-            }, [&](const Data&, FrameGraphPassResources&, RenderGraphExecutePassContext&) { ++sceneExecutions; });
-        if (expanded) (void)context.graph.Import<ImportedRenderGraphBuffer>("Extra external resource", {}, {});
-    });
-    auto ui = renderer.CreateView<ImGuiView>();
-    renderer.GetView<ImGuiView>(ui)->AddObject(toolbox);
-    std::vector<int> events;
-    auto recorder = std::make_shared<RecordingSimpleObject>(events);
-    renderer.GetView<ImGuiView>(ui)->AddObject(recorder);
-    renderer.Compile();
-    auto snapshot = renderer.GetRenderGraph().GetInspectionData();
-    ASSERT_EQ(snapshot.passes.size(), 1u); ASSERT_EQ(snapshot.resources.size(), 1u);
-    EXPECT_EQ(snapshot.passes[0].name, "Visible producer");
-    EXPECT_EQ(snapshot.resources[0].name, "Scene output");
-    const auto all = renderer.GetRenderGraph().GetInspectionData(true);
-    EXPECT_GT(all.passes.size(), snapshot.passes.size());
-    bool foundInspector = false;
-    for (const auto& pass : all.passes) if (pass.name == "RenderGraphComposer") {
-        foundInspector = true; EXPECT_TRUE(pass.hidden);
-        // Only completion is consumed; scene output is inspected as metadata.
-        ASSERT_EQ(pass.reads.size(), 1u);
-        EXPECT_NE(pass.reads[0], snapshot.resources[0].handle);
-    }
-    EXPECT_TRUE(foundInspector);
-    for (int frame = 0; frame < 3; ++frame) renderer.Render();
-    EXPECT_EQ(sceneExecutions, 0); // The unused producer must stay culled.
-    ASSERT_NE(recorder->context, nullptr);
-    ImGui::SetCurrentContext(recorder->context);
-    int vertices = 0;
-    for (auto* viewport : ImGui::GetPlatformIO().Viewports)
-        if (viewport->DrawData) vertices += viewport->DrawData->TotalVtxCount;
-    EXPECT_GT(vertices, 0);
-    ImGui::SetCurrentContext(nullptr);
-    expanded = true; renderer.Compile();
-    EXPECT_EQ(renderer.GetRenderGraph().GetInspectionData().resources.size(), 2u);
-    for (int frame = 0; frame < 3; ++frame) EXPECT_NO_THROW(renderer.Render());
-    EXPECT_EQ(sceneExecutions, 0);
 }

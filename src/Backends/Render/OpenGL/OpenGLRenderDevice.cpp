@@ -8,6 +8,7 @@
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 #include <Lighthouse/Engine/Rendering/Detail/ImGuiGlfwRouting.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
+#include <Lighthouse/Engine/Rendering/RenderView.hpp>
 #include <chrono>
 #include <spirv_cross/spirv_glsl.hpp>
 #include <thread>
@@ -2155,7 +2156,16 @@ void ImGuiWindowHints()
   glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 }
 } // namespace
-void OpenGLRenderDevice::InitializeImGui(WindowManager& windows)
+namespace {
+struct HostedViewportSurface {
+  std::shared_ptr<Detail::OpenGLDeviceGroup> group;
+  EGLSurface surface{EGL_NO_SURFACE};
+  ~HostedViewportSurface() {
+    if (surface != EGL_NO_SURFACE) eglDestroySurface(group->display, surface);
+  }
+};
+}
+void OpenGLRenderDevice::InitializeImGui(WindowManager& windows, WindowView* engineHost)
 {
   auto* context = ImGui::GetCurrentContext();
   if (m_impl->imgui.contains(context))
@@ -2169,15 +2179,20 @@ void OpenGLRenderDevice::InitializeImGui(WindowManager& windows)
     // Initialize the engine's shared EGL context even for an ImGui-only
     // renderer. The ImGui GLFW contexts have their own shared resources.
     m_impl->group->Initialize(glfwGetX11Display());
-    ImGuiWindowHints();
-    glfwWindowHint(GLFW_FOCUSED, GLFW_FALSE);
-    host =
-        glfwCreateWindow(1280, 720, "Lighthouse ImGui host", nullptr, nullptr);
-    if (!host)
-      throw std::runtime_error("Failed to create the hidden ImGui OpenGL host");
-    glfwMakeContextCurrent(host);
-    glfwSwapInterval(0);
-    if (!ImGui_ImplGlfw_InitForOpenGL(host, true))
+    if (engineHost) {
+      host = static_cast<GLFWwindow*>(engineHost->GetWindow()->NativeHandle());
+      m_impl->ActivateContext();
+    } else {
+      ImGuiWindowHints();
+      glfwWindowHint(GLFW_FOCUSED, GLFW_FALSE);
+      host = glfwCreateWindow(1280, 720, "Lighthouse ImGui host", nullptr, nullptr);
+      if (!host)
+        throw std::runtime_error("Failed to create the hidden ImGui OpenGL host");
+      glfwMakeContextCurrent(host);
+      glfwSwapInterval(0);
+    }
+    if (!(engineHost ? ImGui_ImplGlfw_InitForOther(host, true)
+                     : ImGui_ImplGlfw_InitForOpenGL(host, true)))
       throw std::runtime_error("Failed to initialize ImGui GLFW viewports");
     platformInitialized = true;
     if (!(ImGui::GetIO().BackendFlags & ImGuiBackendFlags_PlatformHasViewports))
@@ -2186,7 +2201,48 @@ void OpenGLRenderDevice::InitializeImGui(WindowManager& windows)
     if (!ImGui_ImplOpenGL3_Init("#version 450 core"))
       throw std::runtime_error("Failed to initialize ImGui OpenGL viewports");
     rendererInitialized = true;
-    m_impl->imgui.emplace(context, Impl::ImGuiState{.host = host});
+    if (engineHost) {
+      // Engine windows have no GLFW GL context. Detached windows use EGL
+      // surfaces in the engine share group as well, so fonts/textures work in
+      // both the host overlay and detached panels.
+      auto& platform = ImGui::GetPlatformIO();
+      platform.Platform_RenderWindow = nullptr;
+      platform.Platform_SwapBuffers = nullptr;
+      platform.Renderer_CreateWindow = nullptr;
+      platform.Renderer_DestroyWindow = [](ImGuiViewport* viewport) {
+        auto* surface = static_cast<HostedViewportSurface*>(viewport->RendererUserData);
+        delete surface;
+        viewport->RendererUserData = nullptr;
+      };
+      platform.Renderer_RenderWindow = [](ImGuiViewport* viewport, void* argument) {
+        auto& device = *static_cast<Impl*>(argument);
+        Impl::Scope scope(device);
+        auto* surface = static_cast<HostedViewportSurface*>(viewport->RendererUserData);
+        if (!surface) {
+          auto created = std::make_unique<HostedViewportSurface>();
+          created->group = device.group;
+          auto* native = static_cast<GLFWwindow*>(viewport->PlatformHandle);
+          created->surface = device.group->CreateWindowSurface(
+              reinterpret_cast<void*>(glfwGetX11Window(native)));
+          surface = created.release();
+          viewport->RendererUserData = surface;
+        }
+        if (!eglMakeCurrent(device.group->display, surface->surface,
+                            surface->surface, device.resourceContext))
+          throw std::runtime_error("Cannot bind detached ImGui EGL surface");
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (!(viewport->Flags & ImGuiViewportFlags_NoRendererClear)) {
+          glDisable(GL_SCISSOR_TEST);
+          glClearColor(0, 0, 0, 1);
+          glClear(GL_COLOR_BUFFER_BIT);
+        }
+        ImGui_ImplOpenGL3_RenderDrawData(viewport->DrawData);
+        if (!eglSwapBuffers(device.group->display, surface->surface))
+          throw std::runtime_error("Cannot present detached ImGui EGL surface");
+      };
+      platform.Renderer_SwapBuffers = nullptr;
+    }
+    m_impl->imgui.emplace(context, Impl::ImGuiState{.host = host, .engineHost = engineHost != nullptr});
   }
   catch (...)
   {
@@ -2194,7 +2250,7 @@ void OpenGLRenderDevice::InitializeImGui(WindowManager& windows)
       ImGui_ImplOpenGL3_Shutdown();
     if (platformInitialized)
       ImGui_ImplGlfw_Shutdown();
-    if (host)
+    if (host && !engineHost)
     {
       glfwMakeContextCurrent(nullptr);
       glfwDestroyWindow(host);
@@ -2216,14 +2272,21 @@ void OpenGLRenderDevice::ShutdownImGui() noexcept
   const auto host = found->second.host;
   if (saved.glfw == host)
     saved = {};
-  glfwMakeContextCurrent(host);
+  const bool engineHost = found->second.engineHost;
+  std::unique_ptr<Impl::Scope> scope;
+  if (engineHost) scope = std::make_unique<Impl::Scope>(*m_impl);
+  else glfwMakeContextCurrent(host);
   ImGui::DestroyPlatformWindows();
   Detail::RemoveImGuiGlfwCallbacks(ImGui::GetCurrentContext());
-  glfwMakeContextCurrent(host);
+  if (engineHost) m_impl->ActivateContext();
+  else glfwMakeContextCurrent(host);
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
-  glfwMakeContextCurrent(nullptr);
-  glfwDestroyWindow(host);
+  scope.reset();
+  if (!engineHost) {
+    glfwMakeContextCurrent(nullptr);
+    glfwDestroyWindow(host);
+  }
   m_impl->imgui.erase(found);
   saved.Restore();
 }
@@ -2236,7 +2299,9 @@ void OpenGLRenderDevice::BeginImGuiFrame()
   state.frameActive = true;
   try
   {
-    glfwMakeContextCurrent(state.host);
+    std::unique_ptr<Impl::Scope> scope;
+    if (state.engineHost) scope = std::make_unique<Impl::Scope>(*m_impl);
+    else glfwMakeContextCurrent(state.host);
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
   }
@@ -2246,13 +2311,54 @@ void OpenGLRenderDevice::BeginImGuiFrame()
     throw;
   }
 }
+void OpenGLRenderDevice::RenderImGuiHost(WindowView& host)
+{
+  // Scene submissions run on queue contexts. Retire them before loading their
+  // color into the UI pass; Scope publishes the resulting writes to Present.
+  WaitIdle();
+  auto target = m_impl->ShareSwapchain(host.swapchain);
+  if (!target) throw std::logic_error("ImGui host swapchain is invalid");
+  Impl::Scope scope(*m_impl);
+  std::lock_guard lock(target->mutex);
+  if (!target->acquired) throw std::logic_error("ImGui host image is not acquired");
+  const auto& image = target->images.at(target->imageIndex);
+  GLuint framebuffer{};
+  GLint previous{};
+  glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previous);
+  glCreateFramebuffers(1, &framebuffer);
+  struct RestoreFramebuffer {
+    GLuint framebuffer;
+    GLint previous;
+    ~RestoreFramebuffer() {
+      glBindFramebuffer(GL_DRAW_FRAMEBUFFER, previous);
+      glDeleteFramebuffers(1, &framebuffer);
+    }
+  } restore{framebuffer, previous};
+  glNamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0,
+                            m_impl->resources.views.at(image.view).id, 0);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+  // An ImGui-only host has no scene contents to preserve.
+  if (!target->frameReady) {
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+  }
+  ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+  target->frameReady = true;
+}
 void OpenGLRenderDevice::RenderImGuiViewports()
 {
+  const bool engineHost = m_impl->imgui.at(ImGui::GetCurrentContext()).engineHost;
   ImGuiWindowHints();
-  // The primary host stays hidden. No engine window is registered with ImGui.
-  ImGui::UpdatePlatformWindows();
-  Detail::RouteImGuiGlfwCallbacks();
-  ImGui::RenderPlatformWindowsDefault();
+  if (engineHost) glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+  try {
+    ImGui::UpdatePlatformWindows();
+    Detail::RouteImGuiGlfwCallbacks();
+    ImGui::RenderPlatformWindowsDefault(nullptr, m_impl.get());
+  } catch (...) {
+    glfwDefaultWindowHints();
+    throw;
+  }
   glfwDefaultWindowHints();
 }
 void OpenGLRenderDevice::EndImGuiFrame() noexcept
