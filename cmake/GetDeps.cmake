@@ -1,9 +1,7 @@
 include(FetchContent)
 
-# FrameGraph's tests default to ON and require Catch2. Only consume its library;
-# Lighthouse's own tests are controlled independently by BUILD_TESTING.
-set(FG_BUILD_TEST OFF CACHE BOOL "Build FrameGraph dependency tests" FORCE)
 
+set(FG_BUILD_TEST OFF CACHE BOOL "Disable FrameGraph tests")
 FetchContent_Declare(
     FrameGraph
     GIT_REPOSITORY https://github.com/skaarj1989/FrameGraph.git

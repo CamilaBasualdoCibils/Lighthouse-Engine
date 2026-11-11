@@ -5,6 +5,7 @@
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
 #include <Lighthouse/Backends/Render/OpenGL/OpenGLBackend.hpp>
 #include "OpenGLShaderTranslator.hpp"
+#include "OpenGLCommandList.hpp"
 #include <Lighthouse/Engine/Rendering/IRenderCommandList.hpp>
 #define GL_GLEXT_PROTOTYPES
 #include <GL/glcorearb.h>
@@ -265,3 +266,78 @@ TEST(OpenGLWindowViewTests, RendererCreatesAndOwnsWindowWhileStandaloneWindowsRe
 }
 
 } // namespace
+
+TEST(OpenGLMemoryBarrierTests, MapsDestinationConsumersWithoutBroadeningToAllBits)
+{
+    using namespace Lighthouse;
+    MemoryBarrierDesc desc{.srcStageMask = PipelineStage::ComputeShader,
+        .srcAccessMask = PipelineAccess::ShaderStorageWrite,
+        .dstStageMask = PipelineStage::AllCommands};
+    const std::pair<PipelineAccess, std::uint32_t> cases[] = {
+        {PipelineAccess::IndirectCommandRead, GL_COMMAND_BARRIER_BIT},
+        {PipelineAccess::IndexRead, GL_ELEMENT_ARRAY_BARRIER_BIT},
+        {PipelineAccess::VertexAttributeRead, GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT},
+        {PipelineAccess::UniformRead, GL_UNIFORM_BARRIER_BIT},
+        {PipelineAccess::ShaderSampledRead, GL_TEXTURE_FETCH_BARRIER_BIT},
+        {PipelineAccess::ShaderStorageRead, GL_SHADER_STORAGE_BARRIER_BIT |
+            GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_ATOMIC_COUNTER_BARRIER_BIT},
+        {PipelineAccess::ColorAttachmentWrite, GL_FRAMEBUFFER_BARRIER_BIT},
+        {PipelineAccess::DepthStencilAttachmentRead, GL_FRAMEBUFFER_BARRIER_BIT},
+        {PipelineAccess::TransferRead, GL_BUFFER_UPDATE_BARRIER_BIT | GL_TEXTURE_UPDATE_BARRIER_BIT |
+            GL_PIXEL_BUFFER_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT},
+        {PipelineAccess::HostRead, GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT}
+    };
+    for (auto [access, expected] : cases) {
+        desc.dstAccessMask = access;
+        EXPECT_EQ(Detail::OpenGLMemoryBarrierBits(desc), expected) << static_cast<std::uint64_t>(access);
+    }
+    desc.dstAccessMask = {PipelineAccess::IndexRead, PipelineAccess::VertexAttributeRead,
+        PipelineAccess::IndirectCommandRead};
+    EXPECT_EQ(Detail::OpenGLMemoryBarrierBits(desc), GL_ELEMENT_ARRAY_BARRIER_BIT |
+        GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
+    // OpenGL cannot narrow the source stage/access scope. A broad source must
+    // not turn a precise destination into GL_ALL_BARRIER_BITS.
+    desc.srcStageMask = PipelineStage::AllCommands;
+    desc.srcAccessMask = PipelineAccess::MemoryWrite;
+    desc.dstAccessMask = PipelineAccess::ShaderSampledRead;
+    EXPECT_EQ(Detail::OpenGLMemoryBarrierBits(desc), GL_TEXTURE_FETCH_BARRIER_BIT);
+}
+TEST(OpenGLMemoryBarrierTests, HandlesEmptyExecutionAndHostScopes)
+{
+    using namespace Lighthouse;
+    MemoryBarrierDesc desc{};
+    EXPECT_EQ(Detail::OpenGLMemoryBarrierBits(desc), 0u);
+    desc.srcStageMask = PipelineStage::ComputeShader;
+    desc.dstStageMask = PipelineStage::FragmentShader;
+    // Execution-only dependencies require conservative ordering in OpenGL.
+    EXPECT_EQ(Detail::OpenGLMemoryBarrierBits(desc), GL_ALL_BARRIER_BITS);
+    desc.dstAccessMask = PipelineAccess::MemoryRead;
+    EXPECT_EQ(Detail::OpenGLMemoryBarrierBits(desc), GL_ALL_BARRIER_BITS);
+    desc.dstAccessMask = PipelineAccess::UniformRead;
+    desc.srcStageMask = PipelineStage::Host;
+    desc.srcAccessMask = PipelineAccess::HostWrite;
+    EXPECT_EQ(Detail::OpenGLMemoryBarrierBits(desc), GL_UNIFORM_BARRIER_BIT |
+        GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
+    desc.dstStageMask = PipelineStage::None;
+    EXPECT_EQ(Detail::OpenGLMemoryBarrierBits(desc), 0u);
+}
+TEST(OpenGLMemoryBarrierTests, RecordsAnOwnedDescriptorAndRequiresRecording)
+{
+    using namespace Lighthouse;
+    OpenGLCommandList commands(1);
+    MemoryBarrierDesc desc{.srcStageMask = PipelineStage::ComputeShader,
+        .srcAccessMask = PipelineAccess::ShaderStorageWrite,
+        .dstStageMask = PipelineStage::FragmentShader,
+        .dstAccessMask = PipelineAccess::ShaderStorageRead};
+    EXPECT_THROW(commands.MemoryBarrier(desc), std::logic_error);
+    commands.Begin();
+    commands.MemoryBarrier(desc);
+    desc.dstAccessMask = PipelineAccess::MemoryRead;
+    commands.End();
+    ASSERT_EQ(commands.Commands().size(), 1u);
+    const auto& recorded = std::get<OpenGLCommandList::BarrierCommand>(commands.Commands()[0]).desc;
+    EXPECT_EQ(*recorded.srcStageMask, static_cast<std::uint64_t>(PipelineStage::ComputeShader));
+    EXPECT_EQ(*recorded.srcAccessMask, static_cast<std::uint64_t>(PipelineAccess::ShaderStorageWrite));
+    EXPECT_EQ(*recorded.dstStageMask, static_cast<std::uint64_t>(PipelineStage::FragmentShader));
+    EXPECT_EQ(*recorded.dstAccessMask, static_cast<std::uint64_t>(PipelineAccess::ShaderStorageRead));
+}

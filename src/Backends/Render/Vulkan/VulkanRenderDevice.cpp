@@ -1692,17 +1692,8 @@ void VulkanRenderDevice::UpdateDescriptorSet(
       auto& image = d.images.at(view.desc.image);
       Require(image.desc.usage.Contains(ImageUsage::Sampled),
               "Descriptor image requires Sampled usage");
-      if (image.layout != vk::ImageLayout::eShaderReadOnlyOptimal)
-      {
-        auto old = image.layout;
-        d.Run(
-            [&](auto cmd)
-            {
-              d.Barrier(cmd, view.desc.image, old,
-                        vk::ImageLayout::eShaderReadOnlyOptimal);
-            });
-        image.layout = vk::ImageLayout::eShaderReadOnlyOptimal;
-      }
+      // PrepareSet records the transition in the command list that samples
+      // this image, preserving earlier writes in the same graph recording.
       imageInfo =
           vk::DescriptorImageInfo(d.samplers.at(info.sampler), view.native,
                                   vk::ImageLayout::eShaderReadOnlyOptimal);
@@ -2180,12 +2171,21 @@ void VulkanCommandList::Begin()
   Require(!c.complete, "Clear command list before re-recording");
   c.command.begin(vk::CommandBufferBeginInfo{}, c.d.dispatch);
   c.recording = true;
+  MemoryBarrier({.srcStageMask = PipelineStage::AllCommands,
+                 .srcAccessMask = PipelineAccess::MemoryWrite,
+                 .dstStageMask = PipelineStage::AllCommands,
+                 .dstAccessMask = {PipelineAccess::MemoryRead, PipelineAccess::MemoryWrite}});
+}
+void VulkanCommandList::MemoryBarrier(const MemoryBarrierDesc& desc)
+{
+  auto& c = *m_impl;
+  c.RequireRecording();
+  Require(!c.logicalRendering, "Memory barrier requires ending rendering");
   vk::MemoryBarrier2 barrier;
-  barrier.setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands)
-      .setSrcAccessMask(vk::AccessFlagBits2::eMemoryWrite)
-      .setDstStageMask(vk::PipelineStageFlagBits2::eAllCommands)
-      .setDstAccessMask(vk::AccessFlagBits2::eMemoryRead |
-                        vk::AccessFlagBits2::eMemoryWrite);
+  barrier.setSrcStageMask(vk::PipelineStageFlags2(static_cast<VkPipelineStageFlags2>(*desc.srcStageMask)))
+      .setSrcAccessMask(vk::AccessFlags2(static_cast<VkAccessFlags2>(*desc.srcAccessMask)))
+      .setDstStageMask(vk::PipelineStageFlags2(static_cast<VkPipelineStageFlags2>(*desc.dstStageMask)))
+      .setDstAccessMask(vk::AccessFlags2(static_cast<VkAccessFlags2>(*desc.dstAccessMask)));
   vk::DependencyInfo dependency;
   dependency.setMemoryBarriers(barrier);
   c.command.pipelineBarrier2(dependency, c.d.dispatch);
@@ -2450,17 +2450,11 @@ void VulkanCommandList::CopyBuffer(BufferHandle src, BufferHandle dst,
   c.command.copyBuffer(a.native, b.native,
                        vk::BufferCopy(srcOffset, dstOffset, bytes),
                        c.d.dispatch);
-  vk::MemoryBarrier2 barrier;
-  barrier.setSrcStageMask(vk::PipelineStageFlagBits2::eTransfer)
-      .setSrcAccessMask(vk::AccessFlagBits2::eTransferWrite)
-      .setDstStageMask(vk::PipelineStageFlagBits2::eAllCommands |
-                       vk::PipelineStageFlagBits2::eHost)
-      .setDstAccessMask(vk::AccessFlagBits2::eMemoryRead |
-                        vk::AccessFlagBits2::eMemoryWrite |
-                        vk::AccessFlagBits2::eHostRead);
-  vk::DependencyInfo dep;
-  dep.setMemoryBarriers(barrier);
-  c.command.pipelineBarrier2(dep, c.d.dispatch);
+  MemoryBarrier({.srcStageMask = PipelineStage::Transfer,
+                 .srcAccessMask = PipelineAccess::TransferWrite,
+                 .dstStageMask = {PipelineStage::AllCommands, PipelineStage::Host},
+                 .dstAccessMask = {PipelineAccess::MemoryRead, PipelineAccess::MemoryWrite,
+                                   PipelineAccess::HostRead}});
 }
 void VulkanCommandList::BlitImage(ImageHandle src, ImageHandle dst,
                                   const BlitRegion& region, ImageFilter filter)

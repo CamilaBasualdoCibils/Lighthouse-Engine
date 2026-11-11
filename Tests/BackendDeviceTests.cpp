@@ -599,6 +599,61 @@ layout(location=0) out vec4 color;void main(){color=data.value;}
   EXPECT_NEAR(std::to_integer<int>(pixels[(32 * 64 + 32) * 4]), 51, 2);
   EXPECT_NEAR(std::to_integer<int>(pixels[(32 * 64 + 32) * 4 + 1]), 204, 2);
 }
+TEST_P(HeadlessDeviceTests, ScopedBarrierMakesComputeWritesVisibleToGraphics)
+{
+  const auto compute = Shader(R"(#version 450
+layout(local_size_x=1) in;layout(set=0,binding=0,std430) buffer Result {vec4 value;} data;
+void main(){data.value=vec4(0.2,0.8,0.3,1);}
+)",
+                              ShaderStage::Compute);
+  const auto vertex = Shader(Fullscreen, ShaderStage::Vertex);
+  const auto fragment = Shader(R"(#version 450
+layout(set=0,binding=0,std430) readonly buffer Result {vec4 value;} data;
+layout(location=0) out vec4 color;void main(){color=data.value;}
+)",
+                               ShaderStage::Fragment);
+  const auto setLayout = device->CreateDescriptorSetLayout(
+      {.bindings = {{.binding = 0,
+                     .type = DescriptorType::StorageBuffer,
+                     .stages = ShaderStageFlags::Compute |
+                               ShaderStageFlags::Fragment}}});
+  const auto layout = device->CreatePipelineLayout({.sets = {setLayout}});
+  const auto computePipeline =
+      device->CreatePipeline({.layout = layout, .computeShader = compute});
+  const auto graphics =
+      device->CreatePipeline({.vertexShader = vertex,
+                              .fragmentShader = fragment,
+                              .colorFormats = {ImageFormat::RGBA8},
+                              .layout = layout});
+  const auto buffer =
+      device->CreateBuffer({.size = 16, .usage = BufferUsage::Storage});
+  const auto set = device->CreateDescriptorSet({setLayout});
+  const std::array writes{
+      DescriptorWrite{.resource = DescriptorBufferInfo{buffer}}};
+  device->UpdateDescriptorSet(set, writes);
+  auto commands = device->CreateCommandList(0);
+  commands->Begin();
+  commands->BindPipeline(computePipeline);
+  commands->BindDescriptorSet(0, set);
+  commands->Dispatch(1, 1, 1);
+  commands->MemoryBarrier({.srcStageMask = PipelineStage::ComputeShader,
+      .srcAccessMask = PipelineAccess::ShaderStorageWrite,
+      .dstStageMask = PipelineStage::FragmentShader,
+      .dstAccessMask = PipelineAccess::ShaderStorageRead});
+  auto image = Target();
+  auto view = View(image);
+  commands->BeginRendering(
+      {.colorAttachment = view, .clearColor = true, .width = 64, .height = 64});
+  commands->BindPipeline(graphics);
+  commands->BindDescriptorSet(0, set);
+  commands->Draw(PrimitiveTopology::TriangleList, 3, 0);
+  commands->EndRendering();
+  commands->End();
+  SubmitAndWait(*device, *commands);
+  const auto pixels = device->ReadImage(image);
+  EXPECT_NEAR(std::to_integer<int>(pixels[(32 * 64 + 32) * 4]), 51, 2);
+  EXPECT_NEAR(std::to_integer<int>(pixels[(32 * 64 + 32) * 4 + 1]), 204, 2);
+}
 TEST_P(HeadlessDeviceTests, SampledImageAndScaledBlit)
 {
   const auto vertex = Shader(Fullscreen, ShaderStage::Vertex);

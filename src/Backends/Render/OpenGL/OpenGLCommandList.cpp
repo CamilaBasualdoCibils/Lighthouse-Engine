@@ -516,6 +516,60 @@ void OpenGLCommandList::MultiDrawCommand::Execute(
       GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(count), 20);
   glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
 }
+// OpenGL selects subsequent consumers, not Vulkan source/stage scopes. Keep
+// those scopes conservative and select the closest destination access domains.
+// glMemoryBarrier does not wait for CPU access; fences and mapping APIs do that.
+std::uint32_t Detail::OpenGLMemoryBarrierBits(const MemoryBarrierDesc& desc)
+{
+  if (desc.srcStageMask.Empty() || desc.dstStageMask.Empty())
+    return 0;
+  const auto access = desc.dstAccessMask;
+  // A pure execution dependency has no cache domain. OpenGL cannot express
+  // stage-only ordering, so conservatively order all its memory domains.
+  if (access.Empty() || access.Contains(PipelineAccess::MemoryRead) ||
+      access.Contains(PipelineAccess::MemoryWrite))
+    return GL_ALL_BARRIER_BITS;
+  GLbitfield bits = 0;
+  const auto add = [&](PipelineAccess flag, GLbitfield domains)
+  {
+    if (access.Contains(flag)) bits |= domains;
+  };
+  add(PipelineAccess::IndirectCommandRead, GL_COMMAND_BARRIER_BIT);
+  add(PipelineAccess::IndexRead, GL_ELEMENT_ARRAY_BARRIER_BIT);
+  add(PipelineAccess::VertexAttributeRead, GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+  add(PipelineAccess::UniformRead, GL_UNIFORM_BARRIER_BIT);
+  add(PipelineAccess::InputAttachmentRead, GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
+  add(PipelineAccess::ShaderSampledRead, GL_TEXTURE_FETCH_BARRIER_BIT);
+  const GLbitfield storage = GL_SHADER_STORAGE_BARRIER_BIT |
+      GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_ATOMIC_COUNTER_BARRIER_BIT;
+  add(PipelineAccess::ShaderStorageRead, storage);
+  add(PipelineAccess::ShaderStorageWrite, storage);
+  add(PipelineAccess::ShaderRead, storage | GL_TEXTURE_FETCH_BARRIER_BIT | GL_UNIFORM_BARRIER_BIT);
+  add(PipelineAccess::ShaderWrite, storage);
+  add(PipelineAccess::ColorAttachmentRead, GL_FRAMEBUFFER_BARRIER_BIT);
+  add(PipelineAccess::ColorAttachmentWrite, GL_FRAMEBUFFER_BARRIER_BIT);
+  add(PipelineAccess::DepthStencilAttachmentRead, GL_FRAMEBUFFER_BARRIER_BIT);
+  add(PipelineAccess::DepthStencilAttachmentWrite, GL_FRAMEBUFFER_BARRIER_BIT);
+  const GLbitfield transfer = GL_BUFFER_UPDATE_BARRIER_BIT | GL_TEXTURE_UPDATE_BARRIER_BIT |
+      GL_PIXEL_BUFFER_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT;
+  add(PipelineAccess::TransferRead, transfer);
+  add(PipelineAccess::TransferWrite, transfer);
+  add(PipelineAccess::HostRead, GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+  add(PipelineAccess::HostWrite, GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+  // Noncoherent CPU writes must already have been flushed by the caller.
+  if (desc.srcAccessMask.Contains(PipelineAccess::HostWrite))
+    bits |= GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT;
+  // Unknown access flags cannot be narrowed safely by this backend.
+  constexpr std::uint64_t known = 0x1ffffULL | 0x700000000ULL;
+  if ((*access & ~known) || (*desc.srcAccessMask & ~known))
+    return GL_ALL_BARRIER_BITS;
+  return bits;
+}
+void OpenGLCommandList::BarrierCommand::Execute(OpenGLRenderDevice*) const
+{
+  if (const auto bits = Detail::OpenGLMemoryBarrierBits(desc))
+    glMemoryBarrier(bits);
+}
 void OpenGLCommandList::DebugCommand::Execute(OpenGLRenderDevice* device) const
 {
   if (operation == 0)

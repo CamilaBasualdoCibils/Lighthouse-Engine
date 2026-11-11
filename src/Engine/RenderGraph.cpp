@@ -15,7 +15,7 @@ struct RenderGraph::ExecutionState
     IRenderDevice* device;
     IRenderGraphAllocator* allocator;
     FenceHandle fence;
-    std::vector<std::unique_ptr<IRenderCommandList>> commands;
+    std::unique_ptr<IRenderCommandList> commands;
     std::vector<ImageViewHandle> images;
     std::vector<BufferHandle> buffers;
     std::vector<std::function<void()>> retirements;
@@ -23,7 +23,7 @@ struct RenderGraph::ExecutionState
     {
       for (auto& release : retirements)
         release();
-      commands.clear();
+      commands.reset();
       for (auto image : images)
         allocator->FreeImage(image);
       for (auto buffer : buffers)
@@ -176,11 +176,20 @@ void RenderGraph::Execute(RenderGraphComposer* renderer, IRenderGraphAllocator* 
   FenceHandle fence{};
   try
   {
+    context.commandList = device->CreateCommandList(0);
+    context.commandList->Begin();
     m_graph->execute(&context, &deferred);
+    context.commandList->End();
     fence = device->CreateFence();
-    device->GetQueue(0)->Submit(QueueSubmitInfo{}, fence);
+    const IRenderCommandList* commands = context.commandList.get();
+    device->GetQueue(0)->Submit(
+        QueueSubmitInfo{.commandLists = {&commands, 1},
+                        .waits = context.waits,
+                        .signals = context.signals}, fence);
+    for (auto& afterSubmit : context.afterSubmit)
+      afterSubmit();
     m_execution->pending.push_back(
-        {device, allocator, fence, std::move(context.commandLists),
+        {device, allocator, fence, std::move(context.commandList),
          std::move(deferred.images), std::move(deferred.buffers),
          std::move(context.retirements)});
   }
@@ -222,10 +231,5 @@ void ImportedWindowView::Resolve(const Desc &desc, void *context) {
 
   currentImage = acquired->image;
   currentImageView = acquired->view;
-}
-IRenderCommandList *RenderGraphExecuteContext::MakeCommandList() {
-  auto cmdList = renderer->GetRenderDevice()->CreateCommandList(0);
-  commandLists.push_back(std::move(cmdList));
-  return commandLists.back().get();
 }
 } // namespace Lighthouse

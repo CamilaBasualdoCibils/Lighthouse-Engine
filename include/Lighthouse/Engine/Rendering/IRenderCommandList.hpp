@@ -34,6 +34,10 @@ public:
   }
   virtual void Begin() = 0;
   virtual void End() = 0;
+  virtual void MemoryBarrier(const MemoryBarrierDesc&)
+  {
+    throw std::logic_error("Memory barriers unsupported by this backend");
+  }
   virtual void BeginRendering(const RenderPassDesc& description) = 0;
   virtual void EndRendering() = 0;
   // Write replaces stencil on depth pass; Equal preserves stencil and masks
