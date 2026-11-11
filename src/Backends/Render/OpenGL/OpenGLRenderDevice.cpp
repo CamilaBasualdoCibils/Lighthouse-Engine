@@ -1,3 +1,4 @@
+#include <Lighthouse/Engine/Assets/ImageData.hpp>
 #include "OpenGLCommandList.hpp"
 #include "OpenGLContextExecutor.hpp"
 #include "OpenGLDeviceGroup.hpp"
@@ -741,6 +742,35 @@ ImageHandle OpenGLRenderDevice::CreateImage(const ImageDesc& desc)
   m_impl->ActivateContext();
   const auto target = ToGLImageType(desc.type);
   const auto format = ToGLImageFormat(desc.format);
+  if (!desc.initialData.empty() && !desc.initialMips.empty())
+    throw std::invalid_argument("Specify initialData or initialMips, not both");
+  auto levels=desc.initialMips;
+  if (!desc.initialData.empty()) levels={desc.initialData};
+  if (levels.size()>desc.mipLevels || (!levels.empty() && ((desc.type!=ImageType::Image2D && desc.type!=ImageType::Image3D) || desc.arrayLayers!=1 || desc.sampleCount!=1)))
+    throw std::invalid_argument("Initial image upload requires single-layer 2D/3D mip data");
+  GLenum externalFormat=GL_RGBA, componentType=GL_UNSIGNED_BYTE;
+  if (!levels.empty()) {
+    switch (desc.format) {
+    case ImageFormat::R8: case ImageFormat::R16f: case ImageFormat::R32f: externalFormat=GL_RED; break;
+    case ImageFormat::RG8: case ImageFormat::RG16f: case ImageFormat::RG32f: externalFormat=GL_RG; break;
+    case ImageFormat::RGB8: case ImageFormat::RGB16f: case ImageFormat::RGB32f: externalFormat=GL_RGB; break;
+    case ImageFormat::RGBA8: case ImageFormat::RGBA8Srgb: case ImageFormat::RGBA16f: case ImageFormat::RGBA32f: break;
+    case ImageFormat::BGRA8: case ImageFormat::BGRA8Srgb: externalFormat=GL_BGRA; break;
+    default: throw std::invalid_argument("Unsupported initial image pixel format");
+    }
+    switch (desc.format) {
+    case ImageFormat::R16f: case ImageFormat::RG16f: case ImageFormat::RGB16f: case ImageFormat::RGBA16f: componentType=GL_HALF_FLOAT; break;
+    case ImageFormat::R32f: case ImageFormat::RG32f: case ImageFormat::RGB32f: case ImageFormat::RGBA32f: componentType=GL_FLOAT; break;
+    default: break;
+    }
+    auto width=desc.width, height=desc.height, depth=desc.depth;
+    const auto pixelSize=ImageData::BytesPerPixel(desc.format);
+    for (const auto bytes:levels) {
+      if (bytes.size()!=std::size_t(width)*height*depth*pixelSize)
+        throw std::invalid_argument("Initial mip byte size does not match dimensions");
+      width=std::max(1u,width/2);height=std::max(1u,height/2);depth=std::max(1u,depth/2);
+    }
+  }
   GLuint texture{};
   glCreateTextures(target, 1, &texture);
   if (desc.type == ImageType::Image2D)
@@ -761,10 +791,21 @@ ImageHandle OpenGLRenderDevice::CreateImage(const ImageDesc& desc)
     glTextureStorage2D(texture, static_cast<GLsizei>(desc.mipLevels), format,
                        static_cast<GLsizei>(desc.width),
                        static_cast<GLsizei>(desc.height));
-  if (!desc.initialData.empty() && desc.type == ImageType::Image2D)
-    glTextureSubImage2D(texture, 0, 0, 0, static_cast<GLsizei>(desc.width),
-                        static_cast<GLsizei>(desc.height), GL_RGBA,
-                        GL_UNSIGNED_BYTE, desc.initialData.data());
+  if (!levels.empty()) {
+    GLint alignment{}; glGetIntegerv(GL_UNPACK_ALIGNMENT,&alignment);
+    glPixelStorei(GL_UNPACK_ALIGNMENT,1);
+    auto width=desc.width,height=desc.height,depth=desc.depth;
+    for (std::size_t level=0;level<levels.size();++level) {
+      if (desc.type==ImageType::Image3D)
+        glTextureSubImage3D(texture,static_cast<GLint>(level),0,0,0,width,height,depth,
+                            externalFormat,componentType,levels[level].data());
+      else
+        glTextureSubImage2D(texture,static_cast<GLint>(level),0,0,width,height,
+                            externalFormat,componentType,levels[level].data());
+      width=std::max(1u,width/2);height=std::max(1u,height/2);depth=std::max(1u,depth/2);
+    }
+    glPixelStorei(GL_UNPACK_ALIGNMENT,alignment);
+  }
   const auto handle = MakeHandle<ImageHandle>(m_impl->nextImage++, DeviceId());
   m_impl->resources.images.emplace(
       handle,

@@ -408,6 +408,9 @@ struct ImageDesc
   Flags<ImageUsage> usage{ImageUsage::Sampled};
   std::span<const std::byte> initialData{};
   ImageType type{ImageType::Image2D};
+  // Tightly packed data per mip, starting at level zero. Mutually exclusive
+  // with initialData (the legacy base-level upload). Consumed synchronously.
+  std::vector<std::span<const std::byte>> initialMips;
 };
 
 struct ImageViewDesc

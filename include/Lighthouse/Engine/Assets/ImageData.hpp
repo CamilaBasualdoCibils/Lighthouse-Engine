@@ -1,55 +1,68 @@
 #pragma once
-
 #include <Lighthouse/Engine/Rendering/RenderTypes.hpp>
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 
 namespace Lighthouse
 {
-// Owned, tightly packed 2D pixels. Copying copies bytes; no device or GPU
-// lifetime is involved. Decoders normalize their output to one explicit format.
-class ImageData
+struct ImageMipData
 {
-public:
+  std::uint32_t width{1}, height{1}, depth{1};
+  std::vector<std::byte> data;
+};
+// Owned, tightly packed pixels for every authored/generated mip level.
+struct ImageData
+{
+  ImageFormat format{ImageFormat::Undefined};
+  std::vector<ImageMipData> mips;
+
+  ImageData() = default;
+  ImageData(ImageFormat format, std::vector<ImageMipData> mips)
+      : format(format), mips(std::move(mips)) { Validate(); }
+  // Compatibility convenience for existing single-level image producers.
   ImageData(UVec2 resolution, ImageFormat format, std::vector<std::byte> data)
-      : m_resolution(resolution), m_format(format), m_data(std::move(data))
+      : ImageData(format, {{resolution.x, resolution.y, 1, std::move(data)}}) {}
+
+  void Validate() const
   {
     const auto pixelSize = BytesPerPixel(format);
-    if (!resolution.x || !resolution.y ||
-        size_t(resolution.y) >
-            std::numeric_limits<size_t>::max() / pixelSize / resolution.x ||
-        m_data.size() != size_t(resolution.x) * resolution.y * pixelSize)
-      throw std::invalid_argument(
-          "ImageData resolution does not match its pixel bytes");
+    if (mips.empty()) throw std::invalid_argument("ImageData requires a base mip");
+    for (std::size_t level = 0; level < mips.size(); ++level) {
+      const auto& mip = mips[level];
+      const auto maximum = std::numeric_limits<std::size_t>::max();
+      if (!mip.width || !mip.height || !mip.depth ||
+          std::size_t(mip.width) > maximum / pixelSize / mip.height / mip.depth ||
+          mip.data.size() != std::size_t(mip.width) * mip.height * mip.depth * pixelSize)
+        throw std::invalid_argument("Image mip dimensions do not match its pixel bytes");
+      if (level) {
+        const auto& previous = mips[level - 1];
+        if ((previous.width == 1 && previous.height == 1 && previous.depth == 1) ||
+            mip.width != std::max(1u, previous.width / 2) ||
+            mip.height != std::max(1u, previous.height / 2) ||
+            mip.depth != std::max(1u, previous.depth / 2))
+          throw std::invalid_argument("Invalid image mip dimensions");
+      }
+    }
   }
+  UVec2 GetResolution(std::size_t mip = 0) const
+  { const auto& value = mips.at(mip); return {value.width, value.height}; }
+  std::uint32_t GetDepth(std::size_t mip = 0) const { return mips.at(mip).depth; }
+  std::uint32_t GetMipCount() const noexcept { return static_cast<std::uint32_t>(mips.size()); }
+  ImageFormat GetFormat() const noexcept { return format; }
+  std::span<const std::byte> GetData(std::size_t mip = 0) const { return mips.at(mip).data; }
 
-  UVec2 GetResolution() const noexcept
-  {
-    return m_resolution;
-  }
-  ImageFormat GetFormat() const noexcept
-  {
-    return m_format;
-  }
-  std::span<const std::byte> GetData() const noexcept
-  {
-    return m_data;
-  }
-
-  // A borrowed upload description: keep this ImageData alive until the device
-  // consumes initialData. This method does not allocate or upload GPU
-  // resources.
+  // Pixel spans are borrowed until CreateImage consumes them synchronously.
   ImageDesc ToImageDesc(Flags<ImageUsage> usage = {ImageUsage::Sampled}) const
   {
-    return {.width = m_resolution.x,
-            .height = m_resolution.y,
-            .format = m_format,
-            .usage = usage,
-            .initialData = m_data};
+    Validate();
+    ImageDesc result{.width=mips[0].width, .height=mips[0].height, .depth=mips[0].depth,
+                     .format=format, .mipLevels=GetMipCount(), .usage=usage,
+                     .type=mips[0].depth > 1 ? ImageType::Image3D : ImageType::Image2D};
+    for (const auto& mip : mips) result.initialMips.emplace_back(mip.data);
+    return result;
   }
-
-private:
-  static size_t BytesPerPixel(ImageFormat format)
+  static std::size_t BytesPerPixel(ImageFormat format)
   {
     switch (format)
     {
@@ -64,6 +77,7 @@ private:
     case ImageFormat::RGBA8:
     case ImageFormat::BGRA8:
     case ImageFormat::BGRA8Srgb:
+    case ImageFormat::RGBA8Srgb:
     case ImageFormat::RG16f:
     case ImageFormat::R32f:
     case ImageFormat::Depth32:
@@ -82,8 +96,5 @@ private:
       throw std::invalid_argument("ImageData requires a defined pixel format");
     }
   }
-  UVec2 m_resolution;
-  ImageFormat m_format;
-  std::vector<std::byte> m_data;
 };
 } // namespace Lighthouse

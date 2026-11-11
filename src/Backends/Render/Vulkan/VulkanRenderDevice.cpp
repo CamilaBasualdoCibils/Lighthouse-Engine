@@ -1,3 +1,5 @@
+#include <Lighthouse/Engine/Assets/ImageData.hpp>
+#include <numeric>
 #include <Lighthouse/Backends/Render/Vulkan/VulkanCommandList.hpp>
 #include <Lighthouse/Backends/Render/Vulkan/VulkanRenderDevice.hpp>
 #include <Lighthouse/Engine/Window/WindowManager.hpp>
@@ -1347,6 +1349,7 @@ ImageHandle VulkanRenderDevice::CreateImage(const ImageDesc& desc)
   Impl::Image image;
   image.desc = desc;
   image.desc.initialData = {};
+  image.desc.initialMips.clear();
   AllocationCheck(vmaCreateImage(
       d.allocator,
       reinterpret_cast<const vk::ImageCreateInfo::NativeType*>(&info),
@@ -1362,42 +1365,47 @@ ImageHandle VulkanRenderDevice::CreateImage(const ImageDesc& desc)
     vmaDestroyImage(d.allocator, native, image.allocation);
     throw;
   }
-  if (!desc.initialData.empty())
+  if (!desc.initialData.empty() || !desc.initialMips.empty())
   {
     BufferHandle staging{};
     try
     {
-      Require(
-          desc.type == ImageType::Image2D && desc.sampleCount == 1 &&
-              (desc.format == ImageFormat::RGBA8 ||
-               desc.format == ImageFormat::RGBA8Srgb) &&
-              desc.initialData.size() == static_cast<std::size_t>(desc.width) *
-                                             desc.height * desc.arrayLayers * 4,
-          "Initial image data currently requires tightly packed RGBA8 2D data");
-      staging = CreateBuffer({.size = desc.initialData.size(),
-                              .usage = BufferUsage::TransferSrc,
-                              .initialData = desc.initialData});
-      d.Run(
-          [&](vk::CommandBuffer cmd)
-          {
-            d.Barrier(cmd, handle, vk::ImageLayout::eUndefined,
-                      vk::ImageLayout::eTransferDstOptimal);
-            vk::BufferImageCopy region;
-            region
-                .setImageSubresource(vk::ImageSubresourceLayers(
-                    vk::ImageAspectFlagBits::eColor, 0, 0, desc.arrayLayers))
-                .setImageExtent(vk::Extent3D(desc.width, desc.height, 1));
-            cmd.copyBufferToImage(d.buffers.at(staging).native, image.native,
-                                  vk::ImageLayout::eTransferDstOptimal, region,
-                                  d.dispatch);
-          });
-      d.images.at(handle).layout = vk::ImageLayout::eTransferDstOptimal;
+      Require(desc.initialData.empty() || desc.initialMips.empty(), "Specify initialData or initialMips, not both");
+      auto levels=desc.initialMips;
+      if (!desc.initialData.empty()) levels={desc.initialData};
+      Require((desc.type==ImageType::Image2D || desc.type==ImageType::Image3D) && desc.arrayLayers==1 && desc.sampleCount==1 && levels.size()<=desc.mipLevels,
+              "Initial image upload requires single-layer 2D/3D mip data");
+      Require(desc.format!=ImageFormat::Depth16 && desc.format!=ImageFormat::Depth32 && desc.format!=ImageFormat::Depth24Stencil8,
+              "Initial depth image upload is unsupported");
+      const auto pixelSize=ImageData::BytesPerPixel(desc.format);
+      const auto alignment=std::lcm<std::size_t>(4,pixelSize);
+      std::vector<std::byte> packed;
+      std::vector<vk::BufferImageCopy> regions;
+      auto width=desc.width,height=desc.height,depth=desc.depth;
+      for (std::size_t level=0;level<levels.size();++level) {
+        const auto bytes=levels[level];
+        Require(bytes.size()==std::size_t(width)*height*depth*pixelSize,"Initial mip byte size does not match dimensions");
+        const auto offset=(packed.size()+alignment-1)/alignment*alignment;
+        packed.resize(offset);packed.insert(packed.end(),bytes.begin(),bytes.end());
+        vk::BufferImageCopy region;
+        region.setBufferOffset(offset)
+              .setImageSubresource(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor,level,0,1))
+              .setImageExtent(vk::Extent3D(width,height,depth));
+        regions.push_back(region);
+        width=std::max(1u,width/2);height=std::max(1u,height/2);depth=std::max(1u,depth/2);
+      }
+      staging=CreateBuffer({.size=packed.size(),.usage=BufferUsage::TransferSrc,.initialData=packed});
+      d.Run([&](vk::CommandBuffer cmd) {
+        d.Barrier(cmd,handle,vk::ImageLayout::eUndefined,vk::ImageLayout::eTransferDstOptimal);
+        cmd.copyBufferToImage(d.buffers.at(staging).native,image.native,
+                             vk::ImageLayout::eTransferDstOptimal,regions,d.dispatch);
+      });
+      d.images.at(handle).layout=vk::ImageLayout::eTransferDstOptimal;
       DestroyBuffer(staging);
     }
     catch (...)
     {
-      if (staging)
-        DestroyBuffer(staging);
+      if (staging) DestroyBuffer(staging);
       DestroyImage(handle);
       throw;
     }
