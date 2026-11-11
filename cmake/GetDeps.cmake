@@ -1,5 +1,6 @@
 include(FetchContent)
 
+set(FG_BUILD_TEST OFF CACHE BOOL "Disable FrameGraph tests")
 FetchContent_Declare(
     FrameGraph
     GIT_REPOSITORY https://github.com/skaarj1989/FrameGraph.git

@@ -18,6 +18,7 @@ public:
   void InsertDebugMarker(std::string_view, std::array<float, 4>) override;
   void Begin() override;
   void End() override;
+  void MemoryBarrier(const MemoryBarrierDesc&) override;
   void Clear() override;
   void BeginRendering(const RenderPassDesc&) override;
   void EndRendering() override;

@@ -8,25 +8,6 @@ enum class SemaphoreType
   Binary,
   Timeline
 };
-// Vulkan synchronization2 stage mask bits; AllCommands works on every queue.
-enum class PipelineStage : std::uint64_t
-{
-  None = 0,
-  TopOfPipe = 0x1,
-  DrawIndirect = 0x2,
-  VertexInput = 0x4,
-  VertexShader = 0x8,
-  FragmentShader = 0x80,
-  EarlyFragmentTests = 0x100,
-  LateFragmentTests = 0x200,
-  ColorAttachmentOutput = 0x400,
-  ComputeShader = 0x800,
-  Transfer = 0x1000,
-  BottomOfPipe = 0x2000,
-  Host = 0x4000,
-  AllGraphics = 0x8000,
-  AllCommands = 0x10000
-};
 struct SemaphoreSubmitInfo
 {
   SemaphoreHandle semaphore;

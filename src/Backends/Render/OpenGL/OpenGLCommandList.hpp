@@ -9,6 +9,10 @@
 namespace Lighthouse {
 
 class OpenGLRenderDevice;
+namespace Detail
+{
+std::uint32_t OpenGLMemoryBarrierBits(const MemoryBarrierDesc&);
+}
 
 class OpenGLCommandList final : public IRenderCommandList {
 public:
@@ -103,6 +107,16 @@ public:
         std::uint32_t count;
         void Execute(OpenGLRenderDevice* device) const;
     };
+  struct BarrierCommand
+  {
+    MemoryBarrierDesc desc;
+    void Execute(OpenGLRenderDevice*) const;
+  };
+  void MemoryBarrier(const MemoryBarrierDesc& desc) override
+  {
+    if (!Begun) throw std::logic_error("Begin command recording first");
+    m_commands.emplace_back(BarrierCommand{desc});
+  }
   struct DebugCommand
   {
     std::string name;
@@ -122,7 +136,7 @@ public:
     m_commands.emplace_back(DebugCommand{std::string(name), 2});
   }
     using Command =
-        std::variant<DebugCommand, StencilCommand, BeginRenderCommand, EndRenderCommand,
+        std::variant<BarrierCommand, DebugCommand, StencilCommand, BeginRenderCommand, EndRenderCommand,
                      BindPipelineCommand, BindDescriptorSetCommand,
                      BindVertexBufferCommand, BindIndexBufferCommand,
                      BindTextureCommand, DrawCommand, DrawIndexedCommand,

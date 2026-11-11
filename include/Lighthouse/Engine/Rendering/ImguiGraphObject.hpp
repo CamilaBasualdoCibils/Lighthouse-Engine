@@ -10,21 +10,12 @@ struct ImguiBuildContext
   // Optional default docking destination supplied by a containing graph object.
   std::uint32_t dockspace{};
 
-  // A normal render-graph pass with standard command-list recording around
-  // its execute callback. Use graph.AddPass directly when owning recording.
+  // RenderGraph owns command-list recording around the execute callback.
   template <class Data = FrameGraph::NoData, class Setup, class Execute>
   const Data& AddPass(std::string_view name, Setup&& setup, Execute&& execute)
   {
-    return graph.AddPass<Data>(
-        name, std::forward<Setup>(setup),
-        [execute = std::forward<Execute>(execute)](
-            const Data& data, FrameGraphPassResources& resources,
-            RenderGraphExecutePassContext& context) mutable
-        {
-          context.commandList->Begin();
-          execute(data, resources, context);
-          context.commandList->End();
-        });
+    return graph.AddPass<Data>(name, std::forward<Setup>(setup),
+                               std::forward<Execute>(execute));
   }
 };
 class ImguiGraphObject

@@ -30,11 +30,14 @@ using RenderGraphResource = FrameGraphResource;
 constexpr RenderGraphResource kInvalidGraphResource = -1;
 
 struct RenderGraphExecutePassContext {
+  // Execute callbacks own synchronization, including dependencies on earlier
+  // passes. RenderGraph records/submits commands but inserts no pass barriers.
   IRenderCommandList *commandList;
   std::vector<std::function<void()>>* retirements{};
+  // Invoked after the complete graph has been submitted.
   std::function<void()> afterSubmit;
+  // External synchronization for the complete graph submission.
   std::vector<SemaphoreSubmitInfo> waits, signals;
-  FenceHandle fence;
   void Defer(std::function<void()> release)
   {
     retirements->push_back(std::move(release));
@@ -46,10 +49,10 @@ public:
       : renderer(renderer), device(device) {}
   RenderGraphComposer *renderer;
   IRenderDevice *device;
-  std::vector<std::unique_ptr<IRenderCommandList>> commandLists;
+  std::unique_ptr<IRenderCommandList> commandList;
   std::vector<std::function<void()>> retirements;
-
-  IRenderCommandList *MakeCommandList();
+  std::vector<std::function<void()>> afterSubmit;
+  std::vector<SemaphoreSubmitInfo> waits, signals;
 };
 
 struct RenderGraphImage {
@@ -263,7 +266,7 @@ public:
           Builder lighthouseBuilder(*this, builder, pass);
           setup(lighthouseBuilder, data);
         },
-        [execute = std::forward<Execute>(execute)](
+        [execute = std::forward<Execute>(execute), name = std::string(name)](
             const Data& data, FrameGraphPassResources& resources,
             void* context) mutable
         {
@@ -271,20 +274,27 @@ public:
               static_cast<RenderGraphExecuteContext *>(context);
           assert(executeContext);
           RenderGraphExecutePassContext executePassContext{
-              .commandList = executeContext->MakeCommandList(),
+              .commandList = executeContext->commandList.get(),
               .retirements = &executeContext->retirements,
               .afterSubmit = {}};
-
-          execute(data, resources, executePassContext);
-
-          const IRenderCommandList* commands = executePassContext.commandList;
-          executeContext->device->GetQueue(0)->Submit(
-              QueueSubmitInfo{.commandLists = {&commands, 1},
-                              .waits = executePassContext.waits,
-                              .signals = executePassContext.signals},
-              executePassContext.fence);
+          executePassContext.commandList->PushDebugGroup(name);
+          try
+          {
+            execute(data, resources, executePassContext);
+          }
+          catch (...)
+          {
+            executePassContext.commandList->PopDebugGroup();
+            throw;
+          }
+          executePassContext.commandList->PopDebugGroup();
+          executeContext->waits.insert(executeContext->waits.end(),
+              executePassContext.waits.begin(), executePassContext.waits.end());
+          executeContext->signals.insert(executeContext->signals.end(),
+              executePassContext.signals.begin(), executePassContext.signals.end());
           if (executePassContext.afterSubmit)
-            executePassContext.afterSubmit();
+            executeContext->afterSubmit.push_back(
+                std::move(executePassContext.afterSubmit));
         });
   }
 

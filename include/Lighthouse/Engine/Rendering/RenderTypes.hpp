@@ -18,6 +18,74 @@
 namespace Lighthouse
 {
 
+// Vulkan synchronization2 stage mask bits; AllCommands works on every queue.
+enum class PipelineStage : std::uint64_t
+{
+  None = 0,
+  TopOfPipe = 0x1,
+  DrawIndirect = 0x2,
+  VertexInput = 0x4,
+  VertexShader = 0x8,
+  TessellationControlShader = 0x10,
+  TessellationEvaluationShader = 0x20,
+  GeometryShader = 0x40,
+  FragmentShader = 0x80,
+  EarlyFragmentTests = 0x100,
+  LateFragmentTests = 0x200,
+  ColorAttachmentOutput = 0x400,
+  ComputeShader = 0x800,
+  Transfer = 0x1000,
+  BottomOfPipe = 0x2000,
+  Host = 0x4000,
+  AllGraphics = 0x8000,
+  AllCommands = 0x10000,
+  Copy = 0x100000000ULL,
+  Resolve = 0x200000000ULL,
+  Blit = 0x400000000ULL,
+  Clear = 0x800000000ULL,
+  IndexInput = 0x1000000000ULL,
+  VertexAttributeInput = 0x2000000000ULL,
+  PreRasterizationShaders = 0x4000000000ULL
+};
+
+// Vulkan synchronization2 access mask bits. Separate from MemoryAccess,
+// which describes CPU/GPU permissions when allocating resources.
+enum class PipelineAccess : std::uint64_t
+{
+  None = 0,
+  IndirectCommandRead = 0x1,
+  IndexRead = 0x2,
+  VertexAttributeRead = 0x4,
+  UniformRead = 0x8,
+  InputAttachmentRead = 0x10,
+  ShaderRead = 0x20,
+  ShaderWrite = 0x40,
+  ColorAttachmentRead = 0x80,
+  ColorAttachmentWrite = 0x100,
+  DepthStencilAttachmentRead = 0x200,
+  DepthStencilAttachmentWrite = 0x400,
+  TransferRead = 0x800,
+  TransferWrite = 0x1000,
+  HostRead = 0x2000,
+  HostWrite = 0x4000,
+  MemoryRead = 0x8000,
+  MemoryWrite = 0x10000,
+  ShaderSampledRead = 0x100000000ULL,
+  ShaderStorageRead = 0x200000000ULL,
+  ShaderStorageWrite = 0x400000000ULL
+};
+// Global memory dependency, matching VkMemoryBarrier2. Empty masks specify
+// no stage/access scope; callers must supply the dependency they require.
+// Host visibility still requires submission completion and the appropriate
+// mapped-memory flush/invalidate operations. This does not transition images.
+struct MemoryBarrierDesc
+{
+  Flags<PipelineStage> srcStageMask{};
+  Flags<PipelineAccess> srcAccessMask{};
+  Flags<PipelineStage> dstStageMask{};
+  Flags<PipelineAccess> dstAccessMask{};
+};
+
 enum class QueueType : std::uint32_t
 {
   Graphics,
