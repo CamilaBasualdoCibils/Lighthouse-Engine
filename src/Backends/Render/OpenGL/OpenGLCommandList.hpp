@@ -37,6 +37,7 @@ public:
 
   void Clear() override {
     m_commands.clear();
+    m_rendering = false;
   }
 
     struct BeginRenderCommand {
@@ -95,6 +96,10 @@ public:
         std::uint32_t x, y, z;
         void Execute(OpenGLRenderDevice* device) const;
     };
+    struct GenMipMapsCommand {
+        GenMipMapsDesc desc;
+        void Execute(OpenGLRenderDevice*) const;
+    };
     struct BlitImageCommand {
         ImageHandle src;
         ImageHandle dst;
@@ -141,12 +146,12 @@ public:
                      BindVertexBufferCommand, BindIndexBufferCommand,
                      BindTextureCommand, DrawCommand, DrawIndexedCommand,
                      MultiDrawCommand, DispatchCommand, CopyBufferCommand,
-                     BlitImageCommand>;
+                     BlitImageCommand, GenMipMapsCommand>;
 
     const std::vector<Command>& Commands() const noexcept { return m_commands; }
-    void BeginRendering(const RenderPassDesc& desc) override { m_commands.emplace_back(BeginRenderCommand{desc}); }
+    void BeginRendering(const RenderPassDesc& desc) override { m_rendering = true; m_commands.emplace_back(BeginRenderCommand{desc}); }
     void SetStencil(StencilMode mode, std::uint32_t reference) override { m_commands.emplace_back(StencilCommand{mode, reference}); }
-    void EndRendering() override { m_commands.emplace_back(EndRenderCommand{}); }
+    void EndRendering() override { m_rendering = false; m_commands.emplace_back(EndRenderCommand{}); }
     void BindPipeline(GraphicsPipelineHandle handle) override { m_commands.emplace_back(BindPipelineCommand{handle}); }
     void BindDescriptorSet(std::uint32_t setIndex, DescriptorSetHandle handle) override {
         m_commands.emplace_back(BindDescriptorSetCommand{setIndex, handle});
@@ -173,6 +178,11 @@ public:
           CopyBufferCommand{src, dst, srcOffset, dstOffset, bytes});
     }
     void Dispatch(std::uint32_t x, std::uint32_t y, std::uint32_t z) override { m_commands.emplace_back(DispatchCommand{x, y, z}); }
+  void GenMipMaps(const GenMipMapsDesc& desc) override {
+      if (!Begun) throw std::logic_error("Begin command recording first");
+      if (m_rendering) throw std::logic_error("Mipmap generation must be outside rendering");
+      m_commands.emplace_back(GenMipMapsCommand{desc});
+  }
   void BlitImage(ImageHandle src, ImageHandle dst, const BlitRegion &region,
                  ImageFilter filter) override {
       m_commands.emplace_back(BlitImageCommand{src, dst, region, filter});
@@ -180,6 +190,7 @@ public:
 private:
     std::vector<Command> m_commands;
     bool Begun = false;
+    bool m_rendering = false;
     std::uint64_t m_owner;
 };
 

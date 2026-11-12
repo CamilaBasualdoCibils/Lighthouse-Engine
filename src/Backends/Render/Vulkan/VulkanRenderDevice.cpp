@@ -2466,6 +2466,59 @@ void VulkanCommandList::CopyBuffer(BufferHandle src, BufferHandle dst,
                  .dstAccessMask = {PipelineAccess::MemoryRead, PipelineAccess::MemoryWrite,
                                    PipelineAccess::HostRead}});
 }
+void VulkanCommandList::GenMipMaps(const GenMipMapsDesc& desc)
+{
+  auto& c = *m_impl;
+  c.RequireRecording();
+  Require(!c.logicalRendering, "Mipmap generation must be outside rendering");
+  auto& image = c.d.images.at(desc.image);
+  Require(image.desc.sampleCount == 1 && Aspect(image.desc.format) == vk::ImageAspectFlagBits::eColor,
+          "Mipmap generation requires a single-sampled color image");
+  if (image.desc.mipLevels <= 1) return;
+  const auto features = c.d.physical.getFormatProperties(Format(image.desc.format), c.d.dispatch).optimalTilingFeatures;
+  const auto required = vk::FormatFeatureFlagBits::eBlitSrc | vk::FormatFeatureFlagBits::eBlitDst |
+                        vk::FormatFeatureFlagBits::eSampledImageFilterLinear;
+  Require((features & required) == required, "Image format does not support linear mipmap blits");
+  const auto finalLayout = image.desc.usage.Contains(ImageUsage::Sampled)
+      ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eGeneral;
+  c.Transition(desc.image, vk::ImageLayout::eTransferDstOptimal, true);
+  const auto barrier = [&](unsigned mip, vk::ImageLayout oldLayout, vk::ImageLayout newLayout) {
+    vk::ImageMemoryBarrier2 value;
+    value.setSrcStageMask(vk::PipelineStageFlagBits2::eAllCommands)
+        .setSrcAccessMask(vk::AccessFlagBits2::eMemoryWrite | vk::AccessFlagBits2::eMemoryRead)
+        .setDstStageMask(vk::PipelineStageFlagBits2::eAllCommands)
+        .setDstAccessMask(vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite)
+        .setOldLayout(oldLayout).setNewLayout(newLayout)
+        .setSrcQueueFamilyIndex(vk::QueueFamilyIgnored).setDstQueueFamilyIndex(vk::QueueFamilyIgnored)
+        .setImage(image.native)
+        .setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, mip, 1, 0, image.desc.arrayLayers));
+    vk::DependencyInfo dependency;
+    dependency.setImageMemoryBarriers(value);
+    c.command.pipelineBarrier2(dependency, c.d.dispatch);
+  };
+  unsigned width = image.desc.width, height = image.desc.height, depth = image.desc.depth;
+  for (unsigned mip = 1; mip < image.desc.mipLevels; ++mip) {
+    const unsigned nextWidth = std::max(1u, width / 2), nextHeight = std::max(1u, height / 2),
+                   nextDepth = std::max(1u, depth / 2);
+    barrier(mip - 1, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal);
+    vk::ImageBlit2 region;
+    region.setSrcSubresource(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, mip - 1, 0, image.desc.arrayLayers))
+          .setDstSubresource(vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, mip, 0, image.desc.arrayLayers));
+    region.srcOffsets[1] = vk::Offset3D(width, height, depth);
+    region.dstOffsets[1] = vk::Offset3D(nextWidth, nextHeight, nextDepth);
+    vk::BlitImageInfo2 info;
+    info.setSrcImage(image.native).setSrcImageLayout(vk::ImageLayout::eTransferSrcOptimal)
+        .setDstImage(image.native).setDstImageLayout(vk::ImageLayout::eTransferDstOptimal)
+        .setRegions(region).setFilter(vk::Filter::eLinear);
+    c.command.blitImage2(info, c.d.dispatch);
+    barrier(mip - 1, vk::ImageLayout::eTransferSrcOptimal, finalLayout);
+    width = nextWidth; height = nextHeight; depth = nextDepth;
+  }
+  barrier(image.desc.mipLevels - 1, vk::ImageLayout::eTransferDstOptimal, finalLayout);
+  // All subresources are uniform again; preserve the command list's whole-image tracker.
+  c.states.at(desc.image).current = finalLayout;
+}
+
 void VulkanCommandList::BlitImage(ImageHandle src, ImageHandle dst,
                                   const BlitRegion& region, ImageFilter filter)
 {

@@ -439,6 +439,13 @@ struct ImageSubresourceLayers
   uint32_t layerCount{1};
 };
 
+// Generates every allocated mip after level zero, for all layers.
+// Requires a single-sampled, linearly filterable color image outside rendering.
+struct GenMipMapsDesc
+{
+  ImageHandle image;
+};
+
 struct BlitRegion
 {
   ImageSubresourceLayers srcSubresource;

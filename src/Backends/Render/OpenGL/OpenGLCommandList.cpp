@@ -609,6 +609,22 @@ void OpenGLCommandList::DispatchCommand::Execute(OpenGLRenderDevice*) const
   glDispatchCompute(x, y, z);
   glMemoryBarrier(GL_ALL_BARRIER_BITS);
 }
+void OpenGLCommandList::GenMipMapsCommand::Execute(OpenGLRenderDevice* device) const
+{
+  auto& state = *device->m_impl;
+  state.ActivateImage(desc.image);
+  const auto& image = state.R().images.at(desc.image);
+  if (image.format == ImageFormat::Depth16 || image.format == ImageFormat::Depth32 ||
+      image.format == ImageFormat::Depth24Stencil8)
+    throw std::invalid_argument("Mipmap generation requires a single-sampled color image");
+  GLint samples = 0;
+  glGetTextureLevelParameteriv(image.id, 0, GL_TEXTURE_SAMPLES, &samples);
+  if (samples > 1) throw std::invalid_argument("Mipmap generation requires single sampling");
+  glMemoryBarrier(GL_ALL_BARRIER_BITS);
+  glGenerateTextureMipmap(image.id);
+  glMemoryBarrier(GL_TEXTURE_UPDATE_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+}
+
 void OpenGLCommandList::BlitImageCommand::Execute(
     OpenGLRenderDevice* device) const
 {

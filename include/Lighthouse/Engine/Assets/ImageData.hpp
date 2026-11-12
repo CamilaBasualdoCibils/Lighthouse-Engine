@@ -11,11 +11,13 @@ struct ImageMipData
   std::uint32_t width{1}, height{1}, depth{1};
   std::vector<std::byte> data;
 };
-// Owned, tightly packed pixels for every authored/generated mip level.
+// Owned, tightly packed pixels for authored mip levels.
 struct ImageData
 {
   ImageFormat format{ImageFormat::Undefined};
   std::vector<ImageMipData> mips;
+  // Upload the base and generate the remaining levels on the GPU.
+  bool generateMipmaps{false};
 
   ImageData() = default;
   ImageData(ImageFormat format, std::vector<ImageMipData> mips)
@@ -49,6 +51,15 @@ struct ImageData
   { const auto& value = mips.at(mip); return {value.width, value.height}; }
   std::uint32_t GetDepth(std::size_t mip = 0) const { return mips.at(mip).depth; }
   std::uint32_t GetMipCount() const noexcept { return static_cast<std::uint32_t>(mips.size()); }
+  std::uint32_t GetRequiredMipCount() const
+  {
+    if (!generateMipmaps) return GetMipCount();
+    const auto& base = mips.at(0);
+    auto size = std::max({base.width, base.height, base.depth});
+    std::uint32_t count = 1;
+    while (size > 1) { size /= 2; ++count; }
+    return count;
+  }
   ImageFormat GetFormat() const noexcept { return format; }
   std::span<const std::byte> GetData(std::size_t mip = 0) const { return mips.at(mip).data; }
 
@@ -57,9 +68,15 @@ struct ImageData
   {
     Validate();
     ImageDesc result{.width=mips[0].width, .height=mips[0].height, .depth=mips[0].depth,
-                     .format=format, .mipLevels=GetMipCount(), .usage=usage,
+                     .format=format, .mipLevels=GetRequiredMipCount(), .usage=usage,
                      .type=mips[0].depth > 1 ? ImageType::Image3D : ImageType::Image2D};
-    for (const auto& mip : mips) result.initialMips.emplace_back(mip.data);
+    if (generateMipmaps) {
+      result.usage |= ImageUsage::TransferSource;
+      result.usage |= ImageUsage::TransferDestination;
+      result.initialMips.emplace_back(mips.front().data);
+    } else {
+      for (const auto& mip : mips) result.initialMips.emplace_back(mip.data);
+    }
     return result;
   }
   static std::size_t BytesPerPixel(ImageFormat format)

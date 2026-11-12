@@ -36,6 +36,7 @@ public:
   void Dispatch(std::uint32_t, std::uint32_t, std::uint32_t) override;
   void CopyBuffer(BufferHandle, BufferHandle, std::uint64_t, std::uint64_t,
                   std::uint64_t) override;
+  void GenMipMaps(const GenMipMapsDesc&) override;
   void BlitImage(ImageHandle, ImageHandle, const BlitRegion&,
                  ImageFilter) override;
   const vk::CommandBuffer& Native() const noexcept;

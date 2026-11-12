@@ -83,6 +83,11 @@ public:
     throw std::logic_error("Buffer copy unsupported");
   }
 
+  // Caller declares graph dependencies; generated levels finish ready for sampling.
+  virtual void GenMipMaps(const GenMipMapsDesc&)
+  {
+    throw std::logic_error("Mipmap generation unsupported by this backend");
+  }
   virtual void BlitImage(ImageHandle src, ImageHandle dst,
                          const BlitRegion& region, ImageFilter filter) = 0;
   virtual void Clear() = 0;
