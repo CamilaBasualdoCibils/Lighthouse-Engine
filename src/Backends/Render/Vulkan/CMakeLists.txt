@@ -1,6 +1,6 @@
 add_library(VulkanBackend STATIC VulkanBackend.cpp)
 add_library(Lighthouse::VulkanBackend ALIAS VulkanBackend)
-target_sources(VulkanBackend PRIVATE VulkanRenderDevice.cpp)
+target_sources(VulkanBackend PRIVATE VulkanRenderDevice.cpp VulkanResources.cpp VulkanDescriptors.cpp VulkanCommandList.cpp VulkanSwapchain.cpp VulkanImGui.cpp)
 find_package(Vulkan REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 target_link_libraries(VulkanBackend PRIVATE GPUOpen::VulkanMemoryAllocator)

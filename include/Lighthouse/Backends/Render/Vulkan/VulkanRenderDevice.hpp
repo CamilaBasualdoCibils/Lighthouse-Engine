@@ -12,8 +12,7 @@ namespace Lighthouse
 
 class Window;
 
-// Vulkan 1.4-only, single-queue device using dynamic rendering and shader
-// objects.
+// Vulkan 1.4 device using core dynamic rendering and VkPipeline objects.
 class VulkanRenderDevice final : public IRenderDevice
 #ifdef LIGHTHOUSE_IMGUI
     ,
@@ -35,6 +34,7 @@ public:
 
   ImageHandle CreateImage(const ImageDesc&) override;
   std::vector<std::byte> ReadImage(ImageHandle) override;
+  ImageLayout GetImageLayout(ImageHandle) const override;
   ImageViewHandle CreateImageView(const ImageViewDesc&) override;
   BufferHandle CreateBuffer(const BufferDesc&) override;
   IRenderQueue* GetQueue(std::uint32_t index) override;

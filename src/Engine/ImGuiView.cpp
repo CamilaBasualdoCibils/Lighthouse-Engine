@@ -90,8 +90,12 @@ void ImGuiView::PostBuildGraph(ViewBuildContext& context)
   RenderGraphResource hostImage = kInvalidGraphResource;
   if (m_host) {
     const auto original = m_host->GetAcquiredImageAsRGResource();
-    for (const auto& resource : context.graph.GetInspectionData(true).resources)
-      if (resource.resource == original) hostImage = resource.handle;
+    const auto inspection=context.graph.GetInspectionData(true);
+    auto root=original;
+    for(const auto& resource:inspection.resources)
+      if(resource.handle==original) root=resource.resource;
+    for(const auto& resource:inspection.resources)
+      if(resource.resource==root) hostImage=resource.handle;
   }
   imgui.AddPass(
       "ImGui Render",

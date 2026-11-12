@@ -179,6 +179,7 @@ void RenderGraph::Execute(RenderGraphComposer* renderer, IRenderGraphAllocator* 
     context.commandList = device->CreateCommandList(0);
     context.commandList->Begin();
     m_graph->execute(&context, &deferred);
+    for(auto [image,layout]:context.presentImages) TransitionImage(*context.commandList,image,*layout,ImageLayout::Present);
     context.commandList->End();
     fence = device->CreateFence();
     const IRenderCommandList* commands = context.commandList.get();
@@ -231,5 +232,13 @@ void ImportedWindowView::Resolve(const Desc &desc, void *context) {
 
   currentImage = acquired->image;
   currentImageView = acquired->view;
+  if(auto it=ctx->presentImages.find(currentImage);it!=ctx->presentImages.end()) layout=*it->second;
+  else {
+    layout=acquired->layout;
+    if(acquired->available) ctx->waits.push_back({acquired->available,0,PipelineStage::AllCommands});
+    if(acquired->finished) ctx->signals.push_back({acquired->finished,0,PipelineStage::AllCommands});
+    ctx->afterSubmit.push_back([window=handle] {window->MarkGraphSubmitted();});
+  }
+  ctx->presentImages[currentImage]=&layout;
 }
 } // namespace Lighthouse

@@ -6,6 +6,10 @@
 #include <Lighthouse/Engine/Assets/ShaderCompiler.hpp>
 #include <Lighthouse/Engine/Core/EngineRuntime.hpp>
 #include <Lighthouse/Engine/Rendering/RenderGraphComposer.hpp>
+#ifdef LIGHTHOUSE_IMGUI
+#include <Lighthouse/Engine/Rendering/ImGuiView.hpp>
+#include <imgui.h>
+#endif
 #include <algorithm>
 #include <array>
 #include <gtest/gtest.h>
@@ -42,7 +46,7 @@ protected:
     if (GetParam())
     {
       EXPECT_GE(caps.apiVersion, vk::ApiVersion14);
-      EXPECT_TRUE(caps.shaderObjects);
+      EXPECT_FALSE(caps.shaderObjects);
       EXPECT_TRUE(caps.dynamicRendering);
     }
     std::cout << "Device: " << caps.deviceName << "\n";
@@ -63,13 +67,14 @@ void main(){vec2 p[3]=vec2[3](vec2(-1,-1),vec2(3,-1),vec2(-1,3));gl_Position=vec
 )";
   ImageHandle Target(unsigned size = 64)
   {
-    return device->CreateImage(
-        {.width = size,
-         .height = size,
-         .format = ImageFormat::RGBA8,
-         .usage = {ImageUsage::ColorAttachment, ImageUsage::TransferSource,
-                   ImageUsage::TransferDestination}});
+    const auto image=device->CreateImage({.width=size,.height=size,.format=ImageFormat::RGBA8,
+        .usage={ImageUsage::ColorAttachment,ImageUsage::TransferSource,ImageUsage::TransferDestination}});
+    auto commands=device->CreateCommandList(0);commands->Begin();
+    commands->ImageBarrier({.image=image,.oldLayout=ImageLayout::Undefined,.newLayout=ImageLayout::ColorAttachment});
+    commands->End();SubmitAndWait(*device,*commands);
+    return image;
   }
+
   ImageViewHandle View(ImageHandle image)
   {
     return device->CreateImageView(
@@ -344,8 +349,11 @@ void main(){first=vec4(1,0,0,1);second=vec4(0,1,0,1);}
       {.vertexShader = vertex,
        .fragmentShader = fragment,
        .colorFormats = {ImageFormat::RGBA8, ImageFormat::RGBA8},
-       .depthFormat = ImageFormat::Depth24Stencil8,
-       .layout = layout});
+       .depthFormat = ImageFormat::Depth24Stencil8,.stencilFormat=ImageFormat::Depth24Stencil8,
+       .layout = layout,.depthStencil={.depthTest=true,.depthWrite=true,.stencil=StencilMode::Write}});
+  const auto equalPipeline=device->CreatePipeline({.vertexShader=vertex,.fragmentShader=fragment,
+      .colorFormats={ImageFormat::RGBA8,ImageFormat::RGBA8},.depthFormat=ImageFormat::Depth24Stencil8,.stencilFormat=ImageFormat::Depth24Stencil8,.layout=layout,
+      .depthStencil={.depthTest=false,.depthWrite=false,.stencil=StencilMode::Equal}});
   const auto commands = device->CreateCommandList(0);
   commands->Begin();
   commands->BeginRendering({.clearColor = true,
@@ -364,13 +372,15 @@ void main(){first=vec4(1,0,0,1);second=vec4(0,1,0,1);}
   }
   commands->Clear();
   commands->Begin();
+  commands->ImageBarrier({.image=depth,.oldLayout=ImageLayout::Undefined,.newLayout=ImageLayout::DepthStencilAttachment,
+      .subresource={{ImageAspect::Depth,ImageAspect::Stencil},0,1,0,1}});
   commands->BeginRendering({.depthAttachment = depthView,
                             .clearDepth = true,
                             .width = 64,
                             .height = 64,
-                            .colorAttachments = {av, bv}});
-  commands->SetStencil(StencilMode::Write, 3);
+                            .colorAttachments = {av, bv},.stencilAttachment=depthView});
   commands->BindPipeline(pipeline);
+  commands->SetStencilReference(3);
   commands->Draw(PrimitiveTopology::TriangleList, 3, 0);
   commands->EndRendering();
   commands->End();
@@ -391,10 +401,9 @@ void main(){first=vec4(1,0,0,1);second=vec4(0,1,0,1);}
                               .clearColor = true,
                               .width = 64,
                               .height = 64,
-                              .colorAttachments = {av, bv},
-                              .depthReadOnly = true});
-    commands->SetStencil(StencilMode::Equal, reference);
-    commands->BindPipeline(pipeline);
+                              .colorAttachments = {av, bv},.stencilAttachment=depthView});
+    commands->BindPipeline(equalPipeline);
+    commands->SetStencilReference(reference);
     commands->Draw(PrimitiveTopology::TriangleList, 3, 0);
     commands->EndRendering();
     commands->End();
@@ -407,6 +416,7 @@ void main(){first=vec4(1,0,0,1);second=vec4(0,1,0,1);}
   }
   device->WaitIdle();
   device->DestroyPipeline(pipeline);
+  device->DestroyPipeline(equalPipeline);
   device->DestroyModule(fragment);
   device->DestroyModule(vertex);
   device->DestroyImageView(bv);
@@ -464,7 +474,7 @@ layout(location=0) out vec4 color;void main(){color=tint.value;}
                            .vertexLayout = first->layout,
                            .colorFormats = {ImageFormat::RGBA8},
                            .depthFormat = ImageFormat::Depth32,
-                           .layout = layout});
+                           .layout = layout,.depthStencil={.depthTest=true,.depthWrite=true}});
   const std::array red{1.f, 0.f, 0.f, 1.f}, green{0.f, 1.f, 0.f, 1.f};
   auto redBuffer =
       gpu->CreateBuffer({.size = 16,
@@ -581,6 +591,8 @@ layout(location=0) out vec4 color;void main(){color=data.value;}
   commands->BindPipeline(computePipeline);
   commands->BindDescriptorSet(0, set);
   commands->Dispatch(1, 1, 1);
+  commands->MemoryBarrier({.srcStageMask=PipelineStage::ComputeShader,.srcAccessMask=PipelineAccess::ShaderStorageWrite,
+      .dstStageMask=PipelineStage::FragmentShader,.dstAccessMask=PipelineAccess::ShaderStorageRead});
   commands->End();
   SubmitAndWait(*device, *commands);
   auto image = Target();
@@ -701,6 +713,8 @@ void main(){color=texture(sourceImage,vec2(0.5));}
                           .srcOffsets = {{{0, 0, 0}, {64, 64, 1}}},
                           .dstSubresource = {ImageAspect::Color, 0, 0, 1},
                           .dstOffsets = {{{0, 0, 0}, {128, 128, 1}}}};
+  commands->ImageBarrier({.image=image,.oldLayout=ImageLayout::ColorAttachment,.newLayout=ImageLayout::TransferSource});
+  commands->ImageBarrier({.image=output,.oldLayout=ImageLayout::ColorAttachment,.newLayout=ImageLayout::TransferDestination});
   commands->BlitImage(image, output, region, ImageFilter::Linear);
   commands->End();
   SubmitAndWait(*device, *commands);
@@ -724,6 +738,7 @@ TEST_P(HeadlessDeviceTests, HDRPresentationStorageBlitsPreserveColorChannels)
         device->CreateImageView({.image = source, .format = format});
     auto commands = device->CreateCommandList(0);
     commands->Begin();
+    commands->ImageBarrier({.image=source,.oldLayout=ImageLayout::Undefined,.newLayout=ImageLayout::ColorAttachment});
     commands->BeginRendering({.colorAttachment = sourceView,
                               .clearColor = true,
                               .clearColorValue = {0.25f, 0.5f, 0.75f},
@@ -734,6 +749,8 @@ TEST_P(HeadlessDeviceTests, HDRPresentationStorageBlitsPreserveColorChannels)
                             .srcOffsets = {{{0, 0, 0}, {64, 64, 1}}},
                             .dstSubresource = {ImageAspect::Color, 0, 0, 1},
                             .dstOffsets = {{{0, 0, 0}, {64, 64, 1}}}};
+    commands->ImageBarrier({.image=source,.oldLayout=ImageLayout::ColorAttachment,.newLayout=ImageLayout::TransferSource});
+    commands->ImageBarrier({.image=destination,.oldLayout=ImageLayout::Undefined,.newLayout=ImageLayout::TransferDestination});
     commands->BlitImage(source, destination, region, ImageFilter::Nearest);
     commands->End();
     SubmitAndWait(*device, *commands);
@@ -891,15 +908,16 @@ TEST_P(WindowDeviceTests, OrderedSwapchainFormatPreferences)
     const auto size = view->GetWindow()->GetFramebufferSize();
     auto commands = gpu->CreateCommandList(0);
     commands->Begin();
+    commands->ImageBarrier({.image=image.image,.oldLayout=image.layout,.newLayout=ImageLayout::ColorAttachment});
     commands->BeginRendering({.colorAttachment = image.view,
                               .clearColor = true,
                               .clearColorValue = {0.25f, 0.5f, 0.75f},
                               .width = size.width,
                               .height = size.height});
     commands->EndRendering();
+    commands->ImageBarrier({.image=image.image,.oldLayout=ImageLayout::ColorAttachment,.newLayout=ImageLayout::Present});
     commands->End();
-    SubmitAndWait(*gpu, *commands);
-    gpu->GetQueue(0)->Present(view->swapchain);
+    SubmitAndPresent(*gpu,*commands,view->swapchain,image);
     glfwSetWindowSize(
         static_cast<GLFWwindow*>(view->GetWindow()->NativeHandle()), 80, 72);
     windows.PollEvents();
@@ -914,6 +932,35 @@ TEST_P(WindowDeviceTests, OrderedSwapchainFormatPreferences)
   EXPECT_TRUE(renderer.DestroyView(handle));
   EXPECT_FALSE(gpu->GetSwapchainInfo(swapchain).has_value());
 }
+
+#ifdef LIGHTHOUSE_IMGUI
+TEST_P(WindowDeviceTests, GraphOwnsPresentationWithHostedOverlay)
+{
+  if(!GetParam()) GTEST_SKIP()<<"Exercises Vulkan acquire/present synchronization";
+  WindowManager windows;
+  RenderGraphComposer renderer(std::move(device),&windows);
+  const auto handle=renderer.CreateWindowView({.title="Thin Vulkan graph regression",.width=64,.height=64,.visible=false,.ImGuiHost=true});
+  auto* window=renderer.GetView<WindowView>(handle);
+  renderer.CreateView<ImGuiView>([] {ImGui::Begin("Overlay");ImGui::TextUnformatted("Explicit Vulkan synchronization");ImGui::End();});
+  const auto scene=renderer.AddLambdaTechnique([window](TechniqueBuildContext& context) {
+    struct Data {RenderGraphResource color;};
+    context.graph.AddPass<Data>("Window clear",[window](RenderGraph::Builder& builder,Data& data) {
+      data.color=builder.Write(window->GetAcquiredImageAsRGResource());
+    },[window](const Data& data,FrameGraphPassResources& resources,RenderGraphExecutePassContext& execute) {
+      const auto& image=resources.get<ImportedWindowView>(data.color);
+      const auto size=window->GetWindow()->GetFramebufferSize();
+      execute.commandList->BeginRendering({.colorAttachment=image.currentImageView,.clearColor=true,.clearColorValue={0.1f,0.2f,0.3f},.width=size.width,.height=size.height});
+      execute.commandList->EndRendering();
+    });
+  });
+  renderer.Compile();
+  for(unsigned frame=0;frame<4;++frame) {windows.PollEvents();renderer.Render();}
+  renderer.RemoveTechnique(scene);
+  renderer.Compile();
+  for(unsigned frame=0;frame<2;++frame) {windows.PollEvents();renderer.Render();}
+  renderer.GetRenderDevice()->WaitIdle();
+}
+#endif
 
 TEST_P(WindowDeviceTests, MultipleSwapchainsResizeAndDestroy)
 {
@@ -948,6 +995,8 @@ TEST_P(WindowDeviceTests, MultipleSwapchainsResizeAndDestroy)
     commands->PushDebugGroup("Render both presentation surfaces");
     const auto leftSize = windows.GetWindow(a)->GetFramebufferSize();
     const auto rightSize = windows.GetWindow(b)->GetFramebufferSize();
+    commands->ImageBarrier({.image=left.image,.oldLayout=left.layout,.newLayout=ImageLayout::ColorAttachment});
+    commands->ImageBarrier({.image=right.image,.oldLayout=right.layout,.newLayout=ImageLayout::ColorAttachment});
     commands->BeginRendering({.colorAttachment = left.view,
                               .clearColor = true,
                               .clearColorValue = {1, 0, 0},
@@ -961,8 +1010,10 @@ TEST_P(WindowDeviceTests, MultipleSwapchainsResizeAndDestroy)
                               .height = rightSize.height});
     commands->EndRendering();
     commands->PopDebugGroup();
+    commands->ImageBarrier({.image=left.image,.oldLayout=ImageLayout::ColorAttachment,.newLayout=ImageLayout::Present});
+    commands->ImageBarrier({.image=right.image,.oldLayout=ImageLayout::ColorAttachment,.newLayout=ImageLayout::Present});
     commands->End();
-    SubmitAndWait(*device, *commands);
+    SubmitPresentation(*device,*commands,{left,right});
     const auto leftPixels = device->ReadImage(left.image);
     const auto rightPixels = device->ReadImage(right.image);
     ASSERT_GE(leftPixels.size(), 4u);
@@ -971,8 +1022,8 @@ TEST_P(WindowDeviceTests, MultipleSwapchainsResizeAndDestroy)
     EXPECT_LT(std::to_integer<unsigned>(leftPixels[1]), 5u);
     EXPECT_GT(std::to_integer<unsigned>(rightPixels[1]), 250u);
     EXPECT_LT(std::to_integer<unsigned>(rightPixels[0]), 5u);
-    device->GetQueue(0)->Present(first);
-    device->GetQueue(0)->Present(second);
+    device->GetQueue(0)->Present(first,left.finished ? std::span(&left.finished,1) : std::span<const SemaphoreHandle>{});
+    device->GetQueue(0)->Present(second,right.finished ? std::span(&right.finished,1) : std::span<const SemaphoreHandle>{});
     if (frame == 4)
     {
       glfwSetWindowSize(
@@ -1024,13 +1075,11 @@ TEST(BackendRuntimePriorityTests, VulkanFirstWithRealFallback)
 } // namespace
 namespace
 {
-TEST_P(HeadlessDeviceTests, ShaderObjectMultiviewIsReportedUnavailable)
+TEST_P(HeadlessDeviceTests, PipelineMultiviewMatchesAdvertisedCapabilities)
 {
   const auto caps = device->GetCapabilities();
-  EXPECT_FALSE(caps.multiView);
-  if (!GetParam())
-    return;
-  EXPECT_TRUE(caps.shaderObjects);
+  if (!GetParam()) { EXPECT_FALSE(caps.multiView); return; }
+  EXPECT_FALSE(caps.shaderObjects);
   const auto image =
       device->CreateImage({.width = 32,
                            .height = 32,
@@ -1044,10 +1093,12 @@ TEST_P(HeadlessDeviceTests, ShaderObjectMultiviewIsReportedUnavailable)
                                              .arrayLayerCount = 2});
   auto command = device->CreateCommandList(0);
   command->Begin();
-  EXPECT_THROW(
-      command->BeginRendering(
-          {.colorAttachment = view, .width = 32, .height = 32, .viewMask = 3}),
-      std::runtime_error);
+  if(caps.multiView) {
+    EXPECT_NO_THROW(command->BeginRendering({.colorAttachment=view,.width=32,.height=32,.viewMask=3}));
+    command->EndRendering();
+  } else {
+    EXPECT_THROW(command->BeginRendering({.colorAttachment=view,.width=32,.height=32,.viewMask=3}),std::runtime_error);
+  }
   command->End();
 }
 TEST_P(HeadlessDeviceTests, BindlessCapabilitySupportsNonuniformSampledArray)
@@ -1117,6 +1168,12 @@ namespace
 {
 TEST_P(HeadlessDeviceTests, LegacyTextureSlotsAndCommandListClear)
 {
+  if(GetParam()) {
+    auto commands=device->CreateCommandList(0);
+    EXPECT_THROW(commands->BindTexture(0,{}),std::logic_error);
+    return;
+  }
+
   const auto vertex = Shader(Fullscreen, ShaderStage::Vertex);
   const auto fragment = Shader(R"(#version 450
 layout(set=0,binding=0) uniform sampler2D image;layout(location=0) out vec4 color;
@@ -1208,7 +1265,7 @@ layout(location=0) out vec4 color;void main(){color=tint.color;}
                                         .format = VertexFormat::Float3}}},
        .colorFormats = {ImageFormat::RGBA8},
        .depthFormat = ImageFormat::Depth32,
-       .layout = layout});
+       .layout = layout,.depthStencil={.depthTest=true,.depthWrite=true}});
   const std::array nearVertices{-1.f, -1.f, .2f, 3.f, -1.f,
                                 .2f,  -1.f, 3.f, .2f};
   const std::array farVertices{-1.f, -1.f, .8f, 3.f, -1.f, .8f, -1.f, 3.f, .8f};
@@ -1252,6 +1309,8 @@ layout(location=0) out vec4 color;void main(){color=tint.color;}
   const auto viewA = View(colorA), viewB = View(colorB);
   auto command = device->CreateCommandList(0);
   command->Begin();
+  command->ImageBarrier({.image=depthA,.oldLayout=ImageLayout::Undefined,.newLayout=ImageLayout::DepthStencilAttachment,
+      .subresource={ImageAspect::Depth,0,1,0,1}});
   command->BeginRendering({.colorAttachment = viewA,
                            .depthAttachment = depthViewA,
                            .clearColor = true,
@@ -1270,7 +1329,10 @@ layout(location=0) out vec4 color;void main(){color=tint.color;}
                           .srcOffsets = {{{0, 0, 0}, {64, 64, 1}}},
                           .dstSubresource = {ImageAspect::Depth, 0, 0, 1},
                           .dstOffsets = {{{0, 0, 0}, {64, 64, 1}}}};
+  command->ImageBarrier({.image=depthA,.oldLayout=ImageLayout::DepthStencilAttachment,.newLayout=ImageLayout::TransferSource,.subresource={ImageAspect::Depth,0,1,0,1}});
+  command->ImageBarrier({.image=depthB,.oldLayout=ImageLayout::Undefined,.newLayout=ImageLayout::TransferDestination,.subresource={ImageAspect::Depth,0,1,0,1}});
   command->BlitImage(depthA, depthB, region, ImageFilter::Nearest);
+  command->ImageBarrier({.image=depthB,.oldLayout=ImageLayout::TransferDestination,.newLayout=ImageLayout::DepthStencilAttachment,.subresource={ImageAspect::Depth,0,1,0,1}});
   command->BeginRendering({.colorAttachment = viewB,
                            .depthAttachment = depthViewB,
                            .clearColor = true,
@@ -1517,19 +1579,22 @@ TEST_P(WindowDeviceTests, PresentationQueueRequestedBeforeDeviceCreation)
   const std::uint32_t renderIndex = created->GetQueue(1) ? 1 : 0;
   auto commands = created->CreateCommandList(renderIndex);
   commands->Begin();
+  commands->ImageBarrier({.image=image.image,.oldLayout=image.layout,.newLayout=ImageLayout::ColorAttachment});
   commands->BeginRendering({.colorAttachment = image.view,
                             .clearColor = true,
                             .clearColorValue = {0, 1, 0},
                             .width = 64,
                             .height = 64});
   commands->EndRendering();
+  commands->ImageBarrier({.image=image.image,.oldLayout=ImageLayout::ColorAttachment,.newLayout=ImageLayout::Present});
   commands->End();
   const auto ready = created->CreateSemaphore();
   const auto fence = created->CreateFence();
   const IRenderCommandList* list = commands.get();
   const std::array signals{SemaphoreSubmitInfo{ready}};
+  const std::array acquireWait{SemaphoreSubmitInfo{image.available}};
   created->GetQueue(renderIndex)
-      ->Submit(QueueSubmitInfo{.commandLists = {&list, 1}, .signals = signals},
+      ->Submit(QueueSubmitInfo{.commandLists = {&list, 1},.waits=image.available ? std::span(acquireWait) : std::span<const SemaphoreSubmitInfo>{}, .signals = signals},
                fence);
   const std::array waits{ready};
   queue->Present(swapchain, waits);

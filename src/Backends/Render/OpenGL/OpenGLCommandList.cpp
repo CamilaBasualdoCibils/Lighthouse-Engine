@@ -252,6 +252,7 @@ void OpenGLCommandList::BeginRenderCommand::Execute(
   if (desc.clearDepth)
   {
     glClearDepth(1.0);
+    glStencilMask(0xff);
     glClearStencil(0);
     glClear(GL_DEPTH_BUFFER_BIT | (stencil ? GL_STENCIL_BUFFER_BIT : 0));
   }
@@ -385,6 +386,16 @@ void OpenGLCommandList::BindPipelineCommand::Execute(
     vao->second = CreateVertexArray(pipeline.layout);
   glBindVertexArray(vao->second);
   glUseProgram(pipeline.program);
+  if(pipeline.depthStencil.depthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+  glDepthMask(pipeline.depthStencil.depthWrite ? GL_TRUE : GL_FALSE);
+  constexpr std::array<GLenum,8> compare{GL_NEVER,GL_LESS,GL_EQUAL,GL_LEQUAL,GL_GREATER,GL_NOTEQUAL,GL_GEQUAL,GL_ALWAYS};
+  glDepthFunc(compare.at(static_cast<unsigned>(pipeline.depthStencil.depthCompare)));
+  if(pipeline.depthStencil.stencil==StencilMode::Disabled) glDisable(GL_STENCIL_TEST); else {
+    glEnable(GL_STENCIL_TEST);
+    glStencilMask(pipeline.depthStencil.stencil==StencilMode::Write ? 0xff : 0);
+    glStencilFunc(pipeline.depthStencil.stencil==StencilMode::Equal ? GL_EQUAL : GL_ALWAYS,0,0xff);
+    glStencilOp(GL_KEEP,GL_KEEP,pipeline.depthStencil.stencil==StencilMode::Write ? GL_REPLACE : GL_KEEP);
+  }
   if (pipeline.blend.enabled)
   {
     glEnable(GL_BLEND);
@@ -484,6 +495,18 @@ void OpenGLCommandList::BindTextureCommand::Execute(
     OpenGLRenderDevice* device) const
 {
   glBindTextureUnit(slot, device->m_impl->R().images.at(handle).id);
+}
+void OpenGLCommandList::StencilReferenceCommand::Execute(OpenGLRenderDevice* device) const
+{
+  auto& state=*device->m_impl;
+  const auto mode=state.R().pipelines.at(*state.State().activePipeline).depthStencil.stencil;
+  glStencilFunc(mode==StencilMode::Equal ? GL_EQUAL : GL_ALWAYS,reference,0xff);
+}
+void OpenGLCommandList::DrawIndexCommand::Execute(OpenGLRenderDevice* device) const
+{
+  auto& state = *device->m_impl;
+  const auto& pipeline = state.R().pipelines.at(*state.State().activePipeline);
+  if (pipeline.drawIndexLocation >= 0) glProgramUniform1ui(pipeline.program, pipeline.drawIndexLocation, index);
 }
 void OpenGLCommandList::DrawCommand::Execute(OpenGLRenderDevice*) const
 {

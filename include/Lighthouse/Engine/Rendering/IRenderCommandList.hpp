@@ -38,20 +38,32 @@ public:
   {
     throw std::logic_error("Memory barriers unsupported by this backend");
   }
+  virtual void ImageBarrier(const ImageBarrierDesc&)
+  {
+    throw std::logic_error("Image barriers unsupported by this backend");
+  }
   virtual void BeginRendering(const RenderPassDesc& description) = 0;
   virtual void EndRendering() = 0;
-  // Write replaces stencil on depth pass; Equal preserves stencil and masks
-  // draws.
+  // Legacy OpenGL state override. Native pipeline backends use depthStencil
+  // in GraphicsPipelineDesc and SetStencilReference instead.
   virtual void SetStencil(StencilMode mode, std::uint32_t reference)
   {
     if (mode != StencilMode::Disabled)
       throw std::logic_error("Stencil state is unsupported by this backend");
+  }
+  virtual void SetStencilReference(std::uint32_t)
+  {
+    throw std::logic_error("Dynamic stencil reference unsupported by this backend");
   }
   virtual void BindPipeline(GraphicsPipelineHandle pipeline) = 0;
   // Descriptor contents are resolved when the recorded command list is
   // submitted.
   virtual void BindDescriptorSet(std::uint32_t setIndex,
                                  DescriptorSetHandle set) = 0;
+  virtual void SetDrawIndex(std::uint32_t)
+  {
+    throw std::logic_error("Draw-index constants unsupported by this backend");
+  }
   virtual void BindVertexBuffer(BufferHandle buffer, std::uint32_t stride) = 0;
   virtual void BindIndexBuffer(BufferHandle buffer) = 0;
   virtual void BindTexture(std::uint32_t slot, ImageHandle image) = 0;
@@ -88,6 +100,7 @@ public:
   {
     throw std::logic_error("Mipmap generation unsupported by this backend");
   }
+  // Images must already be in TransferSource / TransferDestination layouts.
   virtual void BlitImage(ImageHandle src, ImageHandle dst,
                          const BlitRegion& region, ImageFilter filter) = 0;
   virtual void Clear() = 0;

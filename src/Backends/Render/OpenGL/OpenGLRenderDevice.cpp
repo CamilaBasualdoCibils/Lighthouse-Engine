@@ -1220,6 +1220,7 @@ OpenGLRenderDevice::CreatePipelineLayout(const PipelineLayoutDesc& desc)
   Impl::Scope resourceScope(*m_impl);
   Impl::PipelineLayout layout;
   layout.sets = desc.sets;
+  layout.drawIndex = desc.drawIndex;
   std::uint32_t ubo{}, ssbo{}, texture{};
   for (std::uint32_t setIndex = 0; setIndex < desc.sets.size(); ++setIndex)
   {
@@ -1507,7 +1508,7 @@ OpenGLRenderDevice::CreatePipeline(const GraphicsPipelineDesc& desc)
   {
     const auto glsl = Detail::TranslateShaderToOpenGL(
         source.words, source.stage, source.entryPoint, limits,
-        &layoutIt->second.locations);
+        &layoutIt->second.locations, layoutIt->second.drawIndex);
     const auto shader = glCreateShader(ToGLShaderStage(source.stage));
     try
     {
@@ -1612,6 +1613,8 @@ OpenGLRenderDevice::CreatePipeline(const GraphicsPipelineDesc& desc)
   pipeline.lifetime = m_impl->Keep([program] { glDeleteProgram(program); });
   pipeline.topology = desc.topology;
   pipeline.blend = desc.blend;
+  pipeline.depthStencil=desc.depthStencil;
+  pipeline.drawIndexLocation = glGetUniformLocation(program,"EESG_draw.index");
   m_impl->resources.pipelines.emplace(handle, std::move(pipeline));
   return handle;
 }

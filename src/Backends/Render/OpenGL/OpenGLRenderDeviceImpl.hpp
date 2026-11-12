@@ -160,6 +160,7 @@ struct OpenGLRenderDevice::Impl
   {
     std::vector<DescriptorSetLayoutHandle> sets;
     DescriptorBindingLocations locations;
+    bool drawIndex{};
   };
   struct Pipeline
   {
@@ -169,6 +170,8 @@ struct OpenGLRenderDevice::Impl
     Token lifetime;
     PrimitiveTopology topology{PrimitiveTopology::TriangleList};
     BlendState blend;
+    GLint drawIndexLocation{-1};
+    DepthStencilState depthStencil;
   };
   struct ResourceTables
   {

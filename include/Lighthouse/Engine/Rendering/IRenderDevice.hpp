@@ -62,6 +62,9 @@ public:
   {
     throw std::logic_error("Image readback unsupported");
   }
+  // Last layout declared by initialization or an explicit image barrier.
+  // This is metadata, not a driver query or an implicit transition.
+  virtual ImageLayout GetImageLayout(ImageHandle) const { return ImageLayout::Undefined; }
   virtual ImageViewHandle CreateImageView(const ImageViewDesc& description) = 0;
   virtual BufferHandle CreateBuffer(const BufferDesc& description) = 0;
   virtual IRenderQueue* GetQueue(std::uint32_t index) = 0;

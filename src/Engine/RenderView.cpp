@@ -35,6 +35,17 @@ void WindowView::BuildGraph(ViewBuildContext& ctx)
   m_acquiredImageAsRGResource = ctx.graph.Import(
       "WindowView Swapchain", ImportedWindowView::Desc{}, imported_image_view);
   m_logger->info("Imported WindowView Swapchain to RenderGraph");
+  struct Data { RenderGraphResource image; };
+  const auto& clear=ctx.graph.AddPass<Data>("Window background",[image=*m_acquiredImageAsRGResource](RenderGraph::Builder& builder,Data& data) {
+    data.image=builder.Write(image);
+    builder.SetSideEffect();
+  },[this](const Data& data,FrameGraphPassResources& resources,RenderGraphExecutePassContext& execute) {
+    const auto& image=resources.get<ImportedWindowView>(data.image);
+    const auto size=GetWindow()->GetFramebufferSize();
+    execute.commandList->BeginRendering({.colorAttachment=image.currentImageView,.clearColor=true,.width=size.width,.height=size.height});
+    execute.commandList->EndRendering();
+  });
+  m_acquiredImageAsRGResource=clear.image;
 }
 void WindowView::Begin(RenderGraphComposer* renderer)
 {
@@ -42,13 +53,15 @@ void WindowView::Begin(RenderGraphComposer* renderer)
   const auto acquire =
       renderer->GetRenderDevice()->AcquireSwapchainImage(swapchain);
   m_acquiredImage = acquire;
+  m_graphSubmitted=false;
   m_swapchainInfo =
       renderer->GetRenderDevice()->GetSwapchainInfo(swapchain).value_or(
           m_swapchainInfo);
 }
 void WindowView::End(RenderGraphComposer* renderer)
 {
-  renderer->GetRenderDevice()->GetQueue(0)->Present(swapchain);
+  const auto finished=m_acquiredImage->finished;
+  renderer->GetRenderDevice()->GetQueue(0)->Present(swapchain,finished ? std::span(&finished,1) : std::span<const SemaphoreHandle>{});
   m_acquiredImage.reset();
 }
 

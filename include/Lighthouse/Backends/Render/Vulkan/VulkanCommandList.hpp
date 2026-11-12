@@ -18,13 +18,15 @@ public:
   void InsertDebugMarker(std::string_view, std::array<float, 4>) override;
   void Begin() override;
   void End() override;
+  void ImageBarrier(const ImageBarrierDesc&) override;
   void MemoryBarrier(const MemoryBarrierDesc&) override;
   void Clear() override;
   void BeginRendering(const RenderPassDesc&) override;
   void EndRendering() override;
-  void SetStencil(StencilMode, std::uint32_t) override;
+  void SetStencilReference(std::uint32_t) override;
   void BindPipeline(GraphicsPipelineHandle) override;
   void BindDescriptorSet(std::uint32_t, DescriptorSetHandle) override;
+  void SetDrawIndex(std::uint32_t) override;
   void BindVertexBuffer(BufferHandle, std::uint32_t) override;
   void BindIndexBuffer(BufferHandle) override;
   void BindTexture(std::uint32_t, ImageHandle) override;

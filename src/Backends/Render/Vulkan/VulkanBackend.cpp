@@ -26,41 +26,26 @@ bool VulkanBackend::Initialize(std::string& diagnostic)
     {
       if (physical.getProperties(dispatch).apiVersion < vk::ApiVersion14)
         continue;
-      const auto extensions =
-          physical.enumerateDeviceExtensionProperties(nullptr, dispatch);
-      if (std::none_of(extensions.begin(), extensions.end(),
-                       [](const auto& e)
-                       {
-                         return std::strcmp(e.extensionName,
-                                            "VK_EXT_shader_object") == 0;
-                       }))
-        continue;
       vk::PhysicalDeviceFeatures2 features;
       vk::PhysicalDeviceVulkan11Features f11;
       vk::PhysicalDeviceVulkan12Features f12;
       vk::PhysicalDeviceVulkan13Features f13;
-      vk::PhysicalDeviceShaderObjectFeaturesEXT shader;
       features.pNext = &f11;
       f11.pNext = &f12;
       f12.pNext = &f13;
-      f13.pNext = &shader;
       physical.getFeatures2(&features, dispatch);
-      if (!shader.shaderObject || !f13.dynamicRendering ||
-          !f13.synchronization2 ||
-          !f12.descriptorBindingUniformBufferUpdateAfterBind ||
-          !f12.descriptorBindingStorageBufferUpdateAfterBind ||
-          !f12.descriptorBindingSampledImageUpdateAfterBind)
+      if (!f12.timelineSemaphore || !f13.dynamicRendering ||
+          !f13.synchronization2)
         continue;
       m_capabilities.computeShaders = true;
       m_capabilities.bindlessResources =
           f12.runtimeDescriptorArray && f12.descriptorBindingPartiallyBound &&
           f12.shaderSampledImageArrayNonUniformIndexing;
-      m_capabilities.multiview =
-          false; // Shader-object draws cannot use multiview.
+      m_capabilities.multiview = f11.multiview;
       diagnostic.clear();
       return true;
     }
-    throw std::runtime_error("No Vulkan 1.4 device with shader objects and "
+    throw std::runtime_error("No Vulkan 1.4 device with dynamic rendering and "
                              "required descriptor features");
   }
   catch (const std::exception& error)

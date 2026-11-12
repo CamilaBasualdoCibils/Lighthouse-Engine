@@ -10,7 +10,7 @@ namespace Lighthouse::Detail {
 
 std::string TranslateShaderToOpenGL(std::span<const std::uint32_t> spirv,
     ShaderStageFlags stage, std::string_view entryPoint, OpenGLBindingLimits limits,
-    const DescriptorBindingLocations* descriptorBindings) {
+    const DescriptorBindingLocations* descriptorBindings, bool drawIndex) {
     if (spirv.empty() || spirv.front() != 0x07230203u)
         throw std::invalid_argument("Shader module input must contain SPIR-V words");
     if (entryPoint.empty())
@@ -55,8 +55,14 @@ std::string TranslateShaderToOpenGL(std::span<const std::uint32_t> spirv,
         };
         std::uint32_t uniformBinding{}, storageBinding{}, textureBinding{}, imageBinding{}, atomicBinding{};
         remap(resources.uniform_buffers, DescriptorType::UniformBuffer, limits.uniformBuffers, uniformBinding);
-        if (!resources.push_constant_buffers.empty())
-            throw std::invalid_argument("Push constants are not supported by the descriptor layout API");
+        for (const auto& resource : resources.push_constant_buffers) {
+            const auto& type = compiler.get_type(resource.base_type_id);
+            if (!drawIndex || resources.push_constant_buffers.size()!=1 ||
+                compiler.get_declared_struct_size(type)!=sizeof(std::uint32_t))
+                throw std::invalid_argument("Only the scene draw-index constant is supported by this pipeline layout");
+            compiler.set_name(resource.id,"EESG_draw");
+            compiler.set_member_name(resource.base_type_id,0,"index");
+        }
         remap(resources.storage_buffers, DescriptorType::StorageBuffer, limits.storageBuffers, storageBinding);
         remap(resources.sampled_images, DescriptorType::CombinedImageSampler, limits.textureUnits, textureBinding);
         remap(resources.separate_images, DescriptorType::CombinedImageSampler, limits.textureUnits, textureBinding);

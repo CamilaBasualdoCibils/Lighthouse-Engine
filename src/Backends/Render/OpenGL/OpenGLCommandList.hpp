@@ -75,6 +75,14 @@ public:
         ImageHandle handle;
         void Execute(OpenGLRenderDevice* device) const;
     };
+    struct StencilReferenceCommand {
+        std::uint32_t reference;
+        void Execute(OpenGLRenderDevice*) const;
+    };
+    struct DrawIndexCommand {
+        std::uint32_t index;
+        void Execute(OpenGLRenderDevice*) const;
+    };
     struct DrawCommand {
         PrimitiveTopology topology;
         std::uint32_t count, first, instances, firstInstance;
@@ -146,7 +154,7 @@ public:
                      BindVertexBufferCommand, BindIndexBufferCommand,
                      BindTextureCommand, DrawCommand, DrawIndexedCommand,
                      MultiDrawCommand, DispatchCommand, CopyBufferCommand,
-                     BlitImageCommand, GenMipMapsCommand>;
+                     BlitImageCommand, GenMipMapsCommand, DrawIndexCommand, StencilReferenceCommand>;
 
     const std::vector<Command>& Commands() const noexcept { return m_commands; }
     void BeginRendering(const RenderPassDesc& desc) override { m_rendering = true; m_commands.emplace_back(BeginRenderCommand{desc}); }
@@ -177,7 +185,12 @@ public:
       m_commands.emplace_back(
           CopyBufferCommand{src, dst, srcOffset, dstOffset, bytes});
     }
+    void SetStencilReference(std::uint32_t reference) override { m_commands.emplace_back(StencilReferenceCommand{reference}); }
+    void SetDrawIndex(std::uint32_t index) override { m_commands.emplace_back(DrawIndexCommand{index}); }
     void Dispatch(std::uint32_t x, std::uint32_t y, std::uint32_t z) override { m_commands.emplace_back(DispatchCommand{x, y, z}); }
+  void ImageBarrier(const ImageBarrierDesc& desc) override {
+      MemoryBarrier({desc.srcStageMask,desc.srcAccessMask,desc.dstStageMask,desc.dstAccessMask});
+  }
   void GenMipMaps(const GenMipMapsDesc& desc) override {
       if (!Begun) throw std::logic_error("Begin command recording first");
       if (m_rendering) throw std::logic_error("Mipmap generation must be outside rendering");

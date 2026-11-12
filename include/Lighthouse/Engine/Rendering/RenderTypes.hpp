@@ -331,10 +331,19 @@ struct DescriptorBufferInfo
   std::uint64_t range{WholeBuffer};
 };
 
+// Core Vulkan image-layout values; OpenGL ignores layouts.
+enum class ImageLayout : std::uint32_t
+{
+  Undefined=0, General=1, ColorAttachment=2, DepthStencilAttachment=3,
+  DepthStencilReadOnly=4, ShaderReadOnly=5, TransferSource=6,
+  TransferDestination=7, Present=1000001002
+};
+
 struct DescriptorImageInfo
 {
   ImageViewHandle image;
   SamplerHandle sampler;
+  ImageLayout layout{ImageLayout::ShaderReadOnly};
 };
 
 using DescriptorResource =
@@ -381,6 +390,7 @@ struct SamplerDesc
 struct PipelineLayoutDesc
 {
   std::vector<DescriptorSetLayoutHandle> sets;
+  bool drawIndex{}; // Four-byte object-table index, shared by vertex and fragment stages.
 };
 
 struct PipelineLayoutLocation
@@ -439,11 +449,23 @@ struct ImageSubresourceLayers
   uint32_t layerCount{1};
 };
 
+struct ImageBarrierDesc
+{
+  ImageHandle image;
+  ImageLayout oldLayout{ImageLayout::Undefined},newLayout{ImageLayout::Undefined};
+  ImageSubresourceRange subresource;
+  Flags<PipelineStage> srcStageMask{PipelineStage::AllCommands};
+  Flags<PipelineAccess> srcAccessMask{PipelineAccess::MemoryWrite};
+  Flags<PipelineStage> dstStageMask{PipelineStage::AllCommands};
+  Flags<PipelineAccess> dstAccessMask{PipelineAccess::MemoryRead,PipelineAccess::MemoryWrite};
+};
+
 // Generates every allocated mip after level zero, for all layers.
 // Requires a single-sampled, linearly filterable color image outside rendering.
 struct GenMipMapsDesc
 {
   ImageHandle image;
+  ImageLayout oldLayout{ImageLayout::ShaderReadOnly},newLayout{ImageLayout::ShaderReadOnly};
 };
 
 struct BlitRegion
@@ -538,6 +560,22 @@ struct BlendState
   Vec4 constants{};
 };
 
+enum class StencilMode
+{
+  Disabled,
+  Write,
+  Equal
+};
+
+enum class DepthCompare : std::uint32_t { Never, Less, Equal, LessOrEqual, Greater, NotEqual, GreaterOrEqual, Always };
+struct DepthStencilState
+{
+  bool depthTest{};
+  bool depthWrite{};
+  DepthCompare depthCompare{DepthCompare::Less};
+  StencilMode stencil{StencilMode::Disabled};
+};
+
 struct GraphicsPipelineDesc
 {
   ShaderModuleHandle vertexShader;
@@ -546,10 +584,13 @@ struct GraphicsPipelineDesc
   PrimitiveTopology topology{PrimitiveTopology::Triangles};
   std::vector<ImageFormat> colorFormats;
   ImageFormat depthFormat{ImageFormat::Undefined};
+  ImageFormat stencilFormat{ImageFormat::Undefined};
   std::uint32_t sampleCount{1};
   PipelineLayoutHandle layout;
   ShaderModuleHandle computeShader;
   BlendState blend; // Shared by all color attachments; disabled by default.
+  DepthStencilState depthStencil;
+  std::uint32_t viewMask{};
 };
 
 // Material hit-group library, linked by the scene tracing pipeline. Shader
@@ -561,13 +602,6 @@ struct RayTracingPipelineDesc
   PipelineLayoutHandle layout;
   std::uint32_t maxPayloadSize{16};
   std::uint32_t maxHitAttributeSize{8};
-};
-
-enum class StencilMode
-{
-  Disabled,
-  Write,
-  Equal
 };
 
 struct RenderPassDesc
@@ -591,6 +625,9 @@ struct RenderPassDesc
   // testing.
   bool depthReadOnly{};
   float clearColorAlpha{1.0f};
+  ImageViewHandle stencilAttachment;
+  ImageLayout depthLayout{ImageLayout::DepthStencilAttachment};
+  ImageLayout stencilLayout{ImageLayout::DepthStencilAttachment};
 };
 
 struct RenderCapabilities
@@ -656,6 +693,8 @@ struct AcquiredSwapchainImage
 {
   ImageHandle image;
   ImageViewHandle view;
+  SemaphoreHandle available{},finished{};
+  ImageLayout layout{ImageLayout::Undefined};
 };
 
 // Presentation encoding, independent of the image's storage format.

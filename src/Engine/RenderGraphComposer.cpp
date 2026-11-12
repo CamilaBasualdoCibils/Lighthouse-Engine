@@ -275,8 +275,12 @@ void RenderGraphComposer::Compile() {
   }
   graph.Compile();
   m_renderGraph = std::move(graph);
+  graph.Clear(); // The moved-out graph owns the previous callbacks and views.
+  m_renderGraphAllocator.TrimUnused();
 }
 void RenderGraphComposer::Render() {
+  // Retire the single frame's storage and acquire semaphore before reusing it.
+  m_renderGraph.Drain();
     LIGHTHOUSE_PROFILE_SCOPE("RenderGraphComposer::Render");
 
   for (const auto &viewSlot : m_views) {

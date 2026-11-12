@@ -18,6 +18,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <unordered_map>
 
 #include <fg/Blackboard.hpp>
 #include <fg/FrameGraph.hpp>
@@ -53,13 +54,36 @@ public:
   std::vector<std::function<void()>> retirements;
   std::vector<std::function<void()>> afterSubmit;
   std::vector<SemaphoreSubmitInfo> waits, signals;
+  std::unordered_map<ImageHandle,ImageLayout*> presentImages;
 };
 
+// Resource-state policy belongs to the graph, not to a native command list.
+inline void TransitionImage(IRenderCommandList& commands,ImageHandle image,
+                            ImageLayout& current,ImageLayout next,
+                            ImageSubresourceRange range={})
+{
+  if(current==next) return;
+  commands.ImageBarrier({.image=image,.oldLayout=current,.newLayout=next,.subresource=range});
+  current=next;
+}
+inline void GraphImageAccess(void* context,ImageHandle image,ImageLayout& layout,
+                             Flags<ImageUsage> usage,ImageSubresourceRange range,bool write)
+{
+  auto& commands=*static_cast<RenderGraphExecuteContext*>(context)->commandList;
+  if(write) {
+    if(usage.Contains(ImageUsage::DepthAttachment) || usage.Contains(ImageUsage::DepthStencilAttachment))
+      TransitionImage(commands,image,layout,ImageLayout::DepthStencilAttachment,range);
+    else if(usage.Contains(ImageUsage::ColorAttachment))
+      TransitionImage(commands,image,layout,ImageLayout::ColorAttachment,range);
+  } else if(usage.Contains(ImageUsage::Sampled))
+    TransitionImage(commands,image,layout,ImageLayout::ShaderReadOnly,range);
+}
 struct RenderGraphImage {
   using Desc = RenderGraphImageDesc;
   ImageHandle handle;
   ImageViewHandle viewHandle;
   ImageSubresourceRange subresource;
+  mutable ImageLayout layout{ImageLayout::Undefined};
   // ImageViewHandle viewHandle;
   void create(const Desc &desc, void *allocator) {
     IRenderGraphAllocator *alloc =
@@ -68,6 +92,7 @@ struct RenderGraphImage {
     handle = allocation.image;
     viewHandle = allocation.view;
     subresource = allocation.subresource;
+    layout=ImageLayout::Undefined;
   }
   void destroy(const Desc &desc, void *allocator) {
     IRenderGraphAllocator *alloc =
@@ -77,8 +102,8 @@ struct RenderGraphImage {
     viewHandle = {};
     subresource = {};
   }
-  void preRead(const Desc &, std::uint32_t, void *) {}
-  void preWrite(const Desc &, std::uint32_t, void *) {}
+  void preRead(const Desc& d,std::uint32_t,void* c) { GraphImageAccess(c,handle,layout,d.usage,subresource,false); }
+  void preWrite(const Desc& d,std::uint32_t,void* c) { GraphImageAccess(c,handle,layout,d.usage,subresource,true); }
 };
 struct RenderGraphBuffer {
   using Desc = RenderGraphBufferDesc;
@@ -119,10 +144,11 @@ struct ImportedRenderGraphImage {
   ImageViewHandle viewHandle;
   ImageHandle handle;
   ImageSubresourceRange subresource;
+  mutable ImageLayout layout{ImageLayout::Undefined};
   void create(const Desc &, void *) {}
   void destroy(const Desc &, void *) {}
-  void preRead(const Desc &, std::uint32_t, void *) {}
-  void preWrite(const Desc &, std::uint32_t, void *) {}
+  void preRead(const Desc& d,std::uint32_t,void* c) { GraphImageAccess(c,handle,layout,d.usage,subresource,false); }
+  void preWrite(const Desc& d,std::uint32_t,void* c) { GraphImageAccess(c,handle,layout,d.usage,subresource,true); }
 };
 struct ImportedRenderGraphBuffer {
   struct Desc {
@@ -144,6 +170,7 @@ struct ImportedWindowView {
   WindowView *handle{};
   ImageHandle currentImage;
   ImageViewHandle currentImageView;
+  mutable ImageLayout layout{ImageLayout::Undefined};
   void create(const Desc & desc, void *context) { Resolve(desc, context); }
   void destroy(const Desc &, void *context) {}
   void preRead(const Desc &desc, uint32_t, void *context) {
@@ -152,6 +179,7 @@ struct ImportedWindowView {
 
   void preWrite(const Desc &desc, uint32_t, void *context) {
     Resolve(desc, context);
+    TransitionImage(*static_cast<RenderGraphExecuteContext*>(context)->commandList,currentImage,layout,ImageLayout::ColorAttachment);
   }
 
   void Resolve(const Desc &desc, void *context);

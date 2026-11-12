@@ -19,6 +19,6 @@ struct OpenGLBindingLimits {
 
 std::string TranslateShaderToOpenGL(std::span<const std::uint32_t> spirv,
     ShaderStageFlags stage, std::string_view entryPoint, OpenGLBindingLimits limits,
-    const DescriptorBindingLocations* descriptorBindings = nullptr);
+    const DescriptorBindingLocations* descriptorBindings = nullptr, bool drawIndex = false);
 
 } // namespace Lighthouse::Detail
